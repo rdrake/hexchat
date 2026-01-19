@@ -46,6 +46,7 @@ This plan completes IRCv3 support in HexChat using Nefarious IRCd and X3 service
 | MONITOR | Low | Alternative to WATCH |
 | SASL OAUTHBEARER refresh | Medium | Token refresh & IRCv3.2 re-authentication |
 | SASL ECDSA-NIST256P-CHALLENGE | Medium | Challenge-response auth with ECDSA keys |
+| X3 Session Tokens | Low | Store/use session tokens from X3 services |
 
 ---
 
@@ -473,6 +474,85 @@ typedef struct sts_policy {
 - Button to generate new key pair
 - Display public key for copying to services
 - Help text explaining registration process with services
+
+#### 6.6 X3 Session Token Support
+
+**Rationale:** X3 Services provides session tokens as an alternative to password-based authentication. After initial AUTH with password, X3 issues a session token that can be used for subsequent SASL authentication. Benefits include: password only sent once, tokens can be revoked without password change, and enables SCRAM-SHA-256/512 for users with legacy password hashes.
+
+**X3 flow:**
+```
+# First connection - authenticate with password
+PRIVMSG AuthServ :AUTH myaccount mypassword
+-AuthServ- Your session cookie is: xK9mN2pQ8rS3tU6vW1xY4zA7bC0dE3fG5hI8jK1lM4n=
+
+# Client stores token securely
+
+# Later connection - authenticate with token via SASL
+CAP REQ :sasl
+AUTHENTICATE PLAIN
+AUTHENTICATE <base64(account\0account\0token)>
+:server 903 * :SASL authentication successful
+```
+
+**Implementation:**
+
+1. **Detect token delivery**
+   - Parse NOTICE from AuthServ/NickServ
+   - Match pattern: "Your session cookie is: <token>"
+   - Extract token (base64-encoded, ~44 characters)
+
+2. **Prompt user and store token**
+   - When token detected, show prompt: "AuthServ provided a session token. Would you like to use it for future logins? (Your password will no longer be needed)"
+   - Options: "Yes, use token" / "No, keep using password" / "Always use tokens" / "Never ask again"
+   - If accepted, store via `secure_storage_store()` with key `session_token`
+   - Associate with network name
+
+3. **Configure SASL for token use**
+   - Session tokens are only offered when X3 receives plaintext password (PRIVMSG AUTH or SASL PLAIN)
+   - Users with SCRAM/EXTERNAL/ECDSA won't receive tokens (server never sees plaintext password)
+   - If already using SASL PLAIN: token replaces password seamlessly, no config change needed
+   - If using PRIVMSG AUTH (no SASL): prompt user "Using session tokens requires SASL. Enable SASL PLAIN for this network?"
+   - If user accepts, enable SASL PLAIN and store token as password
+   - Token replaces password field in SASL auth, account name remains the same
+   - Optional upgrade: offer to switch from PLAIN to SCRAM-SHA-256 for additional security (X3 generates SCRAM credentials from token, so this just works)
+
+4. **Use token on connect**
+   - Check for stored session token before using password
+   - If token exists, use it as password for SASL PLAIN
+   - Also works with SCRAM-SHA-* (X3 generates SCRAM credentials from token)
+
+5. **Handle token invalidation**
+   - If SASL fails with stored token, fall back to password
+   - Clear invalid token from storage
+   - On `LOGOUT` command, clear stored token
+
+6. **Token refresh**
+   - After successful password AUTH, watch for new token
+   - Update stored token if X3 issues a new one
+
+**Files to modify:**
+- [inbound.c](src/common/inbound.c) - Parse AuthServ NOTICE for session token pattern
+- [secure-storage.c](src/common/secure-storage.c) - Store/retrieve session tokens
+- [server.c](src/common/server.c) - Check for session token before password in SASL auth
+- [servlist.c](src/common/servlist.c) - Track "use session token" preference per network
+- [servlistgui.c](src/fe-gtk/servlistgui.c) - UI option to enable/clear session tokens
+
+**Detection pattern:**
+```c
+/* Match: "Your session cookie is: <token>" from AuthServ */
+if (strstr(text, "session cookie is:") && is_authserv_notice(sender))
+{
+    char *token = extract_token(text);
+    if (token && strlen(token) >= 40)
+        offer_store_session_token(serv, token);
+}
+```
+
+**UX considerations:**
+- First time: prompt user to confirm storing token
+- Preference: "Automatically store session tokens from services"
+- Network list: show indicator if session token is stored
+- Option to manually clear session token
 
 ---
 
