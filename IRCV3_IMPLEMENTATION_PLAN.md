@@ -22,7 +22,7 @@ This plan completes IRCv3 support in HexChat using Nefarious IRCd and X3 service
 | setname | ✅ | Supported (no flag) |
 | invite-notify | ✅ | Supported (no flag) |
 | account-tag | ✅ | `serv->have_account_tag` |
-| SASL | ✅ | PLAIN, EXTERNAL, SCRAM-SHA-*, OAUTHBEARER |
+| SASL | ⚠️ | PLAIN, EXTERNAL, SCRAM-SHA-* complete; OAUTHBEARER missing token refresh/re-auth |
 
 ### HexChat - Missing (Gap Analysis vs Nefarious)
 | Capability | Priority | Dependency |
@@ -44,6 +44,8 @@ This plan completes IRCv3 support in HexChat using Nefarious IRCd and X3 service
 | draft/account-registration | Low | In-band registration |
 | draft/metadata-2 | Low | User metadata |
 | MONITOR | Low | Alternative to WATCH |
+| SASL OAUTHBEARER refresh | Medium | Token refresh & IRCv3.2 re-authentication |
+| SASL ECDSA-NIST256P-CHALLENGE | Medium | Challenge-response auth with ECDSA keys |
 
 ---
 
@@ -378,6 +380,100 @@ typedef struct sts_policy {
 - [inbound.c](src/common/inbound.c) - `inbound_rename()` to update session channel name
 - [fe-gtk/chanview.c](src/fe-gtk/chanview.c) - Update tab/tree label on rename
 
+#### 6.4 SASL OAUTHBEARER Token Refresh & Re-authentication
+
+**Rationale:** OAuth2 access tokens expire. HexChat must proactively refresh tokens and re-authenticate to maintain the session without reconnecting. Per IRCv3.2, clients can send `AUTHENTICATE` at any time to re-authenticate; servers that don't support this return 907 `ERR_SASLALREADY`.
+
+**Current state:**
+- Token storage exists (`secure_storage_store_oauth_tokens()` stores access_token, refresh_token, expires_at)
+- `oauth_refresh_token()` function exists but is a stub returning "not yet implemented"
+- No mechanism to trigger SASL re-authentication on established connections
+- No timer to track token expiry
+
+**Implementation:**
+
+1. **Complete `oauth_refresh_token()`** - HTTP POST to token endpoint with refresh_token grant
+   ```
+   POST /token
+   grant_type=refresh_token
+   refresh_token=<stored_refresh_token>
+   client_id=<client_id>
+   ```
+
+2. **Add token expiry timer**
+   - On successful OAUTHBEARER auth, schedule GLib timeout for `expires_at - 5 minutes`
+   - On timer fire: call `oauth_refresh_token()`, then attempt re-auth
+   - Store timer ID in server struct to cancel on disconnect
+
+3. **Add SASL re-authentication function**
+   - `sasl_reauthenticate(server *serv)` - triggers `AUTHENTICATE OAUTHBEARER` flow on established connection
+   - Reuses existing OAUTHBEARER authentication code path
+   - Must handle being called post-registration (no CAP negotiation needed)
+
+4. **Handle re-auth responses**
+   - 903: Success - update stored tokens, log success, reschedule timer
+   - 904/905: Auth failed - log error, maybe clear tokens
+   - 907: Server doesn't support re-auth - store new token for next reconnect, log info
+
+**Files to modify:**
+- [oauth.c](src/common/oauth.c) - Complete `oauth_refresh_token()` implementation
+- [oauth.h](src/common/oauth.h) - Add refresh callback types if needed
+- [inbound.c](src/common/inbound.c) - Add `sasl_reauthenticate()`, handle 903/907 for re-auth case
+- [hexchat.h](src/common/hexchat.h) - Add `oauth_refresh_timer` to server struct
+- [server.c](src/common/server.c) - Cancel refresh timer on disconnect
+
+**UX considerations:**
+- Silent refresh when successful (maybe debug log)
+- Notification on refresh failure with option to re-authorize
+- If 907 received, inform user that token was refreshed but will apply on next connect
+
+#### 6.5 SASL ECDSA-NIST256P-CHALLENGE Mechanism
+
+**Rationale:** ECDSA-NIST256P-CHALLENGE is a challenge-response SASL mechanism using ECDSA signatures. It's supported by Atheme services and provides strong authentication without transmitting passwords. The user stores a private key; authentication involves signing a server-provided challenge.
+
+**Mechanism flow:**
+1. Client sends: `AUTHENTICATE ECDSA-NIST256P-CHALLENGE`
+2. Client sends: base64(account_name)
+3. Server sends: base64(challenge)
+4. Client signs challenge with private key, sends: base64(signature)
+5. Server verifies signature against stored public key
+
+**Implementation:**
+
+1. **Key management**
+   - Generate ECDSA P-256 key pair (OpenSSL `EC_KEY_new_by_curve_name(NID_X9_62_prime256v1)`)
+   - Store private key securely (secure storage or separate key file)
+   - Export public key in format suitable for services (base64 DER or PEM)
+   - UI to generate keys and display public key for registration with services
+
+2. **Authentication flow**
+   - Add `MECH_ECDSA_CHALLENGE` to `sasl_mechanism` enum
+   - Add `LOGIN_SASL_ECDSA` to login methods
+   - Implement challenge-response state machine similar to SCRAM
+
+3. **Signature generation**
+   - Decode base64 challenge from server
+   - Sign with ECDSA using SHA-256: `ECDSA_sign(NID_sha256, challenge, challenge_len, sig, &sig_len, ec_key)`
+   - Base64 encode signature and send
+
+**Files to modify:**
+- [hexchat.h](src/common/hexchat.h) - Add `MECH_ECDSA_CHALLENGE`, `LOGIN_SASL_ECDSA`
+- [inbound.c](src/common/inbound.c) - Add mechanism to SASL negotiation
+- [proto-irc.c](src/common/proto-irc.c) - Handle ECDSA challenge-response state machine
+- [servlist.h](src/common/servlist.h) - Add ECDSA key path to `ircnet` struct
+- [servlist.c](src/common/servlist.c) - Load/save ECDSA key configuration
+- [servlistgui.c](src/fe-gtk/servlistgui.c) - UI for ECDSA key generation/selection
+- [secure-storage.c](src/common/secure-storage.c) - Optionally store private key securely
+
+**Dependencies:**
+- OpenSSL (already required for other SASL mechanisms)
+
+**UI additions:**
+- Network Edit dialog: ECDSA key file selector
+- Button to generate new key pair
+- Display public key for copying to services
+- Help text explaining registration process with services
+
 ---
 
 ## Key Files Summary
@@ -397,6 +493,9 @@ typedef struct sts_policy {
 | [src/common/plugin.c](src/common/plugin.c) | Plugin API for tags, chathistory, redact, markread |
 | [src/common/plugin.h](src/common/plugin.h) | Plugin API declarations |
 | [src/common/chathistory.c](src/common/chathistory.c) | **NEW** - Chathistory request/response/batch handling |
+| [src/common/oauth.c](src/common/oauth.c) | OAUTHBEARER token refresh implementation |
+| [src/common/oauth.h](src/common/oauth.h) | OAuth types and function declarations |
+| [src/common/secure-storage.c](src/common/secure-storage.c) | Secure token/key storage; ECDSA key management |
 | [src/fe-gtk/xtext.c](src/fe-gtk/xtext.c) | Read markers, history separators, redacted messages, scroll-to-load |
 | [src/fe-gtk/chanview.c](src/fe-gtk/chanview.c) | Unread badges, channel rename updates |
 | [src/fe-gtk/userlist.c](src/fe-gtk/userlist.c) | Typing indicator icons |
