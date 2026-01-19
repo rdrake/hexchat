@@ -44,6 +44,13 @@ This plan completes IRCv3 support in HexChat using Nefarious IRCd and X3 service
 | draft/account-registration | Low | In-band registration |
 | draft/metadata-2 | Low | User metadata |
 | MONITOR | Low | Alternative to WATCH |
+| draft/pre-away | Low | Bouncer/multi-connection away coordination |
+| draft/channel-context | Medium | Channel context for private messages (whispers) |
+| draft/reply | Medium | Message replies with msgid reference |
+| draft/react | Low | Message reactions with emoji |
+| UTF8ONLY | Low | Server enforces UTF-8 encoding |
+| draft/ICON | Low | Network icon URL from ISUPPORT |
+| SNI | Medium | TLS Server Name Indication |
 | SASL OAUTHBEARER refresh | Medium | Token refresh & IRCv3.2 re-authentication |
 | SASL ECDSA-NIST256P-CHALLENGE | Medium | Challenge-response auth with ECDSA keys |
 | X3 Session Tokens | Low | Store/use session tokens from X3 services |
@@ -553,6 +560,294 @@ if (strstr(text, "session cookie is:") && is_authserv_notice(sender))
 - Preference: "Automatically store session tokens from services"
 - Network list: show indicator if session token is stored
 - Option to manually clear session token
+
+#### 6.7 draft/pre-away Capability
+
+**Rationale:** Supports bouncer and multi-connection scenarios where a single nickname is shared across multiple client connections. Allows better coordination of away status, particularly for automated connections that shouldn't indicate user presence.
+
+**Key features:**
+- `AWAY` command accepted before registration completes
+- `AWAY *` indicates "not present for unspecified reason" (e.g., automated/bouncer connection)
+- Servers aggregate away status across multiple connections sharing a nickname
+- Receiving `*` as away message means user is away for unspecified reason
+
+**Use cases:**
+1. **Bouncer reconnection** - When HexChat reconnects to a bouncer, send `AWAY *` pre-registration to indicate this connection doesn't mean user is present
+2. **Multi-device** - User connected on phone (active) and desktop (idle) - desktop sends `AWAY *`, phone's explicit away message takes precedence
+3. **Auto-away** - Better integration with server-side auto-away systems
+4. **Minimized to tray** - When HexChat is minimized to system tray, send `AWAY *` to indicate user isn't actively present
+
+**Implementation:**
+
+1. **Capability negotiation**
+   - Add to `supported_caps[]` in inbound.c
+   - Track `have_pre_away` flag
+
+2. **Pre-registration AWAY**
+   - If capability negotiated, allow sending `AWAY` during CAP negotiation
+   - New preference: "Send AWAY * on connect" for bouncer users
+   - Send before `CAP END` if enabled
+
+3. **Handle `*` away message**
+   - When receiving away-notify or RPL_AWAY (301) with message `*`
+   - Display as "Away" without showing the literal asterisk
+   - Or use server-substituted human-readable message if provided
+
+**Files to modify:**
+- [hexchat.h](src/common/hexchat.h) - Add `have_pre_away` flag
+- [inbound.c](src/common/inbound.c) - Add capability, handle `*` away message
+- [server.c](src/common/server.c) - Send `AWAY *` pre-registration if enabled
+- [cfgfiles.c](src/common/cfgfiles.c) - Add preference for pre-away behavior
+- [setup.c](src/fe-gtk/setup.c) - UI for bouncer/pre-away settings
+
+**Preferences:**
+- `hex_irc_pre_away` - Send `AWAY *` on connect (default: OFF, enable for bouncer users)
+- `hex_irc_pre_away_tray` - Send `AWAY *` when minimized to tray (default: OFF)
+
+#### 6.8 Client Tags: channel-context, reply, react
+
+These are client-only tags (prefixed with `+`) that require the `message-tags` capability. They enable modern chat features without requiring server-side support beyond tag relay.
+
+##### 6.8.1 draft/channel-context
+
+**Spec:** https://ircv3.net/specs/client-tags/channel-context
+
+**Purpose:** Adds channel context to private messages, enabling "whispers" - private messages that relate to a specific channel conversation.
+
+**Tag:** `+draft/channel-context=<channel>`
+
+**Use cases:**
+- Right-click user in channel → "Send private message" → message tagged with channel context
+- Recipient's client can display the whisper in the channel window or show which channel it relates to
+- Useful for "Can you help me with this?" side conversations during channel discussions
+
+**Implementation:**
+
+1. **Sending whispers**
+   - Add context menu option: "Whisper (private message about this channel)"
+   - When sending from channel context, include `+draft/channel-context=#channel` tag
+   - `/WHISPER <nick> <message>` command sends PRIVMSG with channel-context tag
+
+2. **Receiving whispers**
+   - Parse `+draft/channel-context` tag from incoming PRIVMSG
+   - Display option: show in PM window with channel indicator, or show in channel window as whisper
+   - Visual distinction for whisper messages (different color, icon, or prefix)
+
+**Files to modify:**
+- [proto-irc.c](src/common/proto-irc.c) - Parse channel-context tag
+- [outbound.c](src/common/outbound.c) - Add `/WHISPER` command, include tag when sending
+- [inbound.c](src/common/inbound.c) - Handle whisper display logic
+- [menu.c](src/fe-gtk/menu.c) - Add "Whisper" context menu option
+
+##### 6.8.2 draft/reply
+
+**Spec:** https://ircv3.net/specs/client-tags/reply
+
+**Purpose:** Links a message to a previous message it's replying to, using msgid.
+
+**Tag:** `+draft/reply=<msgid>`
+
+**Use cases:**
+- Click "Reply" on a message → new message references the original
+- Recipient sees the reply with context of what's being replied to
+- Threading/conversation tracking in busy channels
+
+**Implementation:**
+
+1. **Sending replies**
+   - Context menu on message: "Reply"
+   - Store target msgid when user initiates reply
+   - Visual indicator in input box showing "Replying to: <preview>"
+   - Cancel button to clear reply context
+   - On send, include `+draft/reply=<msgid>` tag
+
+2. **Receiving replies**
+   - Parse `+draft/reply` tag from incoming messages
+   - Look up referenced message in buffer by msgid
+   - Display reply with quote/preview of original message
+   - Click on quoted portion scrolls to original (if still in buffer)
+
+3. **Visual design**
+   - Reply indicator: "> Replying to <nick>: <truncated message>"
+   - Subtle background or left border on reply messages
+   - Quoted text in smaller/muted font above the reply
+
+**Files to modify:**
+- [proto-irc.c](src/common/proto-irc.c) - Parse reply tag
+- [outbound.c](src/common/outbound.c) - Track reply state, include tag when sending
+- [inbound.c](src/common/inbound.c) - Handle reply display with quote
+- [text.c](src/common/text.c) - Msgid lookup in buffer
+- [xtext.c](src/fe-gtk/xtext.c) - Reply visual rendering, click-to-scroll
+- [inputgui.c](src/fe-gtk/inputgui.c) - Reply indicator above input, cancel button
+- [menu.c](src/fe-gtk/menu.c) - Add "Reply" context menu option
+
+##### 6.8.3 draft/react
+
+**Spec:** https://ircv3.net/specs/client-tags/react
+
+**Purpose:** Adds emoji reactions to messages, similar to Slack/Discord.
+
+**Tag:** `+draft/react=<emoji>` on TAGMSG with `+draft/reply=<msgid>`
+
+**Use cases:**
+- Click reaction button on message → select emoji → reaction sent
+- Reactions displayed inline with message (e.g., "👍 3  ❤️ 2")
+- Quick acknowledgment without sending a full message
+
+**Implementation:**
+
+1. **Sending reactions**
+   - Context menu on message: "React" → emoji picker
+   - Send as TAGMSG (not PRIVMSG) with both tags:
+     - `+draft/react=👍`
+     - `+draft/reply=<msgid>` (to identify target message)
+   - Target is the channel/user where the message was sent
+
+2. **Receiving reactions**
+   - Parse TAGMSG with `+draft/react` and `+draft/reply` tags
+   - Look up target message by msgid
+   - Add reaction to message's reaction list
+   - Aggregate multiple reactions (count per emoji)
+
+3. **Visual design**
+   - Reactions displayed below or beside message
+   - Format: emoji + count, clickable to see who reacted
+   - Compact display: "👍2 ❤️1 🎉3"
+   - Hover/click shows list of users who reacted
+
+4. **Reaction management**
+   - Click own reaction to remove it
+   - Send same TAGMSG again to toggle off (server/client dependent)
+   - Store reactions in message struct
+
+**Files to modify:**
+- [proto-irc.c](src/common/proto-irc.c) - Parse react tag from TAGMSG
+- [outbound.c](src/common/outbound.c) - Send reaction TAGMSG
+- [inbound.c](src/common/inbound.c) - Handle reaction aggregation
+- [hexchat.h](src/common/hexchat.h) - Add reactions field to message struct
+- [xtext.c](src/fe-gtk/xtext.c) - Render reactions inline with messages
+- [menu.c](src/fe-gtk/menu.c) - Add "React" context menu with emoji picker
+- [emojipicker.c](src/fe-gtk/emojipicker.c) - **NEW** - Emoji picker widget
+
+**Dependencies:**
+- Requires `message-tags` capability for tag relay
+- Requires TAGMSG support (Phase 1.3)
+- Requires msgid tracking (Phase 1.2)
+
+#### 6.9 UTF8ONLY ISUPPORT Token
+
+**Spec:** https://ircv3.net/specs/extensions/utf8-only
+
+**Purpose:** Servers advertise via ISUPPORT that they exclusively support UTF-8 encoded content. When present, clients must automatically switch to UTF-8 encoding.
+
+**ISUPPORT token:** `UTF8ONLY`
+
+**Requirements:**
+- Server will NOT relay non-UTF-8 content (PRIVMSG, NOTICE, topics, realnames)
+- Client MUST NOT send non-UTF-8 data once token is seen
+- Server may send `FAIL * INVALID_UTF8` or `WARN * INVALID_UTF8` for invalid input
+
+**Implementation:**
+
+1. **Detect UTF8ONLY in ISUPPORT**
+   - Parse `UTF8ONLY` token from 005 numeric
+   - Set `serv->utf8only` flag
+
+2. **Force UTF-8 encoding**
+   - When `utf8only` flag is set, override any user encoding preference
+   - Automatically switch session encoding to UTF-8
+   - Notify user: "Server requires UTF-8 encoding"
+
+3. **Validate outgoing messages**
+   - Before sending, validate that text is valid UTF-8
+   - Convert or reject invalid sequences
+   - Ensure message truncation doesn't split multi-byte codepoints
+
+4. **Handle INVALID_UTF8 errors**
+   - Parse `FAIL * INVALID_UTF8` and `WARN * INVALID_UTF8` standard replies
+   - Display user-friendly error: "Message contained invalid characters"
+
+**Files to modify:**
+- [hexchat.h](src/common/hexchat.h) - Add `utf8only` flag to server struct
+- [modes.c](src/common/modes.c) - Parse UTF8ONLY from ISUPPORT
+- [server.c](src/common/server.c) - Force UTF-8 encoding when flag set
+- [outbound.c](src/common/outbound.c) - Validate UTF-8 before sending, safe truncation
+- [inbound.c](src/common/inbound.c) - Handle INVALID_UTF8 standard reply
+
+**Note:** HexChat already defaults to UTF-8 in most cases, but this ensures proper handling when server mandates it and provides correct error feedback.
+
+#### 6.10 draft/ICON ISUPPORT Token
+
+**Spec:** https://ircv3.net/specs/extensions/network-icon
+
+**Purpose:** Servers advertise a network icon URL via ISUPPORT, allowing clients to display visual branding for the network.
+
+**ISUPPORT token:** `draft/ICON=<url>`
+
+**Example:** `draft/ICON=https://libera.chat/icon.svg`
+
+**Implementation:**
+
+1. **Parse ICON from ISUPPORT**
+   - Extract URL from `draft/ICON` token in 005 numeric
+   - Validate URL (must be valid, HTTPS preferred)
+   - Store in `serv->network_icon_url`
+
+2. **Fetch and cache icon**
+   - Download icon asynchronously after connection
+   - Cache locally keyed by network name
+   - Support common formats: SVG, PNG, ICO
+   - Respect reasonable size limits (e.g., 1MB max)
+
+3. **Display icon**
+   - Show in server list/tree next to network name
+   - Show in server tab
+   - Show in network properties dialog
+
+**Files to modify:**
+- [hexchat.h](src/common/hexchat.h) - Add `network_icon_url` to server struct
+- [modes.c](src/common/modes.c) - Parse draft/ICON from ISUPPORT
+- [fe-gtk/chanview.c](src/fe-gtk/chanview.c) - Display icon in channel tree
+- [fe-gtk/servlistgui.c](src/fe-gtk/servlistgui.c) - Display icon in server list
+
+**Caching:**
+- Store downloaded icons in `~/.config/hexchat/icons/`
+- Key by network name or hash of URL
+- Check for updates periodically or on reconnect
+
+#### 6.11 SNI (Server Name Indication)
+
+**Spec:** https://ircv3.net/docs/sni
+
+**Purpose:** TLS Server Name Indication allows clients to specify the target hostname during TLS handshake, enabling servers to present the correct certificate when hosting multiple domains.
+
+**Requirement:** Clients MUST use SNI when connecting via TLS.
+
+**Why it matters:**
+- Server may host multiple networks (irc.example.net, server.example.net)
+- Without SNI, server doesn't know which certificate to present
+- Required for proper certificate validation on multi-homed servers
+
+**Implementation:**
+
+1. **Enable SNI in TLS connections**
+   - When initiating TLS handshake, include target hostname
+   - Use the hostname from server configuration (not resolved IP)
+   - Requires TLS 1.1+ (TLS 1.0 lacks SNI support)
+
+2. **OpenSSL implementation**
+   ```c
+   SSL_set_tlsext_host_name(ssl, hostname);
+   ```
+
+3. **Verification**
+   - After handshake, verify certificate matches the SNI hostname
+   - Handle certificate mismatch errors appropriately
+
+**Files to modify:**
+- [ssl.c](src/common/ssl.c) - Add SNI hostname to SSL context before connect
+
+**Note:** HexChat likely already supports SNI through OpenSSL defaults, but this should be verified and explicitly implemented if not present.
 
 ---
 
