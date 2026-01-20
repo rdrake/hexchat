@@ -2389,6 +2389,52 @@ cmd_markread (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 }
 
 static int
+cmd_redact (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	const char *target = NULL;
+	const char *msgid = NULL;
+	const char *reason = NULL;
+
+	/* Check if redaction is available */
+	if (!serv->have_redact)
+	{
+		PrintText (sess, "Message redaction is not available on this server.\n");
+		return TRUE;
+	}
+
+	if (!serv->connected)
+	{
+		notc_msg (sess);
+		return TRUE;
+	}
+
+	/* Parse arguments: /REDACT <target> <msgid> [reason] */
+	if (!word[2][0] || !word[3][0])
+	{
+		PrintText (sess, "Usage: /REDACT <target> <msgid> [reason]\n");
+		return TRUE;
+	}
+
+	target = word[2];
+	msgid = word[3];
+	if (word_eol[4][0])
+		reason = word_eol[4];
+
+	/* Send REDACT command */
+	if (reason && *reason)
+	{
+		tcp_sendf (serv, "REDACT %s %s :%s\r\n", target, msgid, reason);
+	}
+	else
+	{
+		tcp_sendf (serv, "REDACT %s %s\r\n", target, msgid);
+	}
+
+	return TRUE;
+}
+
+static int
 cmd_help (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	int i = 0, longfmt = 0;
@@ -4243,6 +4289,8 @@ const struct commands xc_cmds[] = {
 	 N_("QUIT [<reason>], disconnects from the current server")},
 	{"QUOTE", cmd_quote, 1, 0, 1,
 	 N_("QUOTE <text>, sends the text in raw form to the server")},
+	{"REDACT", cmd_redact, 1, 0, 1,
+	 N_("REDACT <target> <msgid> [reason], redacts/deletes a message (IRCv3)")},
 #ifdef USE_OPENSSL
 	{"RECONNECT", cmd_reconnect, 0, 0, 1,
 	 N_("RECONNECT [-ssl|-ssl-noverify] [<host>] [<port>] [<password>], Can be called just as /RECONNECT to reconnect to the current server or with /RECONNECT ALL to reconnect to all the open servers")},

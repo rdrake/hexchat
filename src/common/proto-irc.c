@@ -1416,6 +1416,48 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 				}
 			}
 			return;
+
+		case WORDL('R','E','D','A'):
+			/* REDACT - message redaction
+			 * Format: :nick!user@host REDACT <target> <msgid> [reason]
+			 */
+			if (len >= 6 && strncasecmp (type, "REDACT", 6) == 0)
+			{
+				char *target = word[3];
+				char *msgid = word[4];
+				char *reason = word_eol[5];
+				session *sess;
+
+				if (!*target || !*msgid)
+					return;
+
+				/* Find session for target */
+				sess = find_channel (serv, target);
+				if (!sess)
+					sess = find_dialog (serv, target);
+
+				if (sess)
+				{
+					/* Display redaction message */
+					if (reason && *reason == ':')
+						reason++;
+					if (reason && *reason)
+					{
+						EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+							g_strdup_printf ("Message %s was redacted by %s: %s",
+								msgid, nick, reason),
+							NULL, NULL, NULL, 0, tags_data->timestamp);
+					}
+					else
+					{
+						EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+							g_strdup_printf ("Message %s was redacted by %s",
+								msgid, nick),
+							NULL, NULL, NULL, 0, tags_data->timestamp);
+					}
+				}
+			}
+			return;
 		}
 	}
 

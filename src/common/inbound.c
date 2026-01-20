@@ -2115,6 +2115,8 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_read_marker = enable;
 		else if (!strcmp (extension, "draft/no-implicit-names"))
 			serv->have_no_implicit_names = enable;
+		else if (!strcmp (extension, "draft/message-redaction"))
+			serv->have_redact = enable;
 		else if (!strcmp (extension, "sasl"))
 		{
 			serv->have_sasl = enable;
@@ -2193,6 +2195,7 @@ static const char * const supported_caps[] = {
 	"draft/event-playback",
 	"draft/read-marker",
 	"draft/no-implicit-names",
+	"draft/message-redaction",
 
 	/* ZNC */
 	"znc.in/server-time-iso",

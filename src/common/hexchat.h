@@ -623,6 +623,7 @@ typedef struct server
 	unsigned int have_event_playback:1;	/* IRCv3 draft/event-playback capability */
 	unsigned int have_read_marker:1;	/* IRCv3 draft/read-marker capability */
 	unsigned int have_no_implicit_names:1; /* IRCv3 draft/no-implicit-names capability */
+	unsigned int have_redact:1;		/* IRCv3 draft/message-redaction capability */
 	unsigned int have_except:1;	/* ban exemptions +e */
 	unsigned int have_invite:1;	/* invite exemptions +I */
 	unsigned int have_cert:1;	/* have loaded a cert */
