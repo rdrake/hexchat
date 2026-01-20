@@ -4,6 +4,38 @@
 
 The xtext widget's append-only linked list buffer is architecturally inadequate for modern IRC features. This document outlines a comprehensive modernization plan to support IRCv3 features while addressing longstanding technical debt.
 
+### The Endgame Vision
+
+A fully modernized xtext that enables HexChat to deliver a **Discord/Slack-tier chat experience** on IRC:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ [12:30] ↩ <alice> What do you think about the new design?       │  ← Reply context (clickable)
+│ [12:31] <bob> I love it! The colors are perfect 🎨              │  ← Graphical emoji inline
+│         [👍 5] [❤️ 3] [🎉 2]                                    │  ← Reaction badges (sprites)
+│                                                                 │
+│ [12:32] <charlie> Here's the implementation:                    │
+│ │ def calculate_score(data):                                    │  ← Multiline code block
+│ │     return sum(data) / len(data)                              │
+│ │ [Show 15 more lines...]                                       │  ← Expandable
+│                                                                 │
+│ [12:33] <dave> :custom_emoji: Great work team!                  │  ← Custom server emoji
+│         [Message pending...]                                     │  ← Echo-message state
+│                                                                 │
+│ ═══════════════════ New messages ═══════════════════            │  ← Read marker
+│                                                                 │
+│ [12:45] <eve> Just catching up...                               │
+│ [Loading earlier messages...]                                    │  ← Scroll-to-load
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Core pillars:**
+1. **Flexible insertion** - Prepend, append, or insert at any timestamp position
+2. **Entry addressability** - Find, modify, or delete any message by msgid
+3. **Rich inline content** - Graphical emojis, reaction badges, reply quotes
+4. **Scroll stability** - Buffer changes don't disrupt user's reading position
+5. **Extensible metadata** - Reactions, states, custom attributes per entry
+
 ---
 
 ## 1. Current Architecture Limitations
@@ -24,10 +56,26 @@ The xtext widget's append-only linked list buffer is architecturally inadequate 
 | Chathistory (gaps) | Insert at arbitrary position by timestamp | ❌ No |
 | Message redaction | Find by msgid, replace content | ❌ No |
 | Echo-message | Update entry state (pending → confirmed) | ❌ No |
-| Reactions | Attach metadata to existing entry | ❌ No |
-| Reply/threading | Find entry by msgid, scroll to it | ❌ No |
+| Reactions | Attach metadata to existing entry, render emoji badges | ❌ No |
+| Reply/threading | Find entry by msgid, scroll to it, render quote | ❌ No |
 | Read marker | Track position that survives insertions | ⚠️ Partial (breaks on insert) |
-| Multiline | Cohesive multi-line entry | ⚠️ Partial (word-wrap exists) |
+| Multiline | Cohesive multi-line entry with expand/collapse | ⚠️ Partial (word-wrap exists) |
+| **Graphical emoji** | Inline sprite rendering, consistent across platforms | ❌ No (font-dependent) |
+| **Custom emoji** | `:name:` syntax → inline image from server/cache | ❌ No |
+
+### Why Graphical Emoji is Foundational
+
+Font-based emoji rendering is fundamentally unreliable:
+- **Platform inconsistency** - Different fonts on Windows/Linux/macOS
+- **Version lag** - System fonts trail Unicode emoji releases by years
+- **Color support** - Older GTK/Pango/Cairo may render monochrome
+- **No customization** - Can't use Discord-style custom server emojis
+
+**Graphical sprites solve all of these** and enable:
+- Reactions that look good everywhere
+- Custom server/channel emojis (`:pogchamp:`)
+- Consistent visual style matching modern chat apps
+- Future emoji without waiting for font updates
 
 ---
 
@@ -196,6 +244,25 @@ typedef struct xtext_buffer {
 
 ## 3. Implementation Phases
 
+### Phase Dependency Graph
+
+```
+Phase 1 (Entry IDs) ──────────┬──────────────────────────────────────┐
+                              │                                      │
+Phase 2 (Scroll Anchor) ──────┼──► Phase 3 (Insertion Modes)         │
+                              │                                      │
+                              ├──► Phase 4 (Entry Modification)      │
+                              │         │                            │
+Phase 5 (Inline Rendering) ───┼─────────┼───► Phase 6 (Rich Content) │
+     [emojis, images]         │         │         [reactions, reply] │
+                              │         │                            │
+                              └─────────┴──► Phase 7 (Reference Migrate)
+                                                     │
+                                        Phase 8 (Optimization)
+```
+
+---
+
 ### Phase 1: Entry Identification (Foundation)
 
 **Goal:** Add stable IDs without changing buffer structure
@@ -213,6 +280,8 @@ typedef struct xtext_buffer {
 - `xtext.h` - struct changes
 - `xtext.c` - hash table management, ID generation
 
+---
+
 ### Phase 2: Scroll Anchor System
 
 **Goal:** Make scroll position survive content changes
@@ -228,6 +297,8 @@ typedef struct xtext_buffer {
 **Files:**
 - `xtext.h` - anchor struct
 - `xtext.c` - scroll functions
+
+---
 
 ### Phase 3: Insertion Modes
 
@@ -246,6 +317,8 @@ typedef struct xtext_buffer {
 - `xtext.h` - new function declarations
 - `xtext.c` - insertion logic, line numbering
 
+---
+
 ### Phase 4: Entry Modification
 
 **Goal:** Support modifying existing entries
@@ -263,7 +336,103 @@ typedef struct xtext_buffer {
 - `xtext.h` - modification API
 - `xtext.c` - modification logic, rendering changes
 
-### Phase 5: Reference Migration
+---
+
+### Phase 5: Inline Rendering Engine
+
+**Goal:** Support inline images (emoji sprites, custom emoji, future: thumbnails)
+
+**This is foundational for reactions looking good.** Without it, reaction badges use unreliable font emoji.
+
+**Changes:**
+1. Add emoji sprite cache infrastructure (`xtext_emoji_cache`)
+2. Implement emoji codepoint detection (ZWJ, skin tones, flags)
+3. Modify `backend_draw_text_emph()` to interleave text and sprites
+4. Update width calculation to account for inline images
+5. Add custom emoji support (`:name:` → image lookup)
+6. Handle selection/copy with inline images
+
+**Structures:**
+```c
+/* Global emoji cache */
+typedef struct {
+    GHashTable *sprites;          /* emoji_str@size → cairo_surface_t* */
+    GHashTable *custom;           /* :name: → cairo_surface_t* */
+    char *sprite_path;            /* Path to bundled emoji (e.g., twemoji) */
+    gboolean enabled;             /* User preference */
+} xtext_emoji_cache;
+
+/* Per-entry inline content (lazy allocated) */
+typedef struct {
+    GPtrArray *inline_items;      /* Positions and surfaces for non-text content */
+} xtext_inline_content;
+```
+
+**Key functions:**
+```c
+/* Initialize global emoji cache */
+void xtext_emoji_init(const char *sprite_path);
+
+/* Get sprite for emoji (loads and caches) */
+cairo_surface_t *xtext_emoji_get(const char *emoji_str, int size);
+
+/* Get custom emoji by name */
+cairo_surface_t *xtext_custom_emoji_get(const char *name, int size);
+
+/* Check if position is start of emoji sequence */
+gboolean xtext_is_emoji_at(const char *str, int remaining, int *byte_len);
+
+/* Render text with inline sprites */
+void backend_draw_text_with_inline(GtkXText *xtext, int x, int y,
+                                    char *str, int len, int emphasis);
+```
+
+**Risk:** Medium - rendering changes, but isolated to new code path
+
+**Files:**
+- `xtext.h` - cache structures
+- `xtext.c` - emoji detection, inline rendering
+- `xtext-emoji.c` - **NEW** - emoji cache, sprite loading
+
+---
+
+### Phase 6: Rich Content Features
+
+**Goal:** Implement reactions, replies, and expandable content
+
+**Depends on:** Phase 1 (find by msgid), Phase 4 (modify entries), Phase 5 (emoji rendering)
+
+**Changes:**
+1. Add reaction data structures to `textentry`
+2. Implement `gtk_xtext_entry_add_reaction()` / `remove_reaction()`
+3. Render reaction badges below messages (uses emoji sprites from Phase 5)
+4. Add reply reference fields, render quote context
+5. Implement click-to-jump for replies
+6. Add expandable/collapsible content for multiline
+
+**Structures:**
+```c
+typedef struct textentry {
+    /* ... existing fields ... */
+
+    /* Rich content (Phase 6) */
+    char *reply_to_msgid;         /* Message this is replying to */
+    char *reply_preview;          /* Cached preview text */
+    xtext_reactions *reactions;   /* Reaction badges */
+    gboolean collapsed;           /* For expandable multiline */
+} textentry;
+```
+
+**Risk:** Medium - new rendering features, but builds on Phase 5
+
+**Files:**
+- `xtext.h` - reaction/reply structures
+- `xtext.c` - rich content rendering
+- `xtext-reactions.c` - **NEW** - reaction management
+
+---
+
+### Phase 7: Reference Migration
 
 **Goal:** Use entry IDs for all internal references
 
@@ -279,7 +448,9 @@ typedef struct xtext_buffer {
 - `xtext.h` - state struct changes
 - `xtext.c` - reference handling throughout
 
-### Phase 6: Performance Optimization
+---
+
+### Phase 8: Performance Optimization
 
 **Goal:** Ensure acceptable performance with new architecture
 
@@ -689,16 +860,22 @@ void handle_reply_click(session *sess, const char *reply_to_msgid) {
 
 ## 8. Estimated Effort
 
-| Phase | Effort | Risk | Dependencies |
-|-------|--------|------|--------------|
-| Phase 1: Entry ID | 2-3 days | Low | None |
-| Phase 2: Scroll Anchor | 3-4 days | Medium | Phase 1 |
-| Phase 3: Insertion Modes | 5-7 days | High | Phase 1, 2 |
-| Phase 4: Entry Modification | 3-4 days | Medium | Phase 1 |
-| Phase 5: Reference Migration | 2-3 days | Medium | Phase 1 |
-| Phase 6: Optimization | 2-3 days | Low | All above |
+| Phase | Effort | Risk | Dependencies | Enables |
+|-------|--------|------|--------------|---------|
+| Phase 1: Entry ID | 2-3 days | Low | None | All lookups |
+| Phase 2: Scroll Anchor | 3-4 days | Medium | Phase 1 | Insertion modes |
+| Phase 3: Insertion Modes | 5-7 days | High | Phase 1, 2 | Chathistory |
+| Phase 4: Entry Modification | 3-4 days | Medium | Phase 1 | Redaction, echo |
+| Phase 5: Inline Rendering | 4-5 days | Medium | None | Reactions |
+| Phase 6: Rich Content | 4-5 days | Medium | Phase 1, 4, 5 | Full modern UX |
+| Phase 7: Reference Migration | 2-3 days | Medium | Phase 1 | Stability |
+| Phase 8: Optimization | 2-3 days | Low | All above | Performance |
 
-**Total: ~3-4 weeks of focused work**
+**Total: ~4-5 weeks of focused work**
+
+**Critical path:** Phase 1 → Phase 2 → Phase 3 (chathistory fully functional)
+**Parallel track:** Phase 5 → Phase 6 (modern rich content)
+**Polish:** Phase 7, 8 (can be done last)
 
 ---
 
@@ -752,7 +929,344 @@ void handle_reply_click(session *sess, const char *reply_to_msgid) {
 
 ---
 
-## Appendix: Current textentry struct
+## Appendix A: Phase 5 Implementation Details (Inline Rendering)
+
+This appendix provides detailed implementation guidance for Phase 5: Inline Rendering Engine.
+
+### Problem Statement
+
+Font-based emoji rendering is fundamentally unreliable for a modern chat experience:
+- Inconsistent appearance across platforms (Windows/Linux/macOS)
+- Missing newer emoji (font updates lag behind Unicode by years)
+- Color font support varies by GTK/Pango/Cairo version
+- Monochrome fallback on older systems
+- No path to custom server/channel emojis
+
+### Solution: Inline Graphical Sprites
+
+Render emojis as actual images inline with text, similar to Discord/Slack/Telegram.
+
+**Architecture:**
+
+```c
+/* Emoji cache - global, shared across all xtext instances */
+typedef struct {
+    GHashTable *sprites;      /* emoji codepoint string → cairo_surface_t* */
+    char *sprite_path;        /* Path to emoji sprite directory */
+    int sprite_size;          /* Size to render (matches line height) */
+    gboolean use_sprites;     /* User preference: sprites vs font */
+} xtext_emoji_cache;
+
+/* Global instance */
+static xtext_emoji_cache *emoji_cache = NULL;
+
+/* Initialize emoji cache */
+void xtext_emoji_init(const char *sprite_path);
+
+/* Get emoji sprite for codepoints */
+cairo_surface_t *xtext_emoji_get(const char *emoji_str, int size);
+
+/* Check if string segment is emoji */
+gboolean xtext_is_emoji(const gunichar *str, int *emoji_len);
+```
+
+**Rendering Changes:**
+
+```c
+/* Modified backend_draw_text_emph to handle inline emojis */
+static void
+backend_draw_text_emph (GtkXText *xtext, int dofill, int x, int y,
+                        char *str, int len, int str_width, int emphasis)
+{
+    if (!emoji_cache || !emoji_cache->use_sprites) {
+        /* Fall back to Pango font rendering */
+        pango_layout_set_text (xtext->layout, str, len);
+        /* ... existing code ... */
+        return;
+    }
+
+    /* Parse text for emoji runs */
+    int pos = 0;
+    int draw_x = x;
+
+    while (pos < len) {
+        int emoji_len;
+
+        if (xtext_is_emoji_at(str + pos, len - pos, &emoji_len)) {
+            /* Draw any pending text first */
+            if (pos > text_start) {
+                draw_text_segment(xtext, str + text_start, pos - text_start, draw_x, y);
+                draw_x += text_width;
+            }
+
+            /* Draw emoji sprite */
+            char emoji_key[32];
+            memcpy(emoji_key, str + pos, emoji_len);
+            emoji_key[emoji_len] = '\0';
+
+            cairo_surface_t *sprite = xtext_emoji_get(emoji_key, xtext->fontsize);
+            if (sprite) {
+                cairo_set_source_surface(xtext->cr, sprite, draw_x, y - xtext->font->ascent);
+                cairo_paint(xtext->cr);
+                draw_x += xtext->fontsize;  /* Square emoji */
+            }
+
+            pos += emoji_len;
+            text_start = pos;
+        } else {
+            pos = g_utf8_next_char(str + pos) - str;
+        }
+    }
+
+    /* Draw remaining text */
+    if (text_start < len) {
+        draw_text_segment(xtext, str + text_start, len - text_start, draw_x, y);
+    }
+}
+```
+
+**Emoji Detection:**
+
+```c
+/* Unicode emoji detection - handles:
+ * - Single codepoint emojis (😀)
+ * - ZWJ sequences (👨‍👩‍👧)
+ * - Skin tone modifiers (👋🏽)
+ * - Flag sequences (🇺🇸)
+ * - Keycap sequences (1️⃣)
+ */
+gboolean
+xtext_is_emoji_at (const char *str, int len, int *emoji_byte_len)
+{
+    gunichar ch = g_utf8_get_char(str);
+
+    /* Check if base character is emoji */
+    if (!g_unichar_iswide(ch) && !is_emoji_codepoint(ch))
+        return FALSE;
+
+    /* Consume modifiers, ZWJ sequences, variation selectors */
+    const char *p = g_utf8_next_char(str);
+    while (p < str + len) {
+        gunichar next = g_utf8_get_char(p);
+
+        if (next == 0xFE0F ||           /* Variation selector-16 (emoji) */
+            next == 0x200D ||           /* ZWJ */
+            is_skin_tone_modifier(next) ||
+            is_regional_indicator(next)) {
+            p = g_utf8_next_char(p);
+            continue;
+        }
+
+        /* Check for ZWJ continuation */
+        if (g_utf8_get_char(p - 3) == 0x200D && is_emoji_codepoint(next)) {
+            p = g_utf8_next_char(p);
+            continue;
+        }
+
+        break;
+    }
+
+    *emoji_byte_len = p - str;
+    return TRUE;
+}
+```
+
+**Emoji Sprite Sources:**
+
+| Source | License | Format | Notes |
+|--------|---------|--------|-------|
+| [Twemoji](https://github.com/twitter/twemoji) | CC-BY 4.0 | SVG, PNG | Twitter style, very complete |
+| [Noto Emoji](https://github.com/googlefonts/noto-emoji) | Apache 2.0 | SVG, PNG | Google style |
+| [OpenMoji](https://openmoji.org/) | CC-BY-SA 4.0 | SVG, PNG | Open source project |
+| [JoyPixels](https://www.joypixels.com/) | Proprietary | PNG | Formerly EmojiOne |
+
+**Recommended: Twemoji** - Most complete, permissive license, familiar style.
+
+**Sprite Loading:**
+
+```c
+/* Load emoji sprite from disk (lazy, cached) */
+cairo_surface_t *
+xtext_emoji_get (const char *emoji_str, int size)
+{
+    char *key = g_strdup_printf("%s@%d", emoji_str, size);
+
+    cairo_surface_t *surface = g_hash_table_lookup(emoji_cache->sprites, key);
+    if (surface) {
+        g_free(key);
+        return surface;
+    }
+
+    /* Convert emoji codepoints to filename */
+    char *filename = emoji_to_filename(emoji_str);  /* e.g., "1f600.png" */
+    char *path = g_build_filename(emoji_cache->sprite_path, filename, NULL);
+
+    /* Load and scale */
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file_at_size(path, size, size, NULL);
+    if (pixbuf) {
+        surface = gdk_cairo_surface_create_from_pixbuf(pixbuf, 1, NULL);
+        g_object_unref(pixbuf);
+        g_hash_table_insert(emoji_cache->sprites, key, surface);
+    } else {
+        g_free(key);
+    }
+
+    g_free(filename);
+    g_free(path);
+    return surface;
+}
+```
+
+**Width Calculation:**
+
+```c
+/* Modified to account for emoji widths */
+static int
+backend_get_text_width_with_emoji (GtkXText *xtext, char *str, int len)
+{
+    int width = 0;
+    int pos = 0;
+    int text_start = 0;
+
+    while (pos < len) {
+        int emoji_len;
+
+        if (xtext_is_emoji_at(str + pos, len - pos, &emoji_len)) {
+            /* Add width of text before emoji */
+            if (pos > text_start) {
+                width += pango_text_width(xtext, str + text_start, pos - text_start);
+            }
+
+            /* Emoji is square, sized to match font */
+            width += xtext->fontsize;
+
+            pos += emoji_len;
+            text_start = pos;
+        } else {
+            pos = g_utf8_next_char(str + pos) - str;
+        }
+    }
+
+    /* Remaining text */
+    if (text_start < len) {
+        width += pango_text_width(xtext, str + text_start, len - text_start);
+    }
+
+    return width;
+}
+```
+
+**User Preferences:**
+
+```c
+/* In cfgfiles.c */
+{"hex_gui_emoji_sprites", P_OFFINT(hex_gui_emoji_sprites), TYPE_BOOL},
+{"hex_gui_emoji_path", P_OFFSET(hex_gui_emoji_path), TYPE_STR},
+
+/* Defaults */
+prefs.hex_gui_emoji_sprites = TRUE;     /* Use sprites by default */
+prefs.hex_gui_emoji_path = "share/hexchat/emoji/twemoji";
+```
+
+**Settings UI:**
+
+- Checkbox: "Use graphical emoji sprites"
+- Directory chooser: "Emoji sprite directory"
+- Preview: Show sample emojis with current settings
+
+### Integration with Phase 6 (Reactions)
+
+Phase 5's emoji rendering is the foundation for Phase 6's reaction badges:
+
+```c
+/* Reaction badge rendering (Phase 6) uses Phase 5's emoji API */
+void gtk_xtext_render_reaction_badge(GtkXText *xtext, const char *emoji,
+                                      int count, int x, int y) {
+    /* Get emoji sprite from Phase 5 cache */
+    cairo_surface_t *sprite = xtext_emoji_get(emoji, xtext->fontsize);
+
+    if (sprite) {
+        /* Draw badge with crisp graphical emoji */
+        xtext_draw_badge_bg(xtext, x, y, badge_width, badge_height);
+        cairo_set_source_surface(xtext->cr, sprite, x + 4, y + 2);
+        cairo_paint(xtext->cr);
+        /* Draw count text */
+        char count_str[16];
+        g_snprintf(count_str, sizeof(count_str), "%d", count);
+        backend_draw_text(xtext, x + xtext->fontsize + 6, y + 2,
+                          count_str, strlen(count_str), -1);
+    } else {
+        /* Fallback to font rendering if sprite unavailable */
+        char *badge = g_strdup_printf("%s %d", emoji, count);
+        backend_draw_text(xtext, x + 4, y + 2, badge, strlen(badge), -1);
+        g_free(badge);
+    }
+}
+```
+
+**With graphical emoji (Phase 5 enabled):**
+```
+┌─────────────────────────────────────────────────┐
+│ [12:34] <alice> This is amazing news!           │
+│         [👍 3] [❤️ 2] [🎉 1]                    │  ← Crisp, consistent sprites
+└─────────────────────────────────────────────────┘
+```
+
+**Without (font fallback):**
+```
+┌─────────────────────────────────────────────────┐
+│ [12:34] <alice> This is amazing news!           │
+│         [☐ 3] [☐ 2] [☐ 1]                       │  ← Missing/broken glyphs
+└─────────────────────────────────────────────────┘
+```
+
+This is why Phase 5 must come before Phase 6 in the dependency graph.
+
+### Custom Emoji Support
+
+With sprite infrastructure in place, custom server/channel emojis become possible:
+- Server advertises custom emoji via METADATA or new capability
+- Client downloads and caches custom emoji images
+- Syntax: `:custom_name:` replaced with inline image
+- Similar to Discord/Slack custom emoji
+
+**Custom emoji protocol options:**
+1. **METADATA-based** - Server stores emoji URLs in metadata keys
+2. **New capability** - `draft/custom-emoji` or similar (doesn't exist yet)
+3. **External service** - Discord-style CDN with known URL patterns
+
+**Implementation:**
+```c
+/* Custom emoji lookup */
+cairo_surface_t *
+xtext_custom_emoji_get (const char *name, int size)
+{
+    char *key = g_strdup_printf("%s@%d", name, size);
+
+    /* Check cache first */
+    cairo_surface_t *surface = g_hash_table_lookup(emoji_cache->custom, key);
+    if (surface) {
+        g_free(key);
+        return surface;
+    }
+
+    /* Look up URL from server-provided mapping */
+    const char *url = custom_emoji_url_lookup(name);
+    if (!url) {
+        g_free(key);
+        return NULL;  /* Fall back to :name: text */
+    }
+
+    /* Async download, cache when complete */
+    custom_emoji_fetch_async(url, size, key);
+
+    return NULL;  /* Return NULL while loading, will redraw when ready */
+}
+```
+
+---
+
+## Appendix B: Current textentry struct
 
 ```c
 /* Current (44 bytes, optimized) */
