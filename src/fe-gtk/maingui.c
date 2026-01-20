@@ -37,6 +37,7 @@
 #include "../common/chanopt.h"
 #include "../common/cfgfiles.h"
 #include "../common/servlist.h"
+#include "../common/chathistory.h"
 
 #include "fe-gtk.h"
 #include "banlist.h"
@@ -2755,6 +2756,20 @@ mg_word_check (GtkWidget * xtext, char *word)
 	return ret;
 }
 
+/* Callback for scroll-to-top: request older history (chathistory BEFORE) */
+static void
+mg_scroll_to_top_cb (GtkXText *xtext, gpointer userdata)
+{
+	session *sess = current_sess;
+	(void)xtext;
+	(void)userdata;
+
+	if (sess && prefs.hex_irc_chathistory_scroll)
+	{
+		chathistory_request_older (sess);
+	}
+}
+
 /* mouse click inside text area */
 
 static void
@@ -2900,6 +2915,7 @@ mg_create_textarea (session *sess, GtkWidget *box)
 	gtk_xtext_set_thin_separator (xtext, prefs.hex_text_thin_sep);
 	gtk_xtext_set_urlcheck_function (xtext, mg_word_check);
 	gtk_xtext_set_max_lines (xtext, prefs.hex_text_max_lines);
+	gtk_xtext_set_scroll_to_top_callback (xtext, mg_scroll_to_top_cb, NULL);
 	hc_frame_set_child (frame, GTK_WIDGET (xtext));
 
 	mg_update_xtext (GTK_WIDGET (xtext));

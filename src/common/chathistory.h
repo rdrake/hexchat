@@ -60,6 +60,44 @@ void chathistory_request_before (session *sess, const char *reference, int limit
 void chathistory_request_after (session *sess, const char *reference, int limit);
 
 /**
+ * Request messages after a timestamp (convenience wrapper).
+ * Uses CHATHISTORY AFTER <target> timestamp=<time> <limit>
+ *
+ * @param sess Session/channel to request history for
+ * @param timestamp Unix timestamp to fetch messages after
+ * @param limit Maximum messages to request (0 = use default)
+ */
+void chathistory_request_after_timestamp (session *sess, time_t timestamp, int limit);
+
+/**
+ * Request messages after a msgid (convenience wrapper).
+ * Uses CHATHISTORY AFTER <target> msgid=<id> <limit>
+ *
+ * @param sess Session/channel to request history for
+ * @param msgid The message ID to fetch messages after
+ * @param limit Maximum messages to request (0 = use default)
+ */
+void chathistory_request_after_msgid (session *sess, const char *msgid, int limit);
+
+/**
+ * Request messages before a msgid (convenience wrapper).
+ * Uses CHATHISTORY BEFORE <target> msgid=<id> <limit>
+ *
+ * @param sess Session/channel to request history for
+ * @param msgid The message ID to fetch messages before
+ * @param limit Maximum messages to request (0 = use default)
+ */
+void chathistory_request_before_msgid (session *sess, const char *msgid, int limit);
+
+/**
+ * Request older history for scroll-to-load.
+ * Uses oldest_msgid from session if available.
+ *
+ * @param sess Session/channel to request history for
+ */
+void chathistory_request_older (session *sess);
+
+/**
  * Request messages around a reference point.
  * Uses CHATHISTORY AROUND <target> <reference> <limit>
  *
@@ -128,5 +166,14 @@ void chathistory_track_msgid (session *sess, const char *msgid, gboolean is_hist
  * @return TRUE if more history may be available
  */
 gboolean chathistory_can_request_more (session *sess);
+
+/**
+ * Schedule a timeout for deferred join fallback.
+ * If chathistory doesn't complete within the timeout, the join banner
+ * will be emitted anyway.
+ *
+ * @param sess Session with deferred join
+ */
+void chathistory_schedule_deferred_join_timeout (session *sess);
 
 #endif /* HEXCHAT_CHATHISTORY_H */

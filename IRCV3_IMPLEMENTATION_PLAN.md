@@ -329,37 +329,82 @@ typedef struct sts_policy {
 - [inbound.c](src/common/inbound.c) - Handle METADATA responses
 - [outbound.c](src/common/outbound.c) - `/METADATA GET/SET/LIST/SUB/UNSUB` commands
 
-**Note:** draft/metadata-2 has effectively no real-world deployment yet. ObsidianIRC is the only client with substantial metadata support, so we reference their implementation while remaining free to diverge.
+**Note:** draft/metadata-2 has effectively no real-world deployment yet. ObsidianIRC is the only client with substantial metadata support. Nefarious/X3 is implementing a comprehensive metadata system that we use as our primary reference.
 
-**Metadata keys (from ObsidianIRC - the only real reference):**
+**Virtual Keys (Read-Only, Computed from IRCd State):**
 
-| Key | Description | Target | Notes |
-|-----|-------------|--------|-------|
-| `avatar` | Avatar/profile image URL | User, Channel | Primary use case |
-| `display-name` | Display name (not nick) | User, Channel | Modern chat UX |
-| `url` | Personal homepage URL | User | Profile link |
-| `website` | Website URL | User | Similar to url |
-| `status` | Status message | User | "What are you up to?" |
-| `location` | Geographic location | User | Optional profile info |
-| `color` | User color for display | User | Nick colorization |
-| `bot` | Bot indicator | User | Alternative to +B mode |
+Virtual keys are prefixed with `$` and computed dynamically - they cannot be SET.
 
-**Additional keys (from X3 Services):**
+| Key | Description | Source |
+|-----|-------------|--------|
+| `$secure` | TLS connection ("1"/"0") | `IsSSL(cptr)` |
+| `$account` | Account name | `cli_account(cptr)` |
+| `$oper` | Oper status ("1"/"0") | `IsOper(cptr)` |
+| `$idle` | Idle seconds | Current time - last activity |
+| `$signon` | Connection timestamp | `cli_firsttime(cptr)` |
+| `$connection_count` | Connections for account | Account session count |
+| `$bot` | Bot flag ("1"/"0") | `IsBot(cptr)` (+B mode) |
+| `$presence` | Aggregated presence state | `present`, `away`, `away-star` |
+| `$away_message` | Effective away message | (absent if none) |
+| `$last_present` | Last non-away timestamp | Unix timestamp |
 
-| Key | Description | Notes |
-|-----|-------------|-------|
-| `x3.title` | User epithet/signature | Public, shown in WHOIS |
+**User Profile Keys (ObsidianIRC-compatible, stored in LMDB/Keycloak):**
+
+| Key | Description | Visibility | Keycloak Attr |
+|-----|-------------|------------|---------------|
+| `avatar` | Profile image URL | Public | `metadata.avatar` |
+| `display-name` | Display name (not nick) | Public | `metadata.display-name` |
+| `status` | Status message | Public | `metadata.status` |
+| `url` | Homepage URL | Public | `metadata.url` |
+| `location` | Geographic location | Public | `metadata.location` |
+| `color` | Nick color (hex) | Public | `metadata.color` |
+
+**X3 Services Keys:**
+
+| Key | Description | Visibility |
+|-----|-------------|------------|
+| `x3.title` | User epithet/signature | Public |
 | `x3.registered` | Account registration timestamp | Public |
 | `x3.karma` | Reputation score | Public |
 | `x3.infoline.#channel` | Per-channel role description | Per-channel |
+| `x3.email` | Email address | Private (owner + opers) |
+| `x3.lasthost` | Last connection host | Private (owner + opers) |
+| `x3.screen_width` | Terminal width | Private (owner only) |
 
-**ObsidianIRC implementation patterns to follow:**
-- Subscribe to default keys on capability ACK: `avatar`, `display-name`, `url`, `website`, `status`, `location`, `color`, `bot`
+**Visibility Rules:**
+
+| Key Pattern | Default | Who Can See |
+|-------------|---------|-------------|
+| `$*` (virtual) | Public | Anyone (read-only) |
+| `avatar`, `display-name`, etc. | Public | Anyone |
+| `x3.email`, `x3.lasthost` | Private | Owner + opers |
+| `x3.screen_width`, etc. | Private | Owner only |
+| Channel keys | Public | Anyone |
+
+**Permission Matrix:**
+
+| Operation | User Metadata | Channel Metadata |
+|-----------|---------------|------------------|
+| Read public | Anyone | Anyone |
+| Read private | Owner/oper | N/A (all public) |
+| Write | Owner/oper | Chan op (200+) |
+
+**Implementation patterns:**
+- Subscribe to default keys on capability ACK: `avatar`, `display-name`, `url`, `status`, `location`, `color`
 - For channels, request only: `avatar`, `display-name`
-- Cache metadata locally (localStorage equivalent) for persistence across sessions
+- Virtual keys (`$*`) are always queryable but never writable
+- Cache metadata locally for persistence across sessions
 - Store metadata per-target with visibility tracking: `{ value: string, visibility: string }`
 - Use METADATA numerics: 760 (WHOIS), 761 (KEYVALUE), 766 (KEYNOTSET), 770-772 (SUB/UNSUB/SUBS), 774 (SYNCLATER)
 - Handle FAIL METADATA responses gracefully
+
+**HexChat UX for metadata:**
+- Display `avatar` in user profile popup (if supported)
+- Use `display-name` instead of nick where appropriate (tooltip, profile)
+- Show `status` in user info/WHOIS display
+- Use `color` for nick colorization (user preference to enable/disable)
+- Query `$presence` for rich away status (ties into pre-away aggregation)
+- Virtual keys useful for `/WHOIS`-like information without WHOIS
 
 **Avatar upload integration (if filehost available):**
 - ObsidianIRC uses EXTJWT + external filehost for avatar uploads
@@ -368,15 +413,9 @@ typedef struct sts_policy {
 
 **Related: Bot indication**
 - Note: Bot indication is typically via user mode +B (`draft/bot-mode`), NOT metadata
+- Virtual key `$bot` reflects the +B mode state
 - If server supports `draft/bot-mode`, show bot indicator in userlist
-- This is separate from metadata
-
-**Implementation approach:**
-- Start with basic METADATA commands (GET/SET/LIST/SUB/UNSUB)
-- Support X3 namespace keys when connecting to X3-backed networks
-- Cache metadata locally to avoid repeated queries
-- Respect visibility tokens: `*` (public), `P` (private), `!` (error)
-- Extensible design: easy to add support for new keys as we discover them in the wild
+- This is separate from writable metadata
 
 #### 6.3 draft/channel-rename (RENAME command)
 
@@ -1411,3 +1450,343 @@ void hexchat_markread(hexchat_plugin *ph, const char *target, const char *msgid)
 **Files:**
 - [plugin.h](src/common/plugin.h) - API declarations
 - [plugin.c](src/common/plugin.c) - API implementations
+
+---
+
+## Implementation Task List (Phased)
+
+This section breaks down implementation into concrete tasks organized by dependency order. Tasks reference UX decisions from [IRCV3_UX_AUDIT.md](docs/IRCV3_UX_AUDIT.md).
+
+### Legend
+- ✅ Complete
+- 🔄 In Progress
+- ⬜ Not Started
+- 🔗 Dependency
+
+---
+
+### Phase 0: Prerequisites (Independent)
+
+These have no dependencies and can be done anytime.
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ✅ | STS policy storage | servlist.c, servlist.h | `sts_policy_*` functions exist |
+| ⬜ | STS upgrade notification | textevents.in, inbound.c | Add XP_TE_STSUPGRADE text event |
+| ⬜ | `/STS` command | outbound.c | `/STS LIST`, `/STS CLEAR [host]` |
+| ✅ | UTF8ONLY ISUPPORT parsing | modes.c | `serv->utf8only` flag exists |
+| ⬜ | UTF8ONLY `/CHARSET` error | outbound.c | Improve error message (UX decision #6) |
+| ⬜ | XP_TE_WARN text event | textevents.in, proto-irc.c | Add for WARN standard reply |
+| ⬜ | XP_TE_NOTE text event | textevents.in, proto-irc.c | Add for NOTE standard reply |
+| ⬜ | XP_TE_CHANRENAME text event | textevents.in | Add for channel rename |
+| ✅ | Channel rename handler | proto-irc.c, inbound.c | `inbound_rename()` exists |
+| ⬜ | Channel rename display | inbound.c | Emit XP_TE_CHANRENAME event |
+| ⬜ | MONITOR command support | notify.c, outbound.c | Alternative to WATCH |
+
+---
+
+### Phase 1: Foundation (batch + message-tags)
+
+**🔗 Required by:** chathistory, multiline, labeled-response, typing, redaction, read-marker, reply, react
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ✅ | `batch_info` struct | hexchat.h | Defined |
+| ✅ | `active_batches` hash table | hexchat.h, server.c | In server struct |
+| ✅ | `have_batch` capability flag | hexchat.h, inbound.c | CAP negotiation |
+| ✅ | BATCH command handler | proto-irc.c | Parse +id/-id |
+| ✅ | `inbound_batch_start()` | inbound.c | Create batch context |
+| ✅ | `inbound_batch_end()` | inbound.c | Finalize batch |
+| ✅ | `inbound_batch_add_message()` | inbound.c | Collect messages in batch |
+| ✅ | Batch tag parsing | proto-irc.c | `batch=` tag in messages |
+| ✅ | `message_tags_data.batch_id` | proto-irc.h | Field exists |
+| ✅ | `message_tags_data.msgid` | proto-irc.h | Field exists |
+| ✅ | `message_tags_data.label` | proto-irc.h | Field exists |
+| ✅ | `message_tags_data.all_tags` | proto-irc.h | Hash table for all tags |
+| ✅ | `have_message_tags` capability | hexchat.h, inbound.c | CAP negotiation |
+| ✅ | Client-only tag parsing (`+`) | proto-irc.c | Handle `+typing` etc. |
+| ✅ | TAGMSG command handler | proto-irc.c | Parse tag-only messages |
+| ✅ | `inbound_tagmsg()` | inbound.c | Process TAGMSG |
+| ⬜ | `/TAGMSG` outbound command | outbound.c | Send TAGMSG with tags |
+
+---
+
+### Phase 2: Chathistory
+
+**🔗 Requires:** batch, message-tags
+**🔗 Required by:** read-marker (synergy)
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ✅ | `have_chathistory` capability | hexchat.h, inbound.c | CAP negotiation |
+| ✅ | `chathistory_limit` from ISUPPORT | hexchat.h, modes.c | Parse CHATHISTORY token |
+| ✅ | chathistory.c module | chathistory.c | New file created |
+| ✅ | `chathistory_request_latest()` | chathistory.c | LATEST subcommand |
+| ✅ | `chathistory_request_before()` | chathistory.c | BEFORE subcommand |
+| ✅ | `chathistory_request_after()` | chathistory.c | AFTER subcommand |
+| ✅ | `chathistory_process_batch()` | chathistory.c | Handle chathistory batch |
+| ✅ | Event playback (JOIN/PART/etc) | chathistory.c | Handle events in history |
+| ⬜ | `/HISTORY` command | outbound.c | Manual history request |
+| ⬜ | Auto-fetch on JOIN | inbound.c | **UX #2**: Before "You are now talking on" |
+| ⬜ | Hold JOIN banner for history | inbound.c | Defer display until history fetched |
+| ⬜ | Auto-fetch on reconnect | server.c | Use AFTER with last msgid |
+| ⬜ | Scroll debouncing | fe-gtk/xtext.c, session | **UX critical**: 500ms debounce timer |
+| ⬜ | `history_loading` flag | hexchat.h | Prevent concurrent requests |
+| ⬜ | `history_scroll_timer` | hexchat.h | Debounce timer ID |
+| ⬜ | Rate limiting | chathistory.c | Max concurrent requests |
+| ⬜ | Msgid deduplication | text.c | Track msgids in buffer |
+| ⬜ | Session `oldest_msgid` | hexchat.h | For BEFORE pagination |
+| ⬜ | Session `newest_msgid` | hexchat.h | For AFTER catch-up |
+| ⬜ | `history_exhausted` flag | hexchat.h | Server has no more |
+| ⬜ | Chathistory preferences | cfgfiles.c, setup.c | `hex_irc_chathistory_*` |
+
+---
+
+### Phase 3: Echo-Message + Labeled-Response
+
+**🔗 Requires:** message-tags (for msgid correlation)
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | `have_echo_message` capability | hexchat.h, inbound.c | CAP negotiation |
+| ⬜ | Self-echo detection | inbound.c | Check if message is from self |
+| ⬜ | Defer outgoing display | outbound.c | Don't display immediately |
+| ⬜ | Pending message tracking | hexchat.h | Track unechoed messages |
+| ⬜ | Pending message visual | fe-gtk/xtext.c | **UX #1**: Muted color, theme-aware |
+| ⬜ | Echo timeout (10s) | outbound.c | Fall back to local display |
+| ⬜ | Msgid correlation | inbound.c | Match echo to pending by msgid |
+| ⬜ | `have_labeled_response` cap | hexchat.h, inbound.c | CAP negotiation |
+| ⬜ | Label counter | hexchat.h | Generate unique labels |
+| ⬜ | `pending_labels` hash table | hexchat.h | Track pending responses |
+| ⬜ | Add labels to commands | outbound.c | Include label tag |
+| ⬜ | ACK batch handling | inbound.c | Handle labeled-response batch |
+| ⬜ | Echo-message preference | cfgfiles.c | `hex_irc_echo_message` |
+
+---
+
+### Phase 4: Read Marker
+
+**🔗 Requires:** message-tags (msgid)
+**🔗 Synergy with:** chathistory (fetch from marker position)
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | `have_read_marker` capability | hexchat.h, inbound.c | CAP negotiation |
+| ⬜ | MARKREAD command handler | proto-irc.c | Parse server response |
+| ⬜ | `/MARKREAD` command | outbound.c | Set/query marker |
+| ⬜ | Session `last_read_timestamp` | hexchat.h | Track marker position |
+| ⬜ | Query marker on JOIN | inbound.c | `MARKREAD #channel` |
+| ⬜ | Update on scroll past | fe-gtk/xtext.c | **UX #7**: Advance marker |
+| ⬜ | Update on send message | outbound.c | **UX #7**: Implies caught up |
+| ⬜ | Visual marker line | fe-gtk/xtext.c | Colored horizontal rule |
+| ⬜ | Tab unread badge | fe-gtk/chanview.c | Messages since marker |
+| ⬜ | Local fallback | chanopt.c | When server doesn't support |
+| ⬜ | Read marker preferences | cfgfiles.c | `hex_irc_read_marker*` |
+
+---
+
+### Phase 5: Multiline
+
+**🔗 Requires:** batch
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | `have_multiline` capability | hexchat.h, inbound.c | CAP negotiation |
+| ⬜ | MULTILINE ISUPPORT parsing | modes.c | `max-bytes`, `max-lines` |
+| ⬜ | Multiline batch collection | inbound.c | Collect PRIVMSG lines |
+| ⬜ | Join lines with `\n` | inbound.c | Single message display |
+| ⬜ | xtext embedded newlines | fe-gtk/xtext.c | **UX #8**: Inline display |
+| ⬜ | Truncation for large | fe-gtk/xtext.c | **UX #9**: >10 lines truncate |
+| ⬜ | Expand inline | fe-gtk/xtext.c | Click to show more |
+| ⬜ | Expand popup dialog | fe-gtk/dialog.c | **UX #9**: For very large |
+| ⬜ | Send multiline batch | outbound.c | BATCH + multiple PRIVMSG |
+| ⬜ | Paste detection | fe-gtk/inputgui.c | Detect multi-line paste |
+| ⬜ | `/MULTILINE INFO` command | outbound.c | Show server limits |
+| ⬜ | Multiline preferences | cfgfiles.c | `hex_irc_multiline_*` |
+
+---
+
+### Phase 6: Typing Indicators
+
+**🔗 Requires:** TAGMSG, message-tags
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | Parse `+typing` tag | proto-irc.c | From TAGMSG |
+| ⬜ | Typing state per user | hexchat.h | Track who's typing |
+| ⬜ | Typing timeout (6s) | userlist.c | Auto-clear state |
+| ⬜ | Clear on message receive | inbound.c | User sent message |
+| ⬜ | Userlist typing icon | fe-gtk/userlist.c | **UX #10**: Pencil/ellipsis |
+| ⬜ | Send `+typing=active` | outbound.c | On input start (debounced) |
+| ⬜ | Send `+typing=paused` | outbound.c | 5s no input |
+| ⬜ | Send `+typing=done` | outbound.c | On send/clear |
+| ⬜ | Typing send debounce (3s) | outbound.c | Min between sends |
+| ⬜ | Query typing display | TBD | **UX #10**: Needs design work |
+| ⬜ | Typing preferences | cfgfiles.c | `hex_irc_typing_*` |
+
+---
+
+### Phase 7: Message Redaction
+
+**🔗 Requires:** message-tags (msgid)
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | `have_redact` capability | hexchat.h, inbound.c | CAP negotiation |
+| ⬜ | REDACT command handler | proto-irc.c | Parse redaction |
+| ⬜ | Find message by msgid | text.c | Lookup in buffer |
+| ⬜ | Mark message redacted | text.c | Update display state |
+| ⬜ | Redacted visual | fe-gtk/xtext.c | "[Message deleted]" |
+| ⬜ | `/REDACT` command | outbound.c | Send redaction |
+| ⬜ | Context menu "Delete" | fe-gtk/menu.c | For own messages |
+| ⬜ | Op context menu | fe-gtk/menu.c | Delete others' messages |
+| ⬜ | Redaction preferences | cfgfiles.c | `hex_irc_redact_*` |
+
+---
+
+### Phase 8: Reply + React
+
+**🔗 Requires:** TAGMSG, message-tags (msgid)
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | Parse `+draft/reply` tag | proto-irc.c | From messages |
+| ⬜ | Reply visual | fe-gtk/xtext.c | **UX #11**: Quote above |
+| ⬜ | Click quote to scroll | fe-gtk/xtext.c | Jump to original |
+| ⬜ | Reply context menu | fe-gtk/menu.c | "Reply" option |
+| ⬜ | Reply input indicator | fe-gtk/inputgui.c | "Replying to..." |
+| ⬜ | Send with reply tag | outbound.c | Include `+draft/reply` |
+| ⬜ | Parse `+draft/react` tag | proto-irc.c | From TAGMSG |
+| ⬜ | Reaction aggregation | text.c | Count per emoji per message |
+| ⬜ | Reaction display | fe-gtk/xtext.c | **UX #12**: Below message |
+| ⬜ | Emoji picker | fe-gtk/emojipicker.c | New widget |
+| ⬜ | Send reaction | outbound.c | TAGMSG with react+reply |
+
+---
+
+### Phase 9: Channel-Context (Whisper)
+
+**🔗 Requires:** message-tags
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | Parse `+draft/channel-context` | proto-irc.c | From PRIVMSG |
+| ⬜ | Display context indicator | inbound.c | **UX #13**: "[via #channel]" |
+| ⬜ | Context menu "Whisper" | fe-gtk/menu.c | Send PM with context |
+| ⬜ | `/WHISPER` command | outbound.c | Alternative to /MSG |
+
+---
+
+### Phase 10: Metadata + Pre-Away
+
+**🔗 Independent but synergistic**
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | `have_metadata` capability | hexchat.h, inbound.c | CAP negotiation |
+| ⬜ | METADATA command handlers | proto-irc.c | GET/SET/LIST/SUB/UNSUB |
+| ⬜ | `/METADATA` command | outbound.c | User interface |
+| ⬜ | Virtual key queries | outbound.c | `$presence`, `$idle`, etc. |
+| ⬜ | Metadata caching | servlist.c | Per-target storage |
+| ⬜ | `have_pre_away` capability | hexchat.h, inbound.c | CAP negotiation |
+| ⬜ | `/AWAY *` support | outbound.c | Hidden connection |
+| ⬜ | Pre-away preference | cfgfiles.c | Send AWAY * on connect |
+
+---
+
+### Phase 11: Account Registration
+
+**🔗 Independent**
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | `have_account_registration` | hexchat.h, inbound.c | CAP negotiation |
+| ⬜ | REGISTER response handler | proto-irc.c | SUCCESS/VERIFY/FAIL |
+| ⬜ | `/REGISTER` command | outbound.c | **UX #15**: All args required |
+| ⬜ | `/VERIFY` command | outbound.c | Verification code |
+| ⬜ | Network Manager GUI | fe-gtk/servlistgui.c | Registration form |
+
+---
+
+### Phase 13: SASL Enhancements
+
+**🔗 Independent, builds on existing SASL**
+
+#### 13.1 OAUTHBEARER Token Refresh (Section 6.4)
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ✅ | Token storage | secure-storage.c | `secure_storage_store_oauth_tokens()` exists |
+| ⬜ | Complete `oauth_refresh_token()` | oauth.c | Currently stub, needs HTTP POST |
+| ⬜ | Token expiry timer | hexchat.h, server.c | Schedule refresh before expiry |
+| ⬜ | `oauth_refresh_timer` in server | hexchat.h | Timer ID storage |
+| ⬜ | Cancel timer on disconnect | server.c | Cleanup |
+| ⬜ | SASL re-authentication | inbound.c | `sasl_reauthenticate()` function |
+| ⬜ | Handle 903 (success) | inbound.c | Update tokens, reschedule timer |
+| ⬜ | Handle 907 (not supported) | inbound.c | Store for next reconnect |
+| ⬜ | Token refresh notification | textevents.in | XP_TE_OAUTHREFRESH |
+| ⬜ | Token failure notification | textevents.in | XP_TE_OAUTHFAIL |
+| ⬜ | `/OAUTH STATUS` command | outbound.c | Check token state |
+| ⬜ | `/OAUTH REAUTH` command | outbound.c | Force re-authentication |
+
+#### 13.2 ECDSA-NIST256P-CHALLENGE (Section 6.5)
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | `MECH_ECDSA_CHALLENGE` enum | hexchat.h | New SASL mechanism |
+| ⬜ | `LOGIN_SASL_ECDSA` login type | hexchat.h | New login method |
+| ⬜ | ECDSA key generation | secure-storage.c | P-256 via OpenSSL |
+| ⬜ | Key storage (secure) | secure-storage.c | Private key storage |
+| ⬜ | Public key export | secure-storage.c | For registration with services |
+| ⬜ | Challenge-response flow | inbound.c, proto-irc.c | Sign server challenge |
+| ⬜ | ECDSA signature | proto-irc.c | `ECDSA_sign()` with SHA-256 |
+| ⬜ | Network config: key path | servlist.h, servlist.c | ECDSA key file selector |
+| ⬜ | Key generation UI | fe-gtk/servlistgui.c | Generate button |
+| ⬜ | Public key display | fe-gtk/servlistgui.c | Copy for services registration |
+
+#### 13.3 X3 Session Tokens (Section 6.6)
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ⬜ | Detect token in AuthServ NOTICE | inbound.c | "session cookie is:" pattern |
+| ⬜ | Token extraction | inbound.c | Parse base64 token |
+| ⬜ | User prompt dialog | fe-gtk/dialog.c | "Use token for future logins?" |
+| ⬜ | Store session token | secure-storage.c | Per-network storage |
+| ⬜ | Use token in SASL PLAIN | server.c | Token replaces password |
+| ⬜ | Token invalidation handling | inbound.c | Fall back to password |
+| ⬜ | Token refresh on AUTH | inbound.c | Watch for new token |
+| ⬜ | Network indicator | fe-gtk/servlistgui.c | Show if token stored |
+| ⬜ | Clear token option | fe-gtk/servlistgui.c | Manual removal |
+| ⬜ | Preference: auto-store | cfgfiles.c | `hex_irc_session_token_auto` |
+
+---
+
+### Phase 12: Network Icon
+
+**🔗 Independent, lower priority**
+
+| Status | Task | Files | Notes |
+|--------|------|-------|-------|
+| ✅ | `network_icon_url` storage | hexchat.h | Field exists |
+| ⬜ | Icon URL validation | modes.c | HTTPS preferred |
+| ⬜ | Async icon fetch | network.c | Download in background |
+| ⬜ | Icon caching | cfgfiles.c | `~/.config/hexchat/icons/` |
+| ⬜ | Channel tree icon | fe-gtk/chanview.c | **UX #3**: Replace pix_tree_server |
+| ⬜ | Network list icon | fe-gtk/servlistgui.c | Show in server list |
+
+---
+
+## Implementation Priority Order
+
+Based on dependencies and UX impact:
+
+1. **Phase 1** - Foundation is complete ✅
+2. **Phase 2** - Chathistory (high impact, uses foundation)
+3. **Phase 0** - Text events (quick wins, no dependencies)
+4. **Phase 3** - Echo-message (improves reliability feel)
+5. **Phase 4** - Read marker (synergizes with chathistory)
+6. **Phase 6** - Typing indicators (modern chat feel)
+7. **Phase 5** - Multiline (code paste improvement)
+8. **Phase 7** - Redaction (message management)
+9. **Phase 8** - Reply/React (lower priority)
+10. **Phase 9-12** - Remaining features

@@ -156,7 +156,7 @@ scrollback_shrink (session *sess)
 }
 
 static void
-scrollback_save (session *sess, char *text, time_t stamp)
+scrollback_save (session *sess, char *text, time_t stamp, const char *msgid)
 {
 	GOutputStream *ostream;
 	char *buf;
@@ -197,10 +197,25 @@ scrollback_save (session *sess, char *text, time_t stamp)
 
 	if (!stamp)
 		stamp = time(0);
-	if (sizeof (stamp) == 4)	/* gcc will optimize one of these out */
-		buf = g_strdup_printf ("T %d ", (int) stamp);
+
+	/* Format: T <timestamp> [M:<msgid>] <text>
+	 * The msgid is included when available for chathistory coordination.
+	 * Format is backward compatible - old readers will see M:xxx as part of text.
+	 */
+	if (msgid && *msgid)
+	{
+		if (sizeof (stamp) == 4)
+			buf = g_strdup_printf ("T %d M:%s ", (int) stamp, msgid);
+		else
+			buf = g_strdup_printf ("T %" G_GINT64_FORMAT " M:%s ", (gint64)stamp, msgid);
+	}
 	else
-		buf = g_strdup_printf ("T %" G_GINT64_FORMAT " ", (gint64)stamp);
+	{
+		if (sizeof (stamp) == 4)
+			buf = g_strdup_printf ("T %d ", (int) stamp);
+		else
+			buf = g_strdup_printf ("T %" G_GINT64_FORMAT " ", (gint64)stamp);
+	}
 
 	g_output_stream_write (ostream, buf, strlen (buf), NULL, NULL);
 	g_output_stream_write (ostream, text, strlen (text), NULL, NULL);
@@ -225,6 +240,8 @@ scrollback_load (session *sess)
 	gchar *buf, *text;
 	gint lines = 0;
 	time_t stamp = 0;
+	char *oldest_msgid = NULL;
+	char *newest_msgid = NULL;
 
 	if (sess->text_scrollback == SET_DEFAULT)
 	{
@@ -269,13 +286,15 @@ scrollback_load (session *sess)
 		if (!err && buf)
 		{
 			/*
-			 * Some scrollback lines have three blanks after the timestamp and a newline
-			 * Some have only one blank and a newline
-			 * Some don't even have a timestamp
-			 * Some don't have any text at all
+			 * Scrollback format:
+			 *   T <timestamp> M:<msgid> <text>   (new format with msgid)
+			 *   T <timestamp> <text>             (old format without msgid)
+			 *   <text>                           (legacy format without timestamp)
 			 */
 			if (buf[0] == 'T' && buf[1] == ' ')
 			{
+				char *msgid = NULL;
+
 				if (sizeof (time_t) == 4)
 					stamp = strtoul (buf + 2, NULL, 10);
 				else
@@ -284,22 +303,52 @@ scrollback_load (session *sess)
 				if (G_UNLIKELY(stamp == 0))
 				{
 					g_warning ("Invalid timestamp in scrollback file");
+					g_free (buf);
 					continue;
 				}
 
 				text = strchr (buf + 3, ' ');
 				if (text && text[1])
 				{
-					if (prefs.hex_text_stripcolor_replay)
+					text++; /* Skip the space */
+
+					/* Check for msgid: M:<msgid> */
+					if (text[0] == 'M' && text[1] == ':')
 					{
-						text = strip_color (text + 1, -1, STRIP_COLOR);
+						char *msgid_end = strchr (text + 2, ' ');
+						if (msgid_end)
+						{
+							msgid = g_strndup (text + 2, msgid_end - (text + 2));
+							text = msgid_end + 1; /* Move past msgid to actual text */
+						}
 					}
 
-					fe_print_text (sess, text, stamp, TRUE);
-
-					if (prefs.hex_text_stripcolor_replay)
+					/* Track oldest and newest msgid */
+					if (msgid)
 					{
-						g_free (text);
+						if (!oldest_msgid)
+							oldest_msgid = g_strdup (msgid);
+						g_free (newest_msgid);
+						newest_msgid = g_strdup (msgid);
+						g_free (msgid);
+					}
+
+					if (*text)
+					{
+						if (prefs.hex_text_stripcolor_replay)
+						{
+							char *stripped = strip_color (text, -1, STRIP_COLOR);
+							fe_print_text (sess, stripped, stamp, TRUE);
+							g_free (stripped);
+						}
+						else
+						{
+							fe_print_text (sess, text, stamp, TRUE);
+						}
+					}
+					else
+					{
+						fe_print_text (sess, "  ", stamp, TRUE);
 					}
 				}
 				else
@@ -344,11 +393,21 @@ scrollback_load (session *sess)
 
 	if (lines)
 	{
+		/* Save tracking info for chathistory coordination */
+		sess->scrollback_newest_time = stamp;
+		sess->scrollback_oldest_msgid = oldest_msgid;
+		sess->scrollback_newest_msgid = newest_msgid;
+
 		text = ctime (&stamp);
 		buf = g_strdup_printf ("\n*\t%s %s\n", _("Loaded log from"), text);
 		fe_print_text (sess, buf, 0, TRUE);
 		g_free (buf);
 		/*EMIT_SIGNAL (XP_TE_GENMSG, sess, "*", buf, NULL, NULL, NULL, 0);*/
+	}
+	else
+	{
+		g_free (oldest_msgid);
+		g_free (newest_msgid);
 	}
 }
 
@@ -855,7 +914,7 @@ PrintTextTimeStamp (session *sess, char *text, time_t timestamp)
 	}
 
 	log_write (sess, text, timestamp);
-	scrollback_save (sess, text, timestamp);
+	scrollback_save (sess, text, timestamp, sess->current_msgid);
 	fe_print_text (sess, text, timestamp, FALSE);
 	g_free (text);
 }

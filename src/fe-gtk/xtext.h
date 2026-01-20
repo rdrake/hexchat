@@ -254,6 +254,12 @@ struct _GtkXText
 	int last_click_n_press;			/* number of clicks (1=single, 2=double, 3=triple) */
 	int last_click_x;				/* click x position for GTK4 popover menus */
 	int last_click_y;				/* click y position for GTK4 popover menus */
+
+	/* Scroll-to-load (chathistory) support */
+	guint scroll_top_debounce_tag;	/* debounce timeout for scroll-to-top */
+	int scroll_top_backoff_ms;		/* current backoff delay (exponential) */
+	void (*scroll_to_top_cb) (GtkXText *xtext, gpointer userdata);
+	gpointer scroll_to_top_userdata;
 };
 
 struct _GtkXTextClass
@@ -296,6 +302,8 @@ void gtk_xtext_set_thin_separator (GtkXText *xtext, gboolean thin_separator);
 void gtk_xtext_set_time_stamp (xtext_buffer *buf, gboolean timestamp);
 void gtk_xtext_set_urlcheck_function (GtkXText *xtext, int (*urlcheck_function) (GtkWidget *, char *));
 void gtk_xtext_set_wordwrap (GtkXText *xtext, gboolean word_wrap);
+void gtk_xtext_set_scroll_to_top_callback (GtkXText *xtext, void (*callback) (GtkXText *, gpointer), gpointer userdata);
+void gtk_xtext_reset_scroll_top_backoff (GtkXText *xtext);
 
 xtext_buffer *gtk_xtext_buffer_new (GtkXText *xtext);
 void gtk_xtext_buffer_free (xtext_buffer *buf);

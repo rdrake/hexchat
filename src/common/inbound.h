@@ -111,7 +111,7 @@ void inbound_batch_end (server *serv, const char *batch_id,
                         const message_tags_data *tags_data);
 gboolean inbound_batch_is_active (server *serv, const message_tags_data *tags_data);
 gboolean inbound_batch_add_message (server *serv, const char *prefix, const char *command,
-                                    char *word[], int word_count,
+                                    char *word[], char *word_eol[], int word_count,
                                     const message_tags_data *tags_data);
 
 /* IRCv3 TAGMSG support */

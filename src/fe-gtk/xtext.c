@@ -459,6 +459,10 @@ gtk_xtext_init (GtkXText * xtext)
 	xtext->urlcheck_function = NULL;
 	xtext->color_paste = FALSE;
 	xtext->skip_border_fills = FALSE;
+	xtext->scroll_top_debounce_tag = 0;
+	xtext->scroll_top_backoff_ms = 500; /* Initial debounce: 500ms */
+	xtext->scroll_to_top_cb = NULL;
+	xtext->scroll_to_top_userdata = NULL;
 	xtext->skip_stamp = FALSE;
 	xtext->render_hilights_only = FALSE;
 	xtext->un_hilight = FALSE;
@@ -547,6 +551,26 @@ gtk_xtext_adjustment_timeout (GtkXText * xtext)
 	return 0;
 }
 
+/* Debounce timeout callback for scroll-to-top */
+static gboolean
+gtk_xtext_scroll_top_timeout (gpointer data)
+{
+	GtkXText *xtext = GTK_XTEXT (data);
+
+	xtext->scroll_top_debounce_tag = 0;
+
+	/* Fire the callback if set */
+	if (xtext->scroll_to_top_cb)
+	{
+		xtext->scroll_to_top_cb (xtext, xtext->scroll_to_top_userdata);
+
+		/* Exponential backoff: double the delay for next time, max 8 seconds */
+		xtext->scroll_top_backoff_ms = MIN (xtext->scroll_top_backoff_ms * 2, 8000);
+	}
+
+	return G_SOURCE_REMOVE;
+}
+
 static void
 gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 {
@@ -565,6 +589,25 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			xtext->buffer->scrollbar_down = TRUE;
 		else
 			xtext->buffer->scrollbar_down = FALSE;
+
+		/* Detect scroll-to-top for chathistory loading */
+		if (value == 0 && xtext->scroll_to_top_cb && upper > page_size)
+		{
+			/* Cancel existing debounce timer and start a new one */
+			if (xtext->scroll_top_debounce_tag)
+				g_source_remove (xtext->scroll_top_debounce_tag);
+
+			xtext->scroll_top_debounce_tag = g_timeout_add (
+				xtext->scroll_top_backoff_ms,
+				gtk_xtext_scroll_top_timeout,
+				xtext);
+		}
+		else if (value > 0 && xtext->scroll_top_debounce_tag)
+		{
+			/* User scrolled away from top - cancel pending request */
+			g_source_remove (xtext->scroll_top_debounce_tag);
+			xtext->scroll_top_debounce_tag = 0;
+		}
 
 		if (value + 1 == xtext->buffer->old_value ||
 			 value - 1 == xtext->buffer->old_value)	/* clicked an arrow? */
@@ -627,6 +670,12 @@ gtk_xtext_dispose (GObject * object)
 	{
 		g_source_remove (xtext->resize_tag);
 		xtext->resize_tag = 0;
+	}
+
+	if (xtext->scroll_top_debounce_tag)
+	{
+		g_source_remove (xtext->scroll_top_debounce_tag);
+		xtext->scroll_top_debounce_tag = 0;
 	}
 
 	if (xtext->io_tag)
@@ -4979,6 +5028,22 @@ void
 gtk_xtext_set_wordwrap (GtkXText *xtext, gboolean wordwrap)
 {
 	xtext->wordwrap = wordwrap;
+}
+
+void
+gtk_xtext_set_scroll_to_top_callback (GtkXText *xtext,
+                                      void (*callback) (GtkXText *, gpointer),
+                                      gpointer userdata)
+{
+	xtext->scroll_to_top_cb = callback;
+	xtext->scroll_to_top_userdata = userdata;
+}
+
+void
+gtk_xtext_reset_scroll_top_backoff (GtkXText *xtext)
+{
+	/* Reset backoff to initial value (called when new content arrives) */
+	xtext->scroll_top_backoff_ms = 500;
 }
 
 void

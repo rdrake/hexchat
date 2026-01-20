@@ -194,6 +194,8 @@ struct hexchatprefs
 	unsigned int hex_irc_who_join;
 	unsigned int hex_irc_whois_front;
 	unsigned int hex_irc_cap_server_time;
+	unsigned int hex_irc_chathistory_auto;  /* auto-fetch history on join */
+	unsigned int hex_irc_chathistory_scroll; /* load more history on scroll-to-top */
 	unsigned int hex_net_auto_reconnect;
 	unsigned int hex_net_auto_reconnectonfail;
 	unsigned int hex_net_proxy_auth;
@@ -276,6 +278,7 @@ struct hexchatprefs
 	int hex_gui_win_width;
 	int hex_identd_port;
 	int hex_irc_ban_type;
+	int hex_irc_chathistory_lines;  /* lines to fetch per request */
 	int hex_irc_join_delay;
 	int hex_irc_notice_pos;
 	int hex_net_ping_timeout;
@@ -432,6 +435,8 @@ typedef struct session
 	int done_away_check:1;	/* done checking for away status changes */
 	int history_loading:1;	/* chathistory request in progress */
 	int history_exhausted:1; /* server has no more history for this target */
+	int join_deferred:1;	/* waiting for chathistory before showing join banner */
+	guint deferred_join_timeout;	/* timeout tag for deferred join fallback */
 	tab_state_flags tab_state;
 	tab_state_flags last_tab_state; /* before event is handled */
 	gtk_xtext_search_flags lastlog_flags;
@@ -439,6 +444,14 @@ typedef struct session
 	char *oldest_msgid;		/* oldest message in buffer (for BEFORE requests) */
 	char *newest_msgid;		/* newest message in buffer (for AFTER requests) */
 	char *last_read_msgid;	/* last read message ID (for read-marker sync) */
+	time_t scrollback_newest_time;	/* newest timestamp from loaded scrollback */
+	char *scrollback_oldest_msgid;	/* oldest msgid from loaded scrollback (for BEFORE) */
+	char *scrollback_newest_msgid;	/* newest msgid from loaded scrollback (for AFTER) */
+	const char *current_msgid;	/* temporary: msgid of message being processed (not owned) */
+	/* Deferred join info (for chathistory display before join banner) */
+	char *deferred_join_nick;	/* nick for deferred XP_TE_UJOIN */
+	char *deferred_join_ip;		/* ip/host for deferred XP_TE_UJOIN */
+	time_t deferred_join_time;	/* timestamp for deferred XP_TE_UJOIN */
 } session;
 
 /* SASL Mechanisms */

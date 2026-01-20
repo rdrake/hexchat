@@ -1434,3 +1434,12 @@ fe_get_default_font (void)
 #endif
 		return NULL;
 }
+
+void
+fe_reset_scroll_top_backoff (session *sess)
+{
+	if (sess && sess->gui && sess->gui->xtext)
+	{
+		gtk_xtext_reset_scroll_top_backoff (GTK_XTEXT (sess->gui->xtext));
+	}
+}

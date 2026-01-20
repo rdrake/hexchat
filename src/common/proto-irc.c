@@ -1171,7 +1171,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 				char *realname = word_eol[5];
 
 				/* Check if this message belongs to a batch (e.g., chathistory event-playback) */
-				if (inbound_batch_add_message (serv, word[1], "JOIN", word, PDIWORDS, tags_data))
+				if (inbound_batch_add_message (serv, word[1], "JOIN", word, word_eol, PDIWORDS, tags_data))
 					return; /* Message collected for batch processing */
 
 				if (account && strcmp (account, "*") == 0)
@@ -1194,7 +1194,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 				char *reason = word_eol[5];
 
 				/* Check if this message belongs to a batch (e.g., chathistory event-playback) */
-				if (inbound_batch_add_message (serv, word[1], "KICK", word, PDIWORDS, tags_data))
+				if (inbound_batch_add_message (serv, word[1], "KICK", word, word_eol, PDIWORDS, tags_data))
 					return; /* Message collected for batch processing */
 
 				if (*kicked)
@@ -1226,7 +1226,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 
 		case WORDL('N','I','C','K'):
 			/* Check if this message belongs to a batch (e.g., chathistory event-playback) */
-			if (inbound_batch_add_message (serv, word[1], "NICK", word, PDIWORDS, tags_data))
+			if (inbound_batch_add_message (serv, word[1], "NICK", word, word_eol, PDIWORDS, tags_data))
 				return; /* Message collected for batch processing */
 
 			inbound_newnick (serv, nick,
@@ -1240,7 +1240,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 				char *reason = word_eol[4];
 
 				/* Check if this message belongs to a batch (e.g., chathistory event-playback) */
-				if (inbound_batch_add_message (serv, word[1], "PART", word, PDIWORDS, tags_data))
+				if (inbound_batch_add_message (serv, word[1], "PART", word, word_eol, PDIWORDS, tags_data))
 					return; /* Message collected for batch processing */
 
 				if (*chan == ':')
@@ -1266,7 +1266,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 
 		case WORDL('Q','U','I','T'):
 			/* Check if this message belongs to a batch (e.g., chathistory event-playback) */
-			if (inbound_batch_add_message (serv, word[1], "QUIT", word, PDIWORDS, tags_data))
+			if (inbound_batch_add_message (serv, word[1], "QUIT", word, word_eol, PDIWORDS, tags_data))
 				return; /* Message collected for batch processing */
 
 			inbound_quit (serv, nick, ip,
@@ -1363,7 +1363,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 		case WORDL('N','O','T','I'):
 			{
 				/* Check if this message belongs to a batch (e.g., chathistory) */
-				if (inbound_batch_add_message (serv, word[1], "NOTICE", word, PDIWORDS, tags_data))
+				if (inbound_batch_add_message (serv, word[1], "NOTICE", word, word_eol, PDIWORDS, tags_data))
 					return; /* Message collected for batch processing */
 
 				text = word_eol[4];
@@ -1405,7 +1405,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 				int len;
 
 				/* Check if this message belongs to a batch (e.g., chathistory) */
-				if (inbound_batch_add_message (serv, word[1], "PRIVMSG", word, PDIWORDS, tags_data))
+				if (inbound_batch_add_message (serv, word[1], "PRIVMSG", word, word_eol, PDIWORDS, tags_data))
 					return; /* Message collected for batch processing */
 
 				if (*to)
@@ -1476,7 +1476,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 
 		case WORDL('T','O','P','I'):
 			/* Check if this message belongs to a batch (e.g., chathistory event-playback) */
-			if (inbound_batch_add_message (serv, word[1], "TOPIC", word, PDIWORDS, tags_data))
+			if (inbound_batch_add_message (serv, word[1], "TOPIC", word, word_eol, PDIWORDS, tags_data))
 				return; /* Message collected for batch processing */
 
 			inbound_topicnew (serv, nick, word[3],

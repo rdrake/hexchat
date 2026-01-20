@@ -397,6 +397,9 @@ inbound_action (session *sess, char *chan, char *from, char *ip, char *text,
 
 	inbound_make_idtext (serv, idtext, sizeof (idtext), id);
 
+	/* Set current msgid for scrollback_save to capture */
+	sess->current_msgid = tags_data->msgid;
+
 	if (!fromme && !privaction)
 	{
 		if (is_hilight (from, text, sess, serv))
@@ -422,8 +425,8 @@ inbound_action (session *sess, char *chan, char *from, char *ip, char *text,
 }
 
 void
-inbound_chanmsg (server *serv, session *sess, char *chan, char *from, 
-					  char *text, char fromme, int id, 
+inbound_chanmsg (server *serv, session *sess, char *chan, char *from,
+					  char *text, char fromme, int id,
 					  const message_tags_data *tags_data)
 {
 	struct User *user;
@@ -445,6 +448,9 @@ inbound_chanmsg (server *serv, session *sess, char *chan, char *from,
 		if (!sess)
 			return;
 	}
+
+	/* Set current msgid for scrollback_save to capture */
+	sess->current_msgid = tags_data->msgid;
 
 	if (sess != current_tab)
 	{
@@ -580,6 +586,7 @@ inbound_ujoin (server *serv, char *chan, char *nick, char *ip,
 {
 	session *sess;
 	int found_unused = FALSE;
+	int should_defer_join = FALSE;
 
 	/* already joined? probably a bnc */
 	sess = find_channel (serv, chan);
@@ -623,8 +630,52 @@ inbound_ujoin (server *serv, char *chan, char *nick, char *ip,
 	/* sends a MODE */
 	serv->p_join_info (sess->server, chan);
 
-	EMIT_SIGNAL_TIMESTAMP (XP_TE_UJOIN, sess, nick, chan, ip, NULL, 0,
-								  tags_data->timestamp);
+	/* Check if we should fetch chathistory before showing join banner.
+	 * Per UX decision #2, chathistory should appear BEFORE "You are now talking on"
+	 * on initial joins. */
+	if (prefs.hex_irc_chathistory_auto && serv->have_chathistory &&
+	    !sess->history_loading)
+	{
+		/* Defer join banner while we fetch history */
+		should_defer_join = TRUE;
+
+		/* Store deferred join info */
+		g_free (sess->deferred_join_nick);
+		g_free (sess->deferred_join_ip);
+		sess->deferred_join_nick = g_strdup (nick);
+		sess->deferred_join_ip = g_strdup (ip ? ip : "");
+		sess->deferred_join_time = tags_data->timestamp;
+		sess->join_deferred = TRUE;
+
+		/* Request chathistory - prefer msgid > timestamp > LATEST
+		 * msgid is more reliable than timestamp for avoiding duplicates */
+		if (sess->scrollback_newest_msgid && sess->scrollback_newest_msgid[0])
+		{
+			/* Best case: msgid-based request */
+			chathistory_request_after_msgid (sess, sess->scrollback_newest_msgid,
+			                                 prefs.hex_irc_chathistory_lines);
+		}
+		else if (sess->scrollback_newest_time > 0)
+		{
+			/* Fallback: timestamp-based request */
+			chathistory_request_after_timestamp (sess, sess->scrollback_newest_time,
+			                                     prefs.hex_irc_chathistory_lines);
+		}
+		else
+		{
+			/* No scrollback - fetch most recent messages */
+			chathistory_request_latest (sess, prefs.hex_irc_chathistory_lines);
+		}
+
+		/* Schedule fallback timeout in case chathistory never arrives */
+		chathistory_schedule_deferred_join_timeout (sess);
+	}
+
+	if (!should_defer_join)
+	{
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_UJOIN, sess, nick, chan, ip, NULL, 0,
+									  tags_data->timestamp);
+	}
 
 	if (prefs.hex_irc_who_join)
 	{
@@ -1027,6 +1078,9 @@ inbound_notice (server *serv, char *to, char *nick, char *msg, char *ip, int id,
 		if (msg[len - 1] == '\001')
 			msg[len - 1] = '\000';
 	}
+
+	/* Set current msgid for scrollback_save to capture */
+	sess->current_msgid = tags_data->msgid;
 
 	if (server_notice)
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVNOTICE, sess, msg, nick, NULL, NULL, 0,
@@ -1916,7 +1970,7 @@ inbound_batch_is_active (server *serv, const message_tags_data *tags_data)
  */
 gboolean
 inbound_batch_add_message (server *serv, const char *prefix, const char *command,
-                           char *word[], int word_count,
+                           char *word[], char *word_eol[], int word_count,
                            const message_tags_data *tags_data)
 {
 	batch_info *batch;
@@ -1952,10 +2006,17 @@ inbound_batch_add_message (server *serv, const char *prefix, const char *command
 		}
 	}
 
-	/* Count parameters (start from word[3] which is typically the first param) */
+	/* Count parameters (start from word[3] which is typically the first param).
+	 * In IRC, a parameter starting with ':' is a trailing parameter that consumes
+	 * the rest of the line. Stop counting when we hit one.
+	 */
 	param_count = 0;
 	for (i = 3; i < word_count && word[i] && *word[i]; i++)
+	{
 		param_count++;
+		if (word[i][0] == ':')
+			break; /* Trailing parameter - everything after is part of this param */
+	}
 
 	if (param_count > 0)
 	{
@@ -1963,7 +2024,20 @@ inbound_batch_add_message (server *serv, const char *prefix, const char *command
 		msg->param_count = param_count;
 		for (i = 0; i < param_count; i++)
 		{
-			msg->params[i] = g_strdup (word[3 + i]);
+			/* If this word starts with ':', it's a trailing parameter.
+			 * Use word_eol to get the full text including spaces.
+			 * Example: PRIVMSG #chan :hello world
+			 *   word[4] = ":hello", word_eol[4] = ":hello world"
+			 */
+			if (word[3 + i][0] == ':')
+			{
+				msg->params[i] = g_strdup (word_eol[3 + i]);
+				break; /* No more params after trailing */
+			}
+			else
+			{
+				msg->params[i] = g_strdup (word[3 + i]);
+			}
 		}
 	}
 

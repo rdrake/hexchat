@@ -682,6 +682,12 @@ session_free (session *killsess)
 	g_free (killsess->oldest_msgid);
 	g_free (killsess->newest_msgid);
 	g_free (killsess->last_read_msgid);
+	g_free (killsess->scrollback_oldest_msgid);
+	g_free (killsess->scrollback_newest_msgid);
+	g_free (killsess->deferred_join_nick);
+	g_free (killsess->deferred_join_ip);
+	if (killsess->deferred_join_timeout > 0)
+		g_source_remove (killsess->deferred_join_timeout);
 
 	fe_session_callback (killsess);
 
