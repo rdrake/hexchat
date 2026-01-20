@@ -1739,6 +1739,126 @@ inbound_batch_start (server *serv, const char *batch_id, const char *batch_type,
 	 */
 }
 
+/* Process a multiline batch: concatenate messages and display as single message */
+static void
+process_multiline_batch (server *serv, batch_info *batch)
+{
+	session *sess = NULL;
+	GSList *iter;
+	GString *combined_text;
+	char *nick = NULL;
+	char *host = NULL;
+	message_tags_data tags_data;
+	batch_message *first_msg = NULL;
+	const char *target = NULL;
+	gboolean first_line = TRUE;
+
+	if (!batch || !batch->messages)
+		return;
+
+	/* Get target from batch params (batch->params[0] should be the target) */
+	if (batch->param_count >= 1 && batch->params[0])
+		target = batch->params[0];
+
+	/* Find the session for this target */
+	if (target)
+	{
+		/* Try as channel first */
+		sess = find_channel (serv, (char *)target);
+		if (!sess)
+		{
+			/* Try as dialog */
+			sess = find_dialog (serv, (char *)target);
+		}
+	}
+
+	if (!sess)
+	{
+		/* Use server session as fallback */
+		sess = serv->server_session;
+	}
+
+	/* Build combined text from all messages */
+	combined_text = g_string_new (NULL);
+
+	for (iter = batch->messages; iter; iter = iter->next)
+	{
+		batch_message *msg = iter->data;
+
+		if (!msg || !msg->command)
+			continue;
+
+		/* Only process PRIVMSG for multiline */
+		if (g_ascii_strcasecmp (msg->command, "PRIVMSG") != 0)
+			continue;
+
+		/* Save first message for sender info and tags */
+		if (!first_msg)
+		{
+			first_msg = msg;
+
+			/* Extract nick from prefix */
+			if (msg->prefix)
+			{
+				char *bang = strchr (msg->prefix, '!');
+				if (bang)
+				{
+					nick = g_strndup (msg->prefix, bang - msg->prefix);
+					host = g_strdup (bang + 1);
+				}
+				else
+				{
+					nick = g_strdup (msg->prefix);
+				}
+			}
+		}
+
+		/* Get the message text (params[1]) */
+		if (msg->param_count >= 2 && msg->params[1])
+		{
+			char *text = msg->params[1];
+			if (text[0] == ':')
+				text++;
+
+			/* Add newline separator between lines */
+			if (!first_line)
+				g_string_append_c (combined_text, '\n');
+			first_line = FALSE;
+
+			g_string_append (combined_text, text);
+		}
+	}
+
+	/* Display combined message if we have content */
+	if (combined_text->len > 0 && nick)
+	{
+		/* Initialize tags data from first message */
+		memset (&tags_data, 0, sizeof (tags_data));
+		if (first_msg)
+		{
+			tags_data.timestamp = first_msg->timestamp;
+			if (first_msg->tags)
+				tags_data.all_tags = first_msg->tags;
+		}
+
+		/* Check if it's a channel or private message */
+		if (sess->type == SESS_CHANNEL)
+		{
+			inbound_chanmsg (serv, sess, sess->channel, nick, combined_text->str,
+			                 FALSE, 0, &tags_data);
+		}
+		else
+		{
+			inbound_privmsg (serv, nick, host ? host : "", combined_text->str,
+			                 0, &tags_data);
+		}
+	}
+
+	g_string_free (combined_text, TRUE);
+	g_free (nick);
+	g_free (host);
+}
+
 void
 inbound_batch_end (server *serv, const char *batch_id,
                    const message_tags_data *tags_data)
@@ -1764,8 +1884,13 @@ inbound_batch_end (server *serv, const char *batch_id,
 			/* Process chat history batch */
 			chathistory_process_batch (serv, batch);
 		}
+		else if (g_ascii_strcasecmp (batch->type, "draft/multiline") == 0 ||
+		         g_ascii_strcasecmp (batch->type, "multiline") == 0)
+		{
+			/* Process multiline batch - concatenate and display as single message */
+			process_multiline_batch (serv, batch);
+		}
 		/* TODO: Handle other batch types:
-		 * - "multiline": Concatenate messages and display as single unit
 		 * - "netjoin"/"netsplit": Collapse join/quit messages
 		 * - "labeled-response": Correlate response with pending command
 		 */
@@ -1982,6 +2107,8 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_labeled_response = enable;
 		else if (!strcmp (extension, "draft/chathistory"))
 			serv->have_chathistory = enable;
+		else if (!strcmp (extension, "draft/multiline"))
+			serv->have_multiline = enable;
 		else if (!strcmp (extension, "sasl"))
 		{
 			serv->have_sasl = enable;
@@ -2054,8 +2181,9 @@ static const char * const supported_caps[] = {
 	"echo-message",
 	"labeled-response",
 
-	/* IRCv3 chathistory */
+	/* IRCv3 chathistory and multiline */
 	"draft/chathistory",
+	"draft/multiline",
 
 	/* ZNC */
 	"znc.in/server-time-iso",

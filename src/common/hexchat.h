@@ -553,6 +553,8 @@ typedef struct server
 	char *bad_nick_prefixes;		/* for ircd that doesn't give the modes */
 	int modes_per_line;				/* 6 on undernet, 4 on efnet etc... */
 	int chathistory_limit;			/* max messages per CHATHISTORY request (from ISUPPORT) */
+	int multiline_max_bytes;		/* max bytes in multiline batch (from ISUPPORT) */
+	int multiline_max_lines;		/* max lines in multiline batch (from ISUPPORT) */
 
 	void *network;						/* points to entry in servlist.c or NULL! */
 
@@ -616,6 +618,7 @@ typedef struct server
 	unsigned int have_echo_message:1;	/* IRCv3 echo-message capability */
 	unsigned int have_labeled_response:1; /* IRCv3 labeled-response capability */
 	unsigned int have_chathistory:1;	/* IRCv3 draft/chathistory capability */
+	unsigned int have_multiline:1;		/* IRCv3 draft/multiline capability */
 	unsigned int have_except:1;	/* ban exemptions +e */
 	unsigned int have_invite:1;	/* invite exemptions +I */
 	unsigned int have_cert:1;	/* have loaded a cert */

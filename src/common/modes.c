@@ -945,6 +945,29 @@ inbound_005 (server * serv, char *word[], const message_tags_data *tags_data)
 			/* IRCv3 draft/chathistory ISUPPORT token
 			 * Format: CHATHISTORY=<limit> or CHATHISTORY=limit=N,retention=Xd */
 			chathistory_parse_isupport (serv, tokvalue);
+		} else if (g_strcmp0 (tokname, "MULTILINE") == 0)
+		{
+			/* IRCv3 draft/multiline ISUPPORT token
+			 * Format: MULTILINE=max-bytes=<n>,max-lines=<n> */
+			if (tokvalue && tokvalue[0])
+			{
+				char **tokens = g_strsplit (tokvalue, ",", 0);
+				int i;
+
+				for (i = 0; tokens[i]; i++)
+				{
+					if (g_str_has_prefix (tokens[i], "max-bytes="))
+					{
+						serv->multiline_max_bytes = atoi (tokens[i] + 10);
+					}
+					else if (g_str_has_prefix (tokens[i], "max-lines="))
+					{
+						serv->multiline_max_lines = atoi (tokens[i] + 10);
+					}
+				}
+
+				g_strfreev (tokens);
+			}
 		}
 
 		g_free (tokname);
