@@ -916,7 +916,9 @@ inbound_005 (server * serv, char *word[], const message_tags_data *tags_data)
 			}
 		} else if (g_strcmp0 (tokname, "UTF8ONLY") == 0)
 		{
+			/* Server requires UTF-8 encoding - force it and track the flag */
 			server_set_encoding (serv, "UTF-8");
+			serv->utf8only = TRUE;
 		} else if (g_strcmp0 (tokname, "NAMESX") == 0)
 		{
 			if (tokadding && !serv->have_namesx)
@@ -968,10 +970,6 @@ inbound_005 (server * serv, char *word[], const message_tags_data *tags_data)
 
 				g_strfreev (tokens);
 			}
-		} else if (g_strcmp0 (tokname, "UTF8ONLY") == 0)
-		{
-			/* Server requires UTF-8 encoding */
-			serv->utf8only = TRUE;
 		} else if (g_strcmp0 (tokname, "draft/ICON") == 0 ||
 		           g_strcmp0 (tokname, "ICON") == 0)
 		{

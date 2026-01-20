@@ -599,6 +599,15 @@ cmd_charset (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	if (!word[2 + offset][0])
 	{
 		PrintTextf (sess, "Current charset: %s\n", serv->encoding);
+		if (serv->utf8only)
+			PrintText (sess, "Note: Server requires UTF-8 (UTF8ONLY), encoding cannot be changed.\n");
+		return TRUE;
+	}
+
+	/* Server advertised UTF8ONLY - don't allow changing encoding */
+	if (serv->utf8only)
+	{
+		PrintText (sess, "Cannot change encoding: server requires UTF-8 (UTF8ONLY).\n");
 		return TRUE;
 	}
 
