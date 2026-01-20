@@ -39,6 +39,7 @@
 #include "util.h"
 #include "cfgfiles.h"
 #include "chanopt.h"
+#include "chathistory.h"
 #include "ignore.h"
 #include "hexchat-plugin.h"
 #include "inbound.h"
@@ -688,6 +689,7 @@ session_free (session *killsess)
 	g_free (killsess->deferred_join_ip);
 	if (killsess->deferred_join_timeout > 0)
 		g_source_remove (killsess->deferred_join_timeout);
+	chathistory_stop_background_fetch (killsess);
 
 	fe_session_callback (killsess);
 

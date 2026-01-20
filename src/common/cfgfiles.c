@@ -503,6 +503,9 @@ const struct prefs vars[] =
 	{"irc_chathistory_auto", P_OFFINT (hex_irc_chathistory_auto), TYPE_BOOL},
 	{"irc_chathistory_lines", P_OFFINT (hex_irc_chathistory_lines), TYPE_INT},
 	{"irc_chathistory_scroll", P_OFFINT (hex_irc_chathistory_scroll), TYPE_BOOL},
+	{"irc_chathistory_background", P_OFFINT (hex_irc_chathistory_background), TYPE_BOOL},
+	{"irc_chathistory_background_delay", P_OFFINT (hex_irc_chathistory_background_delay), TYPE_INT},
+	{"irc_chathistory_background_max_age", P_OFFINT (hex_irc_chathistory_background_max_age), TYPE_INT},
 	{"irc_conf_mode", P_OFFINT (hex_irc_conf_mode), TYPE_BOOL},
 	{"irc_extra_hilight", P_OFFSET (hex_irc_extra_hilight), TYPE_STR},
 	{"irc_hide_nickchange", P_OFFINT (hex_irc_hide_nickchange), TYPE_BOOL},
@@ -788,6 +791,9 @@ load_default_config(void)
 	prefs.hex_irc_chathistory_auto = 1;  /* auto-fetch history on join (default: enabled) */
 	prefs.hex_irc_chathistory_lines = 50; /* default number of history lines to request */
 	prefs.hex_irc_chathistory_scroll = 1; /* load more history on scroll-to-top (default: enabled) */
+	prefs.hex_irc_chathistory_background = 1; /* background fetch older history (default: enabled) */
+	prefs.hex_irc_chathistory_background_delay = 10; /* seconds between background fetches */
+	prefs.hex_irc_chathistory_background_max_age = 24; /* max hours to fetch in background (0 = unlimited) */
 	prefs.hex_irc_logging = 1;
 	prefs.hex_irc_who_join = 1; /* Can kick with inordinate amount of channels, required for some of our features though, TODO: add cap like away check? */
 	prefs.hex_irc_whois_front = 1;

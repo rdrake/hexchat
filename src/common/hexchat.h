@@ -196,6 +196,9 @@ struct hexchatprefs
 	unsigned int hex_irc_cap_server_time;
 	unsigned int hex_irc_chathistory_auto;  /* auto-fetch history on join */
 	unsigned int hex_irc_chathistory_scroll; /* load more history on scroll-to-top */
+	unsigned int hex_irc_chathistory_background; /* background fetch older history */
+	unsigned int hex_irc_chathistory_background_delay; /* seconds between background fetches */
+	unsigned int hex_irc_chathistory_background_max_age; /* max hours to fetch in background (0 = unlimited) */
 	unsigned int hex_net_auto_reconnect;
 	unsigned int hex_net_auto_reconnectonfail;
 	unsigned int hex_net_proxy_auth;
@@ -436,7 +439,9 @@ typedef struct session
 	int history_loading:1;	/* chathistory request in progress */
 	int history_exhausted:1; /* server has no more history for this target */
 	int join_deferred:1;	/* waiting for chathistory before showing join banner */
+	int background_history_active:1; /* background history fetch enabled for this session */
 	guint deferred_join_timeout;	/* timeout tag for deferred join fallback */
+	guint background_history_timer;	/* timer for next background history fetch */
 	tab_state_flags tab_state;
 	tab_state_flags last_tab_state; /* before event is handled */
 	gtk_xtext_search_flags lastlog_flags;

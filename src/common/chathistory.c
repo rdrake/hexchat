@@ -35,6 +35,9 @@
 #include "fe.h"
 #include "proto-irc.h"
 
+/* Forward declarations */
+static void schedule_background_fetch (session *sess);
+
 /* Get effective limit, respecting server and configured limits */
 static int
 get_effective_limit (server *serv, int requested)
@@ -539,6 +542,9 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	GSList *iter;
 	int msg_count = 0;
 	gboolean is_initial_join;
+	time_t oldest_timestamp = 0;
+	time_t max_age_cutoff = 0;
+	gboolean hit_age_limit = FALSE;
 
 	if (!batch || !batch->type)
 		return;
@@ -560,6 +566,12 @@ chathistory_process_batch (server *serv, batch_info *batch)
 
 	/* Check if this is an initial join with deferred banner */
 	is_initial_join = sess->join_deferred;
+
+	/* Calculate age cutoff for background fetching (0 = unlimited) */
+	if (prefs.hex_irc_chathistory_background_max_age > 0)
+	{
+		max_age_cutoff = time (NULL) - (prefs.hex_irc_chathistory_background_max_age * 3600);
+	}
 
 	/* Check if batch is empty - that means no more history */
 	if (!batch->messages)
@@ -590,6 +602,25 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		batch_message *msg = iter->data;
 		process_batch_message (serv, sess, msg);
 		msg_count++;
+
+		/* Track oldest timestamp for age limit check */
+		if (msg->timestamp > 0)
+		{
+			if (oldest_timestamp == 0 || msg->timestamp < oldest_timestamp)
+			{
+				oldest_timestamp = msg->timestamp;
+			}
+		}
+	}
+
+	/* Check if we hit the age limit (only for background fetching) */
+	if (sess->background_history_active && max_age_cutoff > 0 && oldest_timestamp > 0)
+	{
+		if (oldest_timestamp < max_age_cutoff)
+		{
+			hit_age_limit = TRUE;
+			sess->background_history_active = FALSE;
+		}
 	}
 
 	/* Reset scroll-to-top backoff since we successfully received history */
@@ -599,6 +630,9 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	if (is_initial_join)
 	{
 		emit_deferred_join (sess);
+
+		/* Start background fetching to populate scrollback with older history */
+		chathistory_start_background_fetch (sess);
 	}
 	else
 	{
@@ -606,6 +640,12 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		char buf[256];
 		g_snprintf (buf, sizeof (buf), "--- %d message(s) from history ---\n", msg_count);
 		PrintText (sess, buf);
+
+		/* If background fetching is active and we haven't hit limits, schedule next fetch */
+		if (sess->background_history_active && !sess->history_exhausted && !hit_age_limit)
+		{
+			schedule_background_fetch (sess);
+		}
 	}
 }
 
@@ -688,4 +728,102 @@ chathistory_can_request_more (session *sess)
 		return FALSE;
 
 	return TRUE;
+}
+
+/* Timer callback for background history fetching */
+static gboolean
+background_history_timer_cb (gpointer data)
+{
+	session *sess = (session *)data;
+
+	/* Clear the timer tag first */
+	sess->background_history_timer = 0;
+
+	/* Check if we should continue fetching */
+	if (!sess->background_history_active)
+		return G_SOURCE_REMOVE;
+
+	if (!chathistory_can_request_more (sess))
+	{
+		/* Can't request more - stop background fetching */
+		sess->background_history_active = FALSE;
+		return G_SOURCE_REMOVE;
+	}
+
+	/* Request older history */
+	if (sess->oldest_msgid && sess->oldest_msgid[0])
+	{
+		chathistory_request_before_msgid (sess, sess->oldest_msgid,
+		                                  prefs.hex_irc_chathistory_lines);
+	}
+	else
+	{
+		/* No oldest_msgid to reference - can't make BEFORE request */
+		sess->background_history_active = FALSE;
+	}
+
+	return G_SOURCE_REMOVE;
+}
+
+/* Schedule the next background history fetch */
+static void
+schedule_background_fetch (session *sess)
+{
+	int delay_secs;
+
+	if (!sess->background_history_active)
+		return;
+
+	if (sess->background_history_timer > 0)
+		return; /* Already scheduled */
+
+	delay_secs = prefs.hex_irc_chathistory_background_delay;
+	if (delay_secs < 5)
+		delay_secs = 5; /* Minimum 5 seconds between fetches */
+
+	sess->background_history_timer = g_timeout_add_seconds (delay_secs,
+	                                                        background_history_timer_cb,
+	                                                        sess);
+}
+
+void
+chathistory_start_background_fetch (session *sess)
+{
+	if (!sess || !sess->server)
+		return;
+
+	/* Check if background fetching is enabled */
+	if (!prefs.hex_irc_chathistory_background)
+		return;
+
+	/* Don't start if server doesn't support chathistory */
+	if (!sess->server->have_chathistory)
+		return;
+
+	/* Don't start if already exhausted */
+	if (sess->history_exhausted)
+		return;
+
+	/* Don't start if no oldest_msgid to reference */
+	if (!sess->oldest_msgid || !sess->oldest_msgid[0])
+		return;
+
+	/* Mark as active and schedule first fetch */
+	sess->background_history_active = TRUE;
+	schedule_background_fetch (sess);
+}
+
+void
+chathistory_stop_background_fetch (session *sess)
+{
+	if (!sess)
+		return;
+
+	sess->background_history_active = FALSE;
+
+	if (sess->background_history_timer > 0)
+	{
+		g_source_remove (sess->background_history_timer);
+		sess->background_history_timer = 0;
+	}
 }

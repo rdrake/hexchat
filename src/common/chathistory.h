@@ -176,4 +176,20 @@ gboolean chathistory_can_request_more (session *sess);
  */
 void chathistory_schedule_deferred_join_timeout (session *sess);
 
+/**
+ * Start background history fetching for a session.
+ * Gradually fetches older history to populate scrollback.
+ *
+ * @param sess Session to fetch background history for
+ */
+void chathistory_start_background_fetch (session *sess);
+
+/**
+ * Stop background history fetching for a session.
+ * Called when leaving a channel or disconnecting.
+ *
+ * @param sess Session to stop background fetching for
+ */
+void chathistory_stop_background_fetch (session *sess);
+
 #endif /* HEXCHAT_CHATHISTORY_H */
