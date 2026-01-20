@@ -430,6 +430,7 @@ typedef struct session
 	void (*scrollback_replay_marklast) (struct session *sess);
 	char *oldest_msgid;		/* oldest message in buffer (for BEFORE requests) */
 	char *newest_msgid;		/* newest message in buffer (for AFTER requests) */
+	char *last_read_msgid;	/* last read message ID (for read-marker sync) */
 } session;
 
 /* SASL Mechanisms */
@@ -619,6 +620,9 @@ typedef struct server
 	unsigned int have_labeled_response:1; /* IRCv3 labeled-response capability */
 	unsigned int have_chathistory:1;	/* IRCv3 draft/chathistory capability */
 	unsigned int have_multiline:1;		/* IRCv3 draft/multiline capability */
+	unsigned int have_event_playback:1;	/* IRCv3 draft/event-playback capability */
+	unsigned int have_read_marker:1;	/* IRCv3 draft/read-marker capability */
+	unsigned int have_no_implicit_names:1; /* IRCv3 draft/no-implicit-names capability */
 	unsigned int have_except:1;	/* ban exemptions +e */
 	unsigned int have_invite:1;	/* invite exemptions +I */
 	unsigned int have_cert:1;	/* have loaded a cert */

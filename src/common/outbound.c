@@ -2327,6 +2327,68 @@ cmd_history (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 }
 
 static int
+cmd_markread (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	const char *target = NULL;
+	const char *msgid = NULL;
+
+	/* Check if read-marker is available */
+	if (!serv->have_read_marker)
+	{
+		PrintText (sess, "Read markers are not available on this server.\n");
+		return TRUE;
+	}
+
+	if (!serv->connected)
+	{
+		notc_msg (sess);
+		return TRUE;
+	}
+
+	/* Parse arguments: /MARKREAD [target] [msgid] */
+	if (word[2][0])
+	{
+		target = word[2];
+		if (word[3][0])
+			msgid = word[3];
+	}
+	else
+	{
+		/* No arguments - use current session and newest msgid */
+		if (sess->type == SESS_CHANNEL || sess->type == SESS_DIALOG)
+		{
+			target = sess->channel;
+			msgid = sess->newest_msgid;
+		}
+		else
+		{
+			PrintText (sess, "Use /MARKREAD in a channel or query window, or specify a target.\n");
+			return TRUE;
+		}
+	}
+
+	if (!target || !*target)
+	{
+		PrintText (sess, "No target specified.\n");
+		return TRUE;
+	}
+
+	/* Send MARKREAD command */
+	if (msgid && *msgid)
+	{
+		tcp_sendf (serv, "MARKREAD %s timestamp=%s\r\n", target, msgid);
+	}
+	else
+	{
+		/* Request current read marker position */
+		tcp_sendf (serv, "MARKREAD %s\r\n", target);
+	}
+
+	return TRUE;
+}
+
+static int
 cmd_help (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	int i = 0, longfmt = 0;
@@ -4136,6 +4198,8 @@ const struct commands xc_cmds[] = {
 	 "    Use -- (double hyphen) to end options when searching for, say, the string '-r'")},
 	{"LIST", cmd_list, 1, 0, 1, 0},
 	{"LOAD", cmd_load, 0, 0, 1, N_("LOAD [-e] <file>, loads a plugin or script")},
+	{"MARKREAD", cmd_markread, 1, 0, 1,
+	 N_("MARKREAD [target] [msgid], marks messages as read (IRCv3 read-marker)")},
 
 	{"MDEHOP", cmd_mdehop, 1, 1, 1,
 	 N_("MDEHOP, Mass deop's all chanhalf-ops in the current channel (needs chanop)")},

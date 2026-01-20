@@ -309,7 +309,83 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 			                host ? host : "", 0, &tags_data);
 		}
 	}
-	/* TODO: Handle JOIN, PART, QUIT, KICK, MODE, TOPIC for event-playback */
+	/* event-playback: Handle JOIN, PART, QUIT, KICK, MODE, TOPIC, NICK */
+	else if (g_ascii_strcasecmp (msg->command, "JOIN") == 0)
+	{
+		/* JOIN has params: channel, [account], [realname] for extended-join */
+		char *account = NULL;
+		char *realname = NULL;
+		if (msg->param_count >= 2)
+			account = msg->params[1];
+		if (msg->param_count >= 3)
+			realname = msg->params[2];
+		if (account && *account == ':')
+			account++;
+		if (realname && *realname == ':')
+			realname++;
+		inbound_join (serv, sess->channel, nick, host ? host : "",
+		              account, realname, &tags_data);
+	}
+	else if (g_ascii_strcasecmp (msg->command, "PART") == 0)
+	{
+		char *reason = NULL;
+		if (msg->param_count >= 2)
+		{
+			reason = msg->params[1];
+			if (reason && *reason == ':')
+				reason++;
+		}
+		inbound_part (serv, sess->channel, nick, host ? host : "",
+		              reason ? reason : "", &tags_data);
+	}
+	else if (g_ascii_strcasecmp (msg->command, "QUIT") == 0)
+	{
+		char *reason = NULL;
+		if (msg->param_count >= 1)
+		{
+			reason = msg->params[0];
+			if (reason && *reason == ':')
+				reason++;
+		}
+		inbound_quit (serv, nick, host ? host : "",
+		              reason ? reason : "", &tags_data);
+	}
+	else if (g_ascii_strcasecmp (msg->command, "KICK") == 0)
+	{
+		if (msg->param_count >= 2)
+		{
+			char *kicked = msg->params[1];
+			char *reason = NULL;
+			if (msg->param_count >= 3)
+			{
+				reason = msg->params[2];
+				if (reason && *reason == ':')
+					reason++;
+			}
+			inbound_kick (serv, sess->channel, kicked, nick,
+			              reason ? reason : "", &tags_data);
+		}
+	}
+	else if (g_ascii_strcasecmp (msg->command, "TOPIC") == 0)
+	{
+		if (msg->param_count >= 2)
+		{
+			text = msg->params[1];
+			if (text && *text == ':')
+				text++;
+			inbound_topicnew (serv, nick, sess->channel, text, &tags_data);
+		}
+	}
+	else if (g_ascii_strcasecmp (msg->command, "NICK") == 0)
+	{
+		if (msg->param_count >= 1)
+		{
+			char *newnick = msg->params[0];
+			if (newnick && *newnick == ':')
+				newnick++;
+			inbound_newnick (serv, nick, newnick, FALSE, &tags_data);
+		}
+	}
 
 	g_free (nick);
 	g_free (host);

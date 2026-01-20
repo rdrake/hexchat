@@ -2109,6 +2109,12 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_chathistory = enable;
 		else if (!strcmp (extension, "draft/multiline"))
 			serv->have_multiline = enable;
+		else if (!strcmp (extension, "draft/event-playback"))
+			serv->have_event_playback = enable;
+		else if (!strcmp (extension, "draft/read-marker"))
+			serv->have_read_marker = enable;
+		else if (!strcmp (extension, "draft/no-implicit-names"))
+			serv->have_no_implicit_names = enable;
 		else if (!strcmp (extension, "sasl"))
 		{
 			serv->have_sasl = enable;
@@ -2181,9 +2187,12 @@ static const char * const supported_caps[] = {
 	"echo-message",
 	"labeled-response",
 
-	/* IRCv3 chathistory and multiline */
+	/* IRCv3 chathistory, multiline, and related */
 	"draft/chathistory",
 	"draft/multiline",
+	"draft/event-playback",
+	"draft/read-marker",
+	"draft/no-implicit-names",
 
 	/* ZNC */
 	"znc.in/server-time-iso",

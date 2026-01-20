@@ -1385,6 +1385,37 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 				}
 			}
 			return;
+
+		case WORDL('M','A','R','K'):
+			/* MARKREAD - read marker response
+			 * Format: MARKREAD <target> timestamp=<msgid>
+			 * or: MARKREAD <target> (query current position)
+			 */
+			if (len >= 8 && strncasecmp (type, "MARKREAD", 8) == 0)
+			{
+				char *target = word[3];
+				char *timestamp = word[4];
+				session *sess;
+
+				if (!*target)
+					return;
+
+				/* Find session for target */
+				sess = find_channel (serv, target);
+				if (!sess)
+					sess = find_dialog (serv, target);
+
+				if (sess && timestamp && *timestamp)
+				{
+					/* Extract msgid from timestamp=xxx */
+					if (strncmp (timestamp, "timestamp=", 10) == 0)
+					{
+						g_free (sess->last_read_msgid);
+						sess->last_read_msgid = g_strdup (timestamp + 10);
+					}
+				}
+			}
+			return;
 		}
 	}
 
