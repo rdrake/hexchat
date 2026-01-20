@@ -89,8 +89,12 @@ struct textentry
 	GSList *sublines;
 	guchar tag;
 	guchar pad1;
-	guchar pad2;	/* 32-bit align : 44 bytes total */
+	guchar pad2;
 	GList *marks;	/* List of found strings */
+
+	/* IRCv3 modernization: stable entry identification (Phase 1) */
+	char *msgid;		/* Server-assigned message ID (may be NULL) */
+	guint64 entry_id;	/* Local unique ID (always set, monotonic) */
 };
 
 enum
@@ -4079,6 +4083,13 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 		gtk_xtext_search_textentry_del (buffer, ent);
 	}
 
+	/* IRCv3 modernization: remove from hash tables (Phase 1) */
+	if (ent->msgid && buffer->entries_by_msgid)
+		g_hash_table_remove (buffer->entries_by_msgid, ent->msgid);
+	if (buffer->entries_by_id)
+		g_hash_table_remove (buffer->entries_by_id, GSIZE_TO_POINTER (ent->entry_id));
+	g_free (ent->msgid);
+
 	g_slist_free_full (ent->slp, g_free);
 	g_slist_free (ent->sublines);
 
@@ -4739,6 +4750,11 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	ent->next = NULL;
 	ent->marks = NULL;
 
+	/* IRCv3 modernization: entry identification (Phase 1) */
+	ent->msgid = NULL;	/* Will be set later via gtk_xtext_set_msgid() if available */
+	ent->entry_id = buf->next_entry_id++;
+	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
+
 	if (ent->indent < MARGIN)
 		ent->indent = MARGIN;	  /* 2 pixels is the left margin */
 
@@ -5217,6 +5233,11 @@ gtk_xtext_buffer_new (GtkXText *xtext)
 	buf->indent = xtext->space_width * 2;
 	dontscroll (buf);
 
+	/* IRCv3 modernization: entry identification (Phase 1) */
+	buf->entries_by_msgid = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+	buf->entries_by_id = g_hash_table_new (g_direct_hash, g_direct_equal);
+	buf->next_entry_id = 1;	/* Start at 1, so 0 can mean "not set" */
+
 	return buf;
 }
 
@@ -5240,9 +5261,94 @@ gtk_xtext_buffer_free (xtext_buffer *buf)
 	while (ent)
 	{
 		next = ent->next;
+		g_free (ent->msgid);	/* Free msgid if set (Phase 1) */
 		g_free (ent);
 		ent = next;
 	}
 
+	/* IRCv3 modernization: clean up hash tables (Phase 1) */
+	if (buf->entries_by_msgid)
+		g_hash_table_destroy (buf->entries_by_msgid);
+	if (buf->entries_by_id)
+		g_hash_table_destroy (buf->entries_by_id);
+
 	g_free (buf);
+}
+
+/* IRCv3 modernization: entry lookup functions (Phase 1) */
+
+/**
+ * Find an entry by its server-assigned message ID.
+ * Returns NULL if not found or if msgid is NULL/empty.
+ */
+textentry *
+gtk_xtext_find_by_msgid (xtext_buffer *buf, const char *msgid)
+{
+	if (!buf || !buf->entries_by_msgid || !msgid || !msgid[0])
+		return NULL;
+
+	return g_hash_table_lookup (buf->entries_by_msgid, msgid);
+}
+
+/**
+ * Find an entry by its local unique ID.
+ * Returns NULL if not found or if entry_id is 0.
+ */
+textentry *
+gtk_xtext_find_by_id (xtext_buffer *buf, guint64 entry_id)
+{
+	if (!buf || !buf->entries_by_id || entry_id == 0)
+		return NULL;
+
+	return g_hash_table_lookup (buf->entries_by_id, GSIZE_TO_POINTER (entry_id));
+}
+
+/**
+ * Set the msgid for an entry and add it to the msgid hash table.
+ * This is called when the server provides a message ID (e.g., IRCv3 msgid tag).
+ * If the entry already has a msgid, it will be replaced.
+ * Returns the entry for chaining, or NULL on error.
+ */
+textentry *
+gtk_xtext_set_msgid (xtext_buffer *buf, textentry *ent, const char *msgid)
+{
+	if (!buf || !ent || !msgid || !msgid[0])
+		return NULL;
+
+	/* Remove old msgid from hash table if set */
+	if (ent->msgid)
+	{
+		if (buf->entries_by_msgid)
+			g_hash_table_remove (buf->entries_by_msgid, ent->msgid);
+		g_free (ent->msgid);
+	}
+
+	/* Set new msgid */
+	ent->msgid = g_strdup (msgid);
+
+	/* Add to hash table (key is duplicated by the hash table) */
+	if (buf->entries_by_msgid)
+		g_hash_table_insert (buf->entries_by_msgid, g_strdup (msgid), ent);
+
+	return ent;
+}
+
+/**
+ * Get the entry_id of an entry.
+ * Returns 0 if ent is NULL.
+ */
+guint64
+gtk_xtext_get_entry_id (textentry *ent)
+{
+	return ent ? ent->entry_id : 0;
+}
+
+/**
+ * Get the msgid of an entry.
+ * Returns NULL if ent is NULL or has no msgid set.
+ */
+const char *
+gtk_xtext_get_msgid (textentry *ent)
+{
+	return ent ? ent->msgid : NULL;
 }

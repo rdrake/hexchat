@@ -498,6 +498,9 @@ session_new (server *serv, char *from, int type, int focus)
 
 	sess->lastact_idx = LACT_NONE;
 
+	/* Initialize msgid tracking for deduplication */
+	sess->known_msgids = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+
 	if (from != NULL)
 	{
 		safe_strcpy(sess->channel, from, CHANLEN);
@@ -685,6 +688,8 @@ session_free (session *killsess)
 	g_free (killsess->last_read_msgid);
 	g_free (killsess->scrollback_oldest_msgid);
 	g_free (killsess->scrollback_newest_msgid);
+	if (killsess->known_msgids)
+		g_hash_table_destroy (killsess->known_msgids);
 	g_free (killsess->deferred_join_nick);
 	g_free (killsess->deferred_join_ip);
 	if (killsess->deferred_join_timeout > 0)

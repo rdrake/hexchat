@@ -1507,7 +1507,7 @@ These have no dependencies and can be done anytime.
 | ✅ | Client-only tag parsing (`+`) | proto-irc.c | Handle `+typing` etc. |
 | ✅ | TAGMSG command handler | proto-irc.c | Parse tag-only messages |
 | ✅ | `inbound_tagmsg()` | inbound.c | Process TAGMSG |
-| ⬜ | `/TAGMSG` outbound command | outbound.c | Send TAGMSG with tags |
+| ✅ | `/TAGMSG` outbound command | outbound.c | Send TAGMSG with tags |
 
 ---
 
@@ -1526,19 +1526,22 @@ These have no dependencies and can be done anytime.
 | ✅ | `chathistory_request_after()` | chathistory.c | AFTER subcommand |
 | ✅ | `chathistory_process_batch()` | chathistory.c | Handle chathistory batch |
 | ✅ | Event playback (JOIN/PART/etc) | chathistory.c | Handle events in history |
-| ⬜ | `/HISTORY` command | outbound.c | Manual history request |
-| ⬜ | Auto-fetch on JOIN | inbound.c | **UX #2**: Before "You are now talking on" |
-| ⬜ | Hold JOIN banner for history | inbound.c | Defer display until history fetched |
-| ⬜ | Auto-fetch on reconnect | server.c | Use AFTER with last msgid |
-| ⬜ | Scroll debouncing | fe-gtk/xtext.c, session | **UX critical**: 500ms debounce timer |
-| ⬜ | `history_loading` flag | hexchat.h | Prevent concurrent requests |
-| ⬜ | `history_scroll_timer` | hexchat.h | Debounce timer ID |
-| ⬜ | Rate limiting | chathistory.c | Max concurrent requests |
-| ⬜ | Msgid deduplication | text.c | Track msgids in buffer |
-| ⬜ | Session `oldest_msgid` | hexchat.h | For BEFORE pagination |
-| ⬜ | Session `newest_msgid` | hexchat.h | For AFTER catch-up |
-| ⬜ | `history_exhausted` flag | hexchat.h | Server has no more |
-| ⬜ | Chathistory preferences | cfgfiles.c, setup.c | `hex_irc_chathistory_*` |
+| ✅ | `/HISTORY` command | outbound.c | Manual history request |
+| ✅ | Auto-fetch on JOIN | inbound.c | **UX #2**: Before "You are now talking on" |
+| ✅ | Hold JOIN banner for history | inbound.c, chathistory.c | Defer display until history fetched |
+| ✅ | Auto-fetch on reconnect | inbound.c | Uses AFTER with scrollback_newest_msgid |
+| ✅ | Scroll debouncing | fe-gtk/xtext.c | `scroll_top_debounce_tag` with backoff |
+| ✅ | `history_loading` flag | hexchat.h | Prevent concurrent requests |
+| ✅ | Scroll debounce timer | xtext.h | `scroll_top_debounce_tag` in GtkXText |
+| ✅ | Rate limiting | chathistory.c | history_loading prevents concurrent |
+| ✅ | Msgid deduplication | hexchat.h, chathistory.c, inbound.c | `known_msgids` hash table |
+| ✅ | Session `oldest_msgid` | hexchat.h | For BEFORE pagination |
+| ✅ | Session `newest_msgid` | hexchat.h | For AFTER catch-up |
+| ✅ | `history_exhausted` flag | hexchat.h | Server has no more |
+| ✅ | Chathistory preferences | cfgfiles.c | `hex_irc_chathistory_*` |
+| ✅ | Background history fetching | chathistory.c | Gradual older history retrieval |
+| ✅ | Background fetch time cap | chathistory.c | Max age limit (default 24h) |
+| ⬜ | Chathistory settings UI | setup.c | Settings panel for preferences |
 
 ---
 
@@ -1548,17 +1551,17 @@ These have no dependencies and can be done anytime.
 
 | Status | Task | Files | Notes |
 |--------|------|-------|-------|
-| ⬜ | `have_echo_message` capability | hexchat.h, inbound.c | CAP negotiation |
+| ✅ | `have_echo_message` capability | hexchat.h, inbound.c | CAP negotiation |
 | ⬜ | Self-echo detection | inbound.c | Check if message is from self |
-| ⬜ | Defer outgoing display | outbound.c | Don't display immediately |
+| ✅ | Defer outgoing display | outbound.c | Skips local display when echo-message enabled |
 | ⬜ | Pending message tracking | hexchat.h | Track unechoed messages |
 | ⬜ | Pending message visual | fe-gtk/xtext.c | **UX #1**: Muted color, theme-aware |
 | ⬜ | Echo timeout (10s) | outbound.c | Fall back to local display |
 | ⬜ | Msgid correlation | inbound.c | Match echo to pending by msgid |
-| ⬜ | `have_labeled_response` cap | hexchat.h, inbound.c | CAP negotiation |
-| ⬜ | Label counter | hexchat.h | Generate unique labels |
+| ✅ | `have_labeled_response` cap | hexchat.h, inbound.c | CAP negotiation |
+| ✅ | Label counter | hexchat.h, server.c | `tcp_generate_label()` exists |
 | ⬜ | `pending_labels` hash table | hexchat.h | Track pending responses |
-| ⬜ | Add labels to commands | outbound.c | Include label tag |
+| ✅ | Add labels to commands | server.c | `tcp_sendf_labeled()` exists |
 | ⬜ | ACK batch handling | inbound.c | Handle labeled-response batch |
 | ⬜ | Echo-message preference | cfgfiles.c | `hex_irc_echo_message` |
 
@@ -1781,9 +1784,9 @@ These have no dependencies and can be done anytime.
 Based on dependencies and UX impact:
 
 1. **Phase 1** - Foundation is complete ✅
-2. **Phase 2** - Chathistory (high impact, uses foundation)
+2. **Phase 2** - Chathistory ~98% complete ✅ (remaining: settings UI panel)
 3. **Phase 0** - Text events (quick wins, no dependencies)
-4. **Phase 3** - Echo-message (improves reliability feel)
+4. **Phase 3** - Echo-message ~40% complete 🔄 (caps done, needs UX: timeout, pending visual)
 5. **Phase 4** - Read marker (synergizes with chathistory)
 6. **Phase 6** - Typing indicators (modern chat feel)
 7. **Phase 5** - Multiline (code paste improvement)

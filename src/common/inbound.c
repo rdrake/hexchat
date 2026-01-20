@@ -400,6 +400,10 @@ inbound_action (session *sess, char *chan, char *from, char *ip, char *text,
 	/* Set current msgid for scrollback_save to capture */
 	sess->current_msgid = tags_data->msgid;
 
+	/* Track msgid for deduplication */
+	if (tags_data->msgid)
+		chathistory_track_msgid (sess, tags_data->msgid, FALSE);
+
 	if (!fromme && !privaction)
 	{
 		if (is_hilight (from, text, sess, serv))
@@ -451,6 +455,11 @@ inbound_chanmsg (server *serv, session *sess, char *chan, char *from,
 
 	/* Set current msgid for scrollback_save to capture */
 	sess->current_msgid = tags_data->msgid;
+
+	/* Track msgid for deduplication - live messages use is_history=FALSE.
+	 * If this was already tracked from chathistory, it's safely skipped. */
+	if (tags_data->msgid)
+		chathistory_track_msgid (sess, tags_data->msgid, FALSE);
 
 	if (sess != current_tab)
 	{
@@ -1081,6 +1090,10 @@ inbound_notice (server *serv, char *to, char *nick, char *msg, char *ip, int id,
 
 	/* Set current msgid for scrollback_save to capture */
 	sess->current_msgid = tags_data->msgid;
+
+	/* Track msgid for deduplication */
+	if (tags_data->msgid)
+		chathistory_track_msgid (sess, tags_data->msgid, FALSE);
 
 	if (server_notice)
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVNOTICE, sess, msg, nick, NULL, NULL, 0,

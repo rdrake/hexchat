@@ -296,8 +296,9 @@ find_session_for_target (server *serv, const char *target)
 	return sess;
 }
 
-/* Process a single message from the batch */
-static void
+/* Process a single message from the batch.
+ * Returns TRUE if message was processed, FALSE if it was a duplicate. */
+static gboolean
 process_batch_message (server *serv, session *sess, batch_message *msg)
 {
 	message_tags_data tags_data;
@@ -306,7 +307,13 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 	char *text = NULL;
 
 	if (!msg || !msg->command)
-		return;
+		return FALSE;
+
+	/* Skip duplicate messages (already displayed from previous batches or live) */
+	if (msg->msgid && chathistory_is_duplicate_msgid (sess, msg->msgid))
+	{
+		return FALSE;
+	}
 
 	/* Initialize tags data */
 	memset (&tags_data, 0, sizeof (tags_data));
@@ -317,7 +324,7 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 	{
 		/* Set msgid so it gets saved to scrollback via inbound functions */
 		tags_data.msgid = msg->msgid;
-		/* Track msgids for pagination */
+		/* Track msgids for pagination and deduplication */
 		chathistory_track_msgid (sess, msg->msgid, TRUE);
 	}
 
@@ -419,8 +426,11 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 			if (reason && *reason == ':')
 				reason++;
 		}
-		inbound_quit (serv, nick, host ? host : "",
-		              reason ? reason : "", &tags_data);
+		/* For historical QUITs, emit directly to session instead of using inbound_quit()
+		 * because inbound_quit() requires the user to be in the userlist (which they won't be
+		 * for historical events - they already quit). */
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_QUIT, sess, nick, reason ? reason : "",
+		                       host ? host : "", NULL, 0, tags_data.timestamp);
 	}
 	else if (g_ascii_strcasecmp (msg->command, "KICK") == 0)
 	{
@@ -461,6 +471,7 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 
 	g_free (nick);
 	g_free (host);
+	return TRUE;
 }
 
 /* Emit deferred join banner if one was waiting for history to complete */
@@ -588,8 +599,9 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	}
 
 	/* For initial join, don't print separator before history - just show messages.
-	 * For scroll-to-load, print the separator. */
-	if (!is_initial_join)
+	 * For background fetching, also stay silent (it's automatic).
+	 * For scroll-to-load or manual /HISTORY, print the separator. */
+	if (!is_initial_join && !sess->background_history_active)
 	{
 		PrintText (sess, "--- Earlier messages ---\n");
 	}
@@ -600,8 +612,10 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	for (iter = batch->messages; iter; iter = iter->next)
 	{
 		batch_message *msg = iter->data;
-		process_batch_message (serv, sess, msg);
-		msg_count++;
+
+		/* Only count messages that were actually processed (not duplicates) */
+		if (process_batch_message (serv, sess, msg))
+			msg_count++;
 
 		/* Track oldest timestamp for age limit check */
 		if (msg->timestamp > 0)
@@ -623,6 +637,14 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		}
 	}
 
+	/* If we got a non-empty batch but ALL messages were duplicates, stop fetching.
+	 * This prevents infinite loops when the server keeps returning the same messages. */
+	if (batch->messages && msg_count == 0)
+	{
+		sess->history_exhausted = TRUE;
+		sess->background_history_active = FALSE;
+	}
+
 	/* Reset scroll-to-top backoff since we successfully received history */
 	fe_reset_scroll_top_backoff (sess);
 
@@ -636,10 +658,13 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	}
 	else
 	{
-		/* Print end separator for manual/scroll-to-load requests */
-		char buf[256];
-		g_snprintf (buf, sizeof (buf), "--- %d message(s) from history ---\n", msg_count);
-		PrintText (sess, buf);
+		/* Print end separator for manual/scroll-to-load requests (not background fetch) */
+		if (!sess->background_history_active && msg_count > 0)
+		{
+			char buf[256];
+			g_snprintf (buf, sizeof (buf), "--- %d message(s) from history ---\n", msg_count);
+			PrintText (sess, buf);
+		}
 
 		/* If background fetching is active and we haven't hit limits, schedule next fetch */
 		if (sess->background_history_active && !sess->history_exhausted && !hit_age_limit)
@@ -685,7 +710,21 @@ chathistory_parse_isupport (server *serv, const char *value)
 void
 chathistory_track_msgid (session *sess, const char *msgid, gboolean is_history)
 {
+	gboolean is_new;
+
 	if (!msgid || !msgid[0])
+		return;
+
+	/* Add to known msgids for deduplication.
+	 * g_hash_table_add returns TRUE if this is a new entry. */
+	if (sess->known_msgids)
+		is_new = g_hash_table_add (sess->known_msgids, g_strdup (msgid));
+	else
+		is_new = TRUE;
+
+	/* Only update oldest/newest tracking for truly new msgids.
+	 * This prevents re-tracking from inbound functions after chathistory already tracked. */
+	if (!is_new)
 		return;
 
 	if (is_history)
@@ -710,6 +749,25 @@ chathistory_track_msgid (session *sess, const char *msgid, gboolean is_history)
 			sess->oldest_msgid = g_strdup (msgid);
 		}
 	}
+}
+
+/**
+ * Check if a message with this msgid has already been displayed.
+ *
+ * @param sess Session to check
+ * @param msgid The message ID to check
+ * @return TRUE if msgid is known (duplicate), FALSE if new
+ */
+gboolean
+chathistory_is_duplicate_msgid (session *sess, const char *msgid)
+{
+	if (!sess || !msgid || !msgid[0])
+		return FALSE;
+
+	if (!sess->known_msgids)
+		return FALSE;
+
+	return g_hash_table_contains (sess->known_msgids, msgid);
 }
 
 gboolean

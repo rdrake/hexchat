@@ -453,6 +453,7 @@ typedef struct session
 	char *scrollback_oldest_msgid;	/* oldest msgid from loaded scrollback (for BEFORE) */
 	char *scrollback_newest_msgid;	/* newest msgid from loaded scrollback (for AFTER) */
 	const char *current_msgid;	/* temporary: msgid of message being processed (not owned) */
+	GHashTable *known_msgids;	/* hash set of msgids already displayed (for deduplication) */
 	/* Deferred join info (for chathistory display before join banner) */
 	char *deferred_join_nick;	/* nick for deferred XP_TE_UJOIN */
 	char *deferred_join_ip;		/* ip/host for deferred XP_TE_UJOIN */

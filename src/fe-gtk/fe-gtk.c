@@ -847,7 +847,29 @@ void
 fe_print_text (struct session *sess, char *text, time_t stamp,
 			   gboolean no_activity)
 {
+	textentry *first_new_entry;
+
+	/* IRCv3 modernization: track first entry for msgid association (Phase 1)
+	 * Important: A single IRC message may create multiple xtext entries
+	 * (e.g., multiline batches, text with embedded newlines). We associate
+	 * the msgid with the FIRST entry, which is the logical "start" of the message.
+	 */
+	first_new_entry = sess->res->buffer->text_last;  /* Entry before our new ones */
+
 	PrintTextRaw (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
+
+	/* Find the first entry we just created */
+	if (first_new_entry)
+		first_new_entry = first_new_entry->next;  /* First new entry is after the old last */
+	else
+		first_new_entry = sess->res->buffer->text_first;  /* Buffer was empty */
+
+	/* Associate msgid with the first entry of this message */
+	if (sess->current_msgid && first_new_entry)
+	{
+		gtk_xtext_set_msgid (sess->res->buffer, first_new_entry,
+		                     sess->current_msgid);
+	}
 
 	if (no_activity || !sess->gui->is_tab)
 		return;

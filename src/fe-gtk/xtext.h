@@ -120,6 +120,11 @@ typedef struct {
 	offsets_t curdata;		/* current offset info, from *curmark */
 	GRegex *search_re;		/* Compiled regular expression */
 	textentry *hintsearch;	/* textentry found for last search */
+
+	/* IRCv3 modernization: entry identification (Phase 1) */
+	GHashTable *entries_by_msgid;	/* msgid string → textentry* for O(1) lookup */
+	GHashTable *entries_by_id;		/* entry_id → textentry* for O(1) lookup */
+	guint64 next_entry_id;			/* monotonic counter for generating entry IDs */
 } xtext_buffer;
 
 struct _GtkXText
@@ -310,5 +315,12 @@ void gtk_xtext_buffer_free (xtext_buffer *buf);
 void gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render);
 void gtk_xtext_copy_selection (GtkXText *xtext);
 GType gtk_xtext_get_type (void);
+
+/* IRCv3 modernization: entry identification (Phase 1) */
+textentry *gtk_xtext_find_by_msgid (xtext_buffer *buf, const char *msgid);
+textentry *gtk_xtext_find_by_id (xtext_buffer *buf, guint64 entry_id);
+textentry *gtk_xtext_set_msgid (xtext_buffer *buf, textentry *ent, const char *msgid);
+guint64 gtk_xtext_get_entry_id (textentry *ent);
+const char *gtk_xtext_get_msgid (textentry *ent);
 
 #endif
