@@ -1831,6 +1831,8 @@ server_set_defaults (server *serv)
 	g_free (serv->chanmodes);
 	g_free (serv->nick_prefixes);
 	g_free (serv->nick_modes);
+	g_free (serv->network_icon_url);
+	serv->network_icon_url = NULL;
 #ifdef USE_OPENSSL
         g_clear_pointer (&serv->scram_session, scram_session_free);
 #endif
@@ -1865,6 +1867,7 @@ server_set_defaults (server *serv)
 	serv->have_sasl = FALSE;
 	serv->have_except = FALSE;
 	serv->have_invite = FALSE;
+	serv->utf8only = FALSE;
 }
 
 char *
@@ -1996,6 +1999,7 @@ server_free (server *serv)
 	g_free (serv->bad_nick_prefixes);
 	g_free (serv->last_away_reason);
 	g_free (serv->encoding);
+	g_free (serv->network_icon_url);
 
 	g_iconv_close (serv->read_converter);
 	g_iconv_close (serv->write_converter);

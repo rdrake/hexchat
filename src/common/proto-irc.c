@@ -949,6 +949,121 @@ process_numeric (session * sess, int n,
 		notify_set_offline_list (serv, word[4] + 1, FALSE, tags_data);
 		break;
 
+	case 732: /* RPL_MONLIST - response to MONITOR L */
+		{
+			char *list = word[4];
+			if (*list == ':')
+				list++;
+			if (*list)
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+					g_strdup_printf ("Monitoring: %s", list),
+					NULL, NULL, NULL, 0, tags_data->timestamp);
+		}
+		break;
+
+	case 733: /* RPL_ENDOFMONLIST */
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+			"End of MONITOR list", NULL, NULL, NULL, 0, tags_data->timestamp);
+		break;
+
+	case 734: /* ERR_MONLISTFULL */
+		{
+			char *limit = word[4];
+			char *targets = word[5];
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+				g_strdup_printf ("MONITOR list full (limit: %s). Could not add: %s",
+					limit, targets && *targets == ':' ? targets + 1 : targets),
+				NULL, NULL, NULL, 0, tags_data->timestamp);
+		}
+		break;
+
+	/* IRCv3 Metadata numerics (760-774) */
+	case 760: /* RPL_WHOISKEYVALUE - metadata in WHOIS */
+		{
+			/* :server 760 client target key visibility :value */
+			char *target = word[4];
+			char *key = word[5];
+			char *visibility = word[6];
+			char *value = word_eol[7];
+			if (value && *value == ':')
+				value++;
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+				g_strdup_printf ("[%s] %s (%s): %s", target, key, visibility, value ? value : ""),
+				NULL, NULL, NULL, 0, tags_data->timestamp);
+		}
+		break;
+
+	case 761: /* RPL_KEYVALUE - metadata key-value response */
+		{
+			/* :server 761 client target key visibility :value */
+			char *target = word[4];
+			char *key = word[5];
+			char *visibility = word[6];
+			char *value = word_eol[7];
+			if (value && *value == ':')
+				value++;
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+				g_strdup_printf ("Metadata [%s] %s (%s): %s", target, key, visibility, value ? value : ""),
+				NULL, NULL, NULL, 0, tags_data->timestamp);
+		}
+		break;
+
+	case 766: /* RPL_KEYNOTSET - metadata key not set */
+		{
+			/* :server 766 client target key :key not set */
+			char *target = word[4];
+			char *key = word[5];
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+				g_strdup_printf ("Metadata [%s] %s: not set", target, key),
+				NULL, NULL, NULL, 0, tags_data->timestamp);
+		}
+		break;
+
+	case 770: /* RPL_METADATASUBOK - subscription confirmed */
+		{
+			char *keys = word_eol[4];
+			if (keys && *keys == ':')
+				keys++;
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+				g_strdup_printf ("Metadata subscribed to: %s", keys ? keys : ""),
+				NULL, NULL, NULL, 0, tags_data->timestamp);
+		}
+		break;
+
+	case 771: /* RPL_METADATAUNSUBOK - unsubscription confirmed */
+		{
+			char *keys = word_eol[4];
+			if (keys && *keys == ':')
+				keys++;
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+				g_strdup_printf ("Metadata unsubscribed from: %s", keys ? keys : ""),
+				NULL, NULL, NULL, 0, tags_data->timestamp);
+		}
+		break;
+
+	case 772: /* RPL_METADATASUBS - list of subscriptions */
+		{
+			char *keys = word_eol[4];
+			if (keys && *keys == ':')
+				keys++;
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+				g_strdup_printf ("Metadata subscriptions: %s", keys ? keys : "(none)"),
+				NULL, NULL, NULL, 0, tags_data->timestamp);
+		}
+		break;
+
+	case 774: /* RPL_METADATASYNCLATER - sync deferred */
+		{
+			char *target = word[4];
+			char *message = word_eol[5];
+			if (message && *message == ':')
+				message++;
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+				g_strdup_printf ("Metadata sync for %s deferred: %s", target, message ? message : ""),
+				NULL, NULL, NULL, 0, tags_data->timestamp);
+		}
+		break;
+
 	case 900:	/* successful SASL 'logged in as ' */
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, serv->server_session, 
 									  word_eol[6]+1, word[1], word[2], NULL, 0,
@@ -1480,6 +1595,111 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 								msgid, nick),
 							NULL, NULL, NULL, 0, tags_data->timestamp);
 					}
+				}
+			}
+			return;
+
+		case WORDL('R','E','N','A'):
+			/* RENAME - channel rename (draft/channel-rename)
+			 * Format: :nick!user@host RENAME <oldchan> <newchan> [:<reason>]
+			 */
+			if (len >= 6 && strncasecmp (type, "RENAME", 6) == 0)
+			{
+				char *oldchan = word[3];
+				char *newchan = word[4];
+				char *reason = word_eol[5];
+				session *sess;
+
+				if (!*oldchan || !*newchan)
+					return;
+
+				if (reason && *reason == ':')
+					reason++;
+
+				/* Find session for the old channel name */
+				sess = find_channel (serv, oldchan);
+				if (sess)
+				{
+					/* Update the channel name */
+					safe_strcpy (sess->channel, newchan, CHANLEN);
+
+					/* Update the frontend */
+					fe_set_channel (sess);
+					fe_set_title (sess);
+
+					/* Emit a message about the rename */
+					if (reason && *reason)
+					{
+						EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+							g_strdup_printf ("Channel %s has been renamed to %s by %s: %s",
+								oldchan, newchan, nick, reason),
+							NULL, NULL, NULL, 0, tags_data->timestamp);
+					}
+					else
+					{
+						EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
+							g_strdup_printf ("Channel %s has been renamed to %s by %s",
+								oldchan, newchan, nick),
+							NULL, NULL, NULL, 0, tags_data->timestamp);
+					}
+				}
+			}
+			return;
+
+		case WORDL('R','E','G','I'):
+			/* REGISTER - account registration response
+			 * Format: REGISTER SUCCESS <account> <message>
+			 *         REGISTER VERIFICATION_REQUIRED <account> <message>
+			 */
+			if (len >= 8 && strncasecmp (type, "REGISTER", 8) == 0)
+			{
+				char *subcommand = word[3];
+				char *account = word[4];
+				char *message = word_eol[5];
+
+				if (message && *message == ':')
+					message++;
+
+				if (!g_ascii_strcasecmp (subcommand, "SUCCESS"))
+				{
+					EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, serv->server_session,
+						g_strdup_printf ("Account '%s' registered successfully: %s",
+							account, message ? message : ""),
+						NULL, NULL, NULL, 0, tags_data->timestamp);
+					/* Registration complete - user is now authenticated */
+					inbound_identified (serv);
+				}
+				else if (!g_ascii_strcasecmp (subcommand, "VERIFICATION_REQUIRED"))
+				{
+					EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, serv->server_session,
+						g_strdup_printf ("Account '%s' requires verification: %s",
+							account, message ? message : "Use /VERIFY to complete registration"),
+						NULL, NULL, NULL, 0, tags_data->timestamp);
+				}
+			}
+			return;
+
+		case WORDL('V','E','R','I'):
+			/* VERIFY - account verification response
+			 * Format: VERIFY SUCCESS <account> <message>
+			 */
+			if (len >= 6 && strncasecmp (type, "VERIFY", 6) == 0)
+			{
+				char *subcommand = word[3];
+				char *account = word[4];
+				char *message = word_eol[5];
+
+				if (message && *message == ':')
+					message++;
+
+				if (!g_ascii_strcasecmp (subcommand, "SUCCESS"))
+				{
+					EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, serv->server_session,
+						g_strdup_printf ("Account '%s' verified successfully: %s",
+							account, message ? message : ""),
+						NULL, NULL, NULL, 0, tags_data->timestamp);
+					/* Verification complete - user is now authenticated */
+					inbound_identified (serv);
 				}
 			}
 			return;

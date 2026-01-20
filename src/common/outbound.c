@@ -2948,6 +2948,83 @@ cmd_me (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 }
 
 static int
+cmd_metadata (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	char *target = word[2];
+	char *subcmd = word[3];
+
+	if (!serv->have_metadata)
+	{
+		PrintText (sess, "This server does not support METADATA.\n");
+		return TRUE;
+	}
+
+	if (!*target)
+	{
+		PrintText (sess, "Usage: /METADATA <target> GET <key> [<key>...] - Get metadata\n");
+		PrintText (sess, "       /METADATA <target> LIST - List all metadata\n");
+		PrintText (sess, "       /METADATA <target> SET <key> [:<value>] - Set metadata\n");
+		PrintText (sess, "       /METADATA <target> CLEAR - Clear all metadata\n");
+		PrintText (sess, "       /METADATA * SUB <key> [<key>...] - Subscribe to updates\n");
+		PrintText (sess, "       /METADATA * UNSUB <key> [<key>...] - Unsubscribe\n");
+		PrintText (sess, "       /METADATA * SUBS - List subscriptions\n");
+		PrintText (sess, "       /METADATA <target> SYNC - Sync metadata\n");
+		PrintText (sess, "Target can be a nick, channel, or * for subscriptions.\n");
+		return TRUE;
+	}
+
+	if (!*subcmd)
+	{
+		PrintText (sess, "Missing subcommand. Use /METADATA for help.\n");
+		return TRUE;
+	}
+
+	/* Build and send METADATA command */
+	if (!g_ascii_strcasecmp (subcmd, "GET") || !g_ascii_strcasecmp (subcmd, "LIST") ||
+	    !g_ascii_strcasecmp (subcmd, "CLEAR") || !g_ascii_strcasecmp (subcmd, "SYNC") ||
+	    !g_ascii_strcasecmp (subcmd, "SUBS"))
+	{
+		/* Commands with optional/no extra args */
+		if (word[4][0])
+			tcp_sendf (serv, "METADATA %s %s %s\r\n", target, subcmd, word_eol[4]);
+		else
+			tcp_sendf (serv, "METADATA %s %s\r\n", target, subcmd);
+	}
+	else if (!g_ascii_strcasecmp (subcmd, "SET"))
+	{
+		/* SET requires key and optional value */
+		char *key = word[4];
+		char *value = word_eol[5];
+		if (!*key)
+		{
+			PrintText (sess, "Usage: /METADATA <target> SET <key> [:<value>]\n");
+			return TRUE;
+		}
+		if (*value)
+			tcp_sendf (serv, "METADATA %s SET %s :%s\r\n", target, key, value);
+		else
+			tcp_sendf (serv, "METADATA %s SET %s\r\n", target, key);
+	}
+	else if (!g_ascii_strcasecmp (subcmd, "SUB") || !g_ascii_strcasecmp (subcmd, "UNSUB"))
+	{
+		/* SUB/UNSUB require keys */
+		if (!word[4][0])
+		{
+			PrintTextf (sess, "Usage: /METADATA * %s <key> [<key>...]\n", subcmd);
+			return TRUE;
+		}
+		tcp_sendf (serv, "METADATA %s %s %s\r\n", target, subcmd, word_eol[4]);
+	}
+	else
+	{
+		PrintText (sess, "Unknown METADATA subcommand. Use /METADATA for help.\n");
+	}
+
+	return TRUE;
+}
+
+static int
 cmd_mode (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	/* We allow omitting the target, so we have to figure it out:
@@ -2997,6 +3074,49 @@ cmd_mop (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 
 	g_free (nicks);
 
+	return TRUE;
+}
+
+static int
+cmd_monitor (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	char *subcmd = word[2];
+
+	if (!serv->supports_monitor)
+	{
+		PrintText (sess, "This server does not support MONITOR.\n");
+		return TRUE;
+	}
+
+	if (!*subcmd)
+	{
+		PrintText (sess, "Usage: /MONITOR +nick[,nick2,...] - Add nicks to monitor list\n");
+		PrintText (sess, "       /MONITOR -nick[,nick2,...] - Remove nicks from monitor list\n");
+		PrintText (sess, "       /MONITOR C - Clear monitor list\n");
+		PrintText (sess, "       /MONITOR L - List monitored nicks\n");
+		PrintText (sess, "       /MONITOR S - Show status of monitored nicks\n");
+		return TRUE;
+	}
+
+	/* Check for single-letter commands */
+	if ((subcmd[0] == 'C' || subcmd[0] == 'c' ||
+	     subcmd[0] == 'L' || subcmd[0] == 'l' ||
+	     subcmd[0] == 'S' || subcmd[0] == 's') && subcmd[1] == '\0')
+	{
+		tcp_sendf (serv, "MONITOR %c\r\n", g_ascii_toupper (subcmd[0]));
+		return TRUE;
+	}
+
+	/* +/-nick commands */
+	if (subcmd[0] == '+' || subcmd[0] == '-')
+	{
+		tcp_sendf (serv, "MONITOR %s\r\n", subcmd);
+		return TRUE;
+	}
+
+	/* Invalid syntax */
+	PrintText (sess, "Invalid MONITOR command. Use /MONITOR for help.\n");
 	return TRUE;
 }
 
@@ -3480,6 +3600,97 @@ cmd_recv (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 }
 
 static int
+cmd_register (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	char *account = word[2];
+	char *email = word[3];
+	char *password = word[4];
+
+	if (!serv->have_account_registration)
+	{
+		PrintText (sess, "This server does not support account registration.\n");
+		return TRUE;
+	}
+
+	/* Check for arguments */
+	if (!*account)
+	{
+		PrintText (sess, "Usage: /REGISTER <account> [<email>|*] <password>\n");
+		if (serv->accreg_email_required)
+			PrintText (sess, "Note: This server requires an email address.\n");
+		if (!serv->accreg_custom_account)
+			PrintText (sess, "Note: Account name must match your current nickname (use * for account).\n");
+		return TRUE;
+	}
+
+	/* If only account given, prompt for more */
+	if (!*email || !*password)
+	{
+		if (!*email)
+		{
+			PrintText (sess, "Usage: /REGISTER <account> [<email>|*] <password>\n");
+			return TRUE;
+		}
+		/* email given but not password - assume email is actually password and use * for email */
+		password = email;
+		email = "*";
+	}
+
+	/* Validate email requirement */
+	if (serv->accreg_email_required && (!email || !strcmp (email, "*")))
+	{
+		PrintText (sess, "Error: This server requires a valid email address.\n");
+		return TRUE;
+	}
+
+	/* Validate custom-account-name: if server doesn't support it, account must be * or match nick */
+	if (!serv->accreg_custom_account && strcmp (account, "*") != 0)
+	{
+		if (serv->p_cmp (account, serv->nick) != 0)
+		{
+			PrintTextf (sess, "Error: This server requires account name to match your nickname.\n");
+			PrintTextf (sess, "Use '*' for account or change your nick to '%s' first.\n", account);
+			return TRUE;
+		}
+	}
+
+	/* Send REGISTER command */
+	tcp_sendf (serv, "REGISTER %s %s %s\r\n", account, email, password);
+	PrintTextf (sess, "Registering account '%s'...\n",
+		strcmp (account, "*") == 0 ? serv->nick : account);
+
+	return TRUE;
+}
+
+static int
+cmd_verify (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	char *account = word[2];
+	char *code = word[3];
+
+	if (!serv->have_account_registration)
+	{
+		PrintText (sess, "This server does not support account registration.\n");
+		return TRUE;
+	}
+
+	if (!*account || !*code)
+	{
+		PrintText (sess, "Usage: /VERIFY <account> <code>\n");
+		PrintText (sess, "Use this command to complete account registration with the verification code.\n");
+		return TRUE;
+	}
+
+	/* Send VERIFY command */
+	tcp_sendf (serv, "VERIFY %s %s\r\n", account, code);
+	PrintTextf (sess, "Verifying account '%s'...\n", account);
+
+	return TRUE;
+}
+
+static int
 cmd_say (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	char *speech = word_eol[2];
@@ -3776,6 +3987,38 @@ cmd_servchan (struct session *sess, char *tbuf, char *word[],
 	}
 
 	return FALSE;
+}
+
+static int
+cmd_tagmsg (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	char *target;
+	char *tags;
+
+	if (!serv->have_message_tags)
+	{
+		PrintText (sess, "Server does not support message-tags capability.\n");
+		return TRUE;
+	}
+
+	target = word[2];
+	tags = word_eol[3];
+
+	if (!*target || !*tags)
+	{
+		PrintText (sess, "Usage: /TAGMSG <target> <tags>\n");
+		PrintText (sess, "Example: /TAGMSG #channel +typing=active\n");
+		PrintText (sess, "Example: /TAGMSG #channel +draft/react=👍;+draft/reply=msgid123\n");
+		return TRUE;
+	}
+
+	/* Send TAGMSG with the specified tags
+	 * Format: @tags TAGMSG target
+	 */
+	tcp_sendf (serv, "@%s TAGMSG %s\r\n", tags, target);
+
+	return TRUE;
 }
 
 static int
@@ -4253,6 +4496,7 @@ const struct commands xc_cmds[] = {
 	 N_("MDEOP, Mass deop's all chanops in the current channel (needs chanop)")},
 	{"ME", cmd_me, 0, 0, 1,
 	 N_("ME <action>, sends the action to the current channel (actions are written in the 3rd person, like /me jumps)")},
+	{"METADATA", cmd_metadata, 1, 0, 1, N_("METADATA <target> <GET|LIST|SET|CLEAR|SUB|UNSUB|SUBS|SYNC> [...], manage user/channel metadata")},
 	{"MENU", cmd_menu, 0, 0, 1, "MENU [-eX] [-i<ICONFILE>] [-k<mod>,<key>] [-m] [-pX] [-r<X,group>] [-tX] {ADD|DEL} <path> [command] [unselect command]\n"
 										 "       See http://hexchat.readthedocs.org/en/latest/plugins.html#controlling-the-gui for more details."},
 	{"MHOP", cmd_mhop, 1, 1, 1,
@@ -4260,6 +4504,7 @@ const struct commands xc_cmds[] = {
 	{"MKICK", cmd_mkick, 1, 1, 1,
 	 N_("MKICK, Mass kicks everyone except you in the current channel (needs chanop)")},
 	{"MODE", cmd_mode, 1, 0, 1, 0},
+	{"MONITOR", cmd_monitor, 1, 0, 1, N_("MONITOR [+|-]nick[,nick,...] | C | L | S, manage the MONITOR list for nick online/offline notifications")},
 	{"MOP", cmd_mop, 1, 1, 1,
 	 N_("MOP, Mass op's all users in the current channel (needs chanop)")},
 	{"MSG", cmd_msg, 0, 0, 1, N_("MSG <nick> <message>, sends a private message, message \".\" to send to last nick or prefix with \"=\" for dcc chat")},
@@ -4299,6 +4544,7 @@ const struct commands xc_cmds[] = {
 	 N_("RECONNECT [<host>] [<port>] [<password>], Can be called just as /RECONNECT to reconnect to the current server or with /RECONNECT ALL to reconnect to all the open servers")},
 #endif
 	{"RECV", cmd_recv, 1, 0, 1, N_("RECV <text>, send raw data to HexChat, as if it was received from the IRC server")},
+	{"REGISTER", cmd_register, 1, 0, 1, N_("REGISTER <account> [<email>|*] <password>, register a new account on the server (requires draft/account-registration)")},
 	{"RELOAD", cmd_reload, 0, 0, 1, N_("RELOAD <name>, reloads a plugin or script")},
 	{"SAY", cmd_say, 0, 0, 1,
 	 N_("SAY <text>, sends the text to the object in the current window")},
@@ -4322,6 +4568,8 @@ const struct commands xc_cmds[] = {
 	{"SETTAB", cmd_settab, 0, 0, 1, N_("SETTAB <new name>, change a tab's name, tab_trunc limit still applies")},
 	{"SETTEXT", cmd_settext, 0, 0, 1, N_("SETTEXT <new text>, replace the text in the input box")},
 	{"SPLAY", cmd_splay, 0, 0, 1, "SPLAY <soundfile>"},
+	{"TAGMSG", cmd_tagmsg, 1, 0, 1,
+	 N_("TAGMSG <target> <tags>, sends a tag-only message (e.g., typing indicators, reactions)")},
 	{"TOPIC", cmd_topic, 1, 1, 1,
 	 N_("TOPIC [<topic>], sets the topic if one is given, else shows the current topic")},
 	{"TRAY", cmd_tray, 0, 0, 1,
@@ -4341,6 +4589,7 @@ const struct commands xc_cmds[] = {
 	{"USELECT", cmd_uselect, 0, 1, 0,
 	 N_("USELECT [-a] [-s] <nick1> <nick2> etc, highlights nick(s) in channel userlist")},
 	{"USERLIST", cmd_userlist, 1, 1, 1, 0},
+	{"VERIFY", cmd_verify, 1, 0, 1, N_("VERIFY <account> <code>, complete account registration with a verification code")},
 	{"VOICE", cmd_voice, 1, 1, 1,
 	 N_("VOICE <nick>, gives voice status to someone (needs chanop)")},
 	{"WALLCHOP", cmd_wallchop, 1, 1, 1,

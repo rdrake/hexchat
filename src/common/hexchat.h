@@ -565,6 +565,7 @@ typedef struct server
 	int multiline_max_bytes;		/* max bytes in multiline batch (from ISUPPORT) */
 	int multiline_max_lines;		/* max lines in multiline batch (from ISUPPORT) */
 	int sts_upgrade_port;			/* STS TLS port to upgrade to (0 = no upgrade needed) */
+	char *network_icon_url;			/* Network icon URL from ISUPPORT draft/ICON */
 
 	void *network;						/* points to entry in servlist.c or NULL! */
 
@@ -633,6 +634,14 @@ typedef struct server
 	unsigned int have_read_marker:1;	/* IRCv3 draft/read-marker capability */
 	unsigned int have_no_implicit_names:1; /* IRCv3 draft/no-implicit-names capability */
 	unsigned int have_redact:1;		/* IRCv3 draft/message-redaction capability */
+	unsigned int have_account_registration:1; /* IRCv3 draft/account-registration capability */
+	unsigned int accreg_before_connect:1;     /* account-registration: before-connect supported */
+	unsigned int accreg_email_required:1;     /* account-registration: email-required */
+	unsigned int accreg_custom_account:1;     /* account-registration: custom-account-name supported */
+	unsigned int have_metadata:1;	/* IRCv3 draft/metadata-2 capability */
+	unsigned int have_channel_rename:1; /* IRCv3 draft/channel-rename capability */
+	unsigned int have_pre_away:1;	/* IRCv3 draft/pre-away capability */
+	unsigned int utf8only:1;		/* Server requires UTF-8 encoding (ISUPPORT UTF8ONLY) */
 	unsigned int have_except:1;	/* ban exemptions +e */
 	unsigned int have_invite:1;	/* invite exemptions +I */
 	unsigned int have_cert:1;	/* have loaded a cert */

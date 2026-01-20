@@ -2117,6 +2117,14 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_no_implicit_names = enable;
 		else if (!strcmp (extension, "draft/message-redaction"))
 			serv->have_redact = enable;
+		else if (!strcmp (extension, "draft/account-registration"))
+			serv->have_account_registration = enable;
+		else if (!strcmp (extension, "draft/metadata-2"))
+			serv->have_metadata = enable;
+		else if (!strcmp (extension, "draft/channel-rename"))
+			serv->have_channel_rename = enable;
+		else if (!strcmp (extension, "draft/pre-away"))
+			serv->have_pre_away = enable;
 		else if (!strcmp (extension, "sasl"))
 		{
 			serv->have_sasl = enable;
@@ -2196,6 +2204,10 @@ static const char * const supported_caps[] = {
 	"draft/read-marker",
 	"draft/no-implicit-names",
 	"draft/message-redaction",
+	"draft/account-registration",
+	"draft/metadata-2",
+	"draft/channel-rename",
+	"draft/pre-away",
 
 	/* ZNC */
 	"znc.in/server-time-iso",
@@ -2368,6 +2380,27 @@ inbound_cap_ls (server *serv, char *nick, char *extensions_str,
 				}
 			}
 			continue;
+		}
+
+		/* IRCv3 draft/account-registration - parse capability tokens
+		 * Format: draft/account-registration=before-connect,email-required,custom-account-name
+		 */
+		if (!g_strcmp0 (extension, "draft/account-registration") && value)
+		{
+			char **tokens = g_strsplit (value, ",", 0);
+			int j;
+
+			for (j = 0; tokens[j]; j++)
+			{
+				if (!strcmp (tokens[j], "before-connect"))
+					serv->accreg_before_connect = TRUE;
+				else if (!strcmp (tokens[j], "email-required"))
+					serv->accreg_email_required = TRUE;
+				else if (!strcmp (tokens[j], "custom-account-name"))
+					serv->accreg_custom_account = TRUE;
+			}
+			g_strfreev (tokens);
+			/* Don't continue - still need to request the capability */
 		}
 
 		for (x = 0; x < G_N_ELEMENTS(supported_caps); ++x)

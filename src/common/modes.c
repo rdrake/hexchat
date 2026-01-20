@@ -968,6 +968,16 @@ inbound_005 (server * serv, char *word[], const message_tags_data *tags_data)
 
 				g_strfreev (tokens);
 			}
+		} else if (g_strcmp0 (tokname, "UTF8ONLY") == 0)
+		{
+			/* Server requires UTF-8 encoding */
+			serv->utf8only = TRUE;
+		} else if (g_strcmp0 (tokname, "draft/ICON") == 0 ||
+		           g_strcmp0 (tokname, "ICON") == 0)
+		{
+			/* Network icon URL (draft/ICON ISUPPORT token) */
+			g_free (serv->network_icon_url);
+			serv->network_icon_url = g_strdup (tokvalue);
 		}
 
 		g_free (tokname);
