@@ -323,4 +323,9 @@ textentry *gtk_xtext_set_msgid (xtext_buffer *buf, textentry *ent, const char *m
 guint64 gtk_xtext_get_entry_id (textentry *ent);
 const char *gtk_xtext_get_msgid (textentry *ent);
 
+/* Entry accessors (textentry is opaque outside xtext.c) */
+textentry *gtk_xtext_buffer_get_last (xtext_buffer *buf);
+textentry *gtk_xtext_buffer_get_first (xtext_buffer *buf);
+textentry *gtk_xtext_entry_get_next (textentry *ent);
+
 #endif

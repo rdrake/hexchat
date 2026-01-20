@@ -1904,6 +1904,7 @@ process_multiline_batch (server *serv, batch_info *batch)
 		if (first_msg)
 		{
 			tags_data.timestamp = first_msg->timestamp;
+			tags_data.msgid = first_msg->msgid;  /* For IRCv3 msgid tracking (Phase 1) */
 			if (first_msg->tags)
 				tags_data.all_tags = first_msg->tags;
 		}

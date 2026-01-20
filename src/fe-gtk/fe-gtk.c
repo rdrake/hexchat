@@ -854,15 +854,15 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 	 * (e.g., multiline batches, text with embedded newlines). We associate
 	 * the msgid with the FIRST entry, which is the logical "start" of the message.
 	 */
-	first_new_entry = sess->res->buffer->text_last;  /* Entry before our new ones */
+	first_new_entry = gtk_xtext_buffer_get_last (sess->res->buffer);  /* Entry before our new ones */
 
 	PrintTextRaw (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
 
 	/* Find the first entry we just created */
 	if (first_new_entry)
-		first_new_entry = first_new_entry->next;  /* First new entry is after the old last */
+		first_new_entry = gtk_xtext_entry_get_next (first_new_entry);  /* First new entry is after the old last */
 	else
-		first_new_entry = sess->res->buffer->text_first;  /* Buffer was empty */
+		first_new_entry = gtk_xtext_buffer_get_first (sess->res->buffer);  /* Buffer was empty */
 
 	/* Associate msgid with the first entry of this message */
 	if (sess->current_msgid && first_new_entry)

@@ -3083,8 +3083,14 @@ gtk_xtext_render_str (GtkXText * xtext, int y, textentry * ent,
 			switch (str[i])
 			{
 			case '\n':
-			/*case ATTR_BEEP:*/
+				/* IRCv3 multiline: newline in entry means hard line break.
+				 * Don't render the newline - it's a line separator, not content.
+				 * Flush what we have and skip past the newline. */
+				RENDER_FLUSH;
+				pstr += j + 1;
+				j = 0;
 				break;
+			/*case ATTR_BEEP:*/
 			case ATTR_REVERSE:
 				RENDER_FLUSH;
 				pstr += j + 1;
@@ -3301,8 +3307,8 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 	int emphasis = 0;
 	GSList *lp;
 
-	/* single liners */
-	if (win_width >= ent->str_width + ent->indent)
+	/* single liners - but only if no embedded newlines (multiline messages) */
+	if (win_width >= ent->str_width + ent->indent && !memchr (ent->str, '\n', ent->str_len))
 		return ent->str_len;
 
 	/* it does happen! */
@@ -3369,6 +3375,11 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 				limit_offset++;
 				str++;
 				break;
+			case '\n':
+				/* IRCv3 multiline: embedded newline forces a hard line break */
+				str++;  /* consume the newline */
+				ret = str - orig_str;
+				goto done;
 			default:
 			def:
 				mbl = charlen (str);
@@ -5351,4 +5362,34 @@ const char *
 gtk_xtext_get_msgid (textentry *ent)
 {
 	return ent ? ent->msgid : NULL;
+}
+
+/**
+ * Get the last entry in a buffer.
+ * Returns NULL if buf is NULL or empty.
+ */
+textentry *
+gtk_xtext_buffer_get_last (xtext_buffer *buf)
+{
+	return buf ? buf->text_last : NULL;
+}
+
+/**
+ * Get the first entry in a buffer.
+ * Returns NULL if buf is NULL or empty.
+ */
+textentry *
+gtk_xtext_buffer_get_first (xtext_buffer *buf)
+{
+	return buf ? buf->text_first : NULL;
+}
+
+/**
+ * Get the next entry in the linked list.
+ * Returns NULL if ent is NULL or is the last entry.
+ */
+textentry *
+gtk_xtext_entry_get_next (textentry *ent)
+{
+	return ent ? ent->next : NULL;
 }
