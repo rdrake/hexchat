@@ -633,6 +633,9 @@ mg_unpopulate (session *sess)
 	gui = sess->gui;
 	res = sess->res;
 
+	if (!gui || !res)
+		return;
+
 	res->input_text = g_strdup (SPELL_ENTRY_GET_TEXT (gui->input_box));
 	res->topic_text = g_strdup (hc_entry_get_text (gui->topic_entry));
 	res->limit_text = g_strdup (hc_entry_get_text (gui->limit_entry));
@@ -923,7 +926,7 @@ mg_populate_userlist (session *sess)
 	if (!sess)
 		sess = current_tab;
 
-	if (is_session (sess))
+	if (is_session (sess) && sess->gui && sess->res)
 	{
 		if (sess->type == SESS_DIALOG)
 			mg_set_access_icon (sess->gui, NULL, sess->server->is_away);
@@ -945,8 +948,13 @@ mg_populate (session *sess)
 	session_gui *gui = sess->gui;
 	restore_gui *res = sess->res;
 	int i, render = TRUE;
-	guint16 vis = gui->ul_hidden;
+	guint16 vis;
 	GtkAllocation allocation;
+
+	if (!gui || !res)
+		return;
+
+	vis = gui->ul_hidden;
 
 	switch (sess->type)
 	{
@@ -3833,6 +3841,10 @@ mg_switch_tab_cb (chanview *cv, chan *ch, int tag, gpointer ud)
 
 	if (tag == TAG_IRC)
 	{
+		/* Validate session is still in the session list before using it */
+		if (!is_session (sess))
+			return;
+
 		if (active_tab != old)
 		{
 			if (old && current_tab)
@@ -4498,6 +4510,19 @@ fe_server_callback (server *serv)
 void
 fe_session_callback (session *sess)
 {
+	/* Remove the tab from the channel view FIRST, before freeing anything.
+	 * This prevents the tab from being clicked while the session is being destroyed. */
+	if (sess->res->tab)
+	{
+		/* Clear current_tab if it points to this session, so mg_switch_tab_cb
+		 * doesn't try to mg_unpopulate() a session that's being destroyed */
+		if (current_tab == sess)
+			current_tab = NULL;
+
+		chan_remove (sess->res->tab, TRUE);
+		sess->res->tab = NULL;
+	}
+
 	gtk_xtext_buffer_free (sess->res->buffer);
 	g_object_unref (G_OBJECT (sess->res->user_model));
 

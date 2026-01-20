@@ -648,6 +648,52 @@ cv_tree_move_focus (chanview *cv, gboolean relative, int num)
 static void
 cv_tree_remove (chan *ch)
 {
+	chanview *cv = ch->cv;
+	treeview *tv = (treeview *)cv;
+	guint n_items, i;
+	HcChanItem *item;
+	GListStore *store;
+	chan *parent_ch;
+
+	if (!tv->root_store)
+		return;
+
+	/* Determine which store to search */
+	parent_ch = cv->func_get_parent ? cv->func_get_parent (ch) : NULL;
+
+	if (parent_ch)
+	{
+		/* It's a child item - find parent's children store */
+		HcChanItem *parent_item = cv_tree_find_server_item (cv, ch->family);
+		if (!parent_item || !parent_item->children)
+		{
+			if (parent_item)
+				g_object_unref (parent_item);
+			return;
+		}
+		store = parent_item->children;
+		g_object_unref (parent_item);
+	}
+	else
+	{
+		/* It's a root (server) item */
+		store = tv->root_store;
+	}
+
+	/* Find and remove the item */
+	n_items = g_list_model_get_n_items (G_LIST_MODEL (store));
+	for (i = 0; i < n_items; i++)
+	{
+		item = g_list_model_get_item (G_LIST_MODEL (store), i);
+		if (item && item->ch == ch)
+		{
+			g_object_unref (item);
+			g_list_store_remove (store, i);
+			return;
+		}
+		if (item)
+			g_object_unref (item);
+	}
 }
 
 static void
