@@ -1,0 +1,787 @@
+# xtext Buffer Modernization Plan
+
+## Executive Summary
+
+The xtext widget's append-only linked list buffer is architecturally inadequate for modern IRC features. This document outlines a comprehensive modernization plan to support IRCv3 features while addressing longstanding technical debt.
+
+---
+
+## 1. Current Architecture Limitations
+
+### What We Have
+- **Doubly-linked list** of `textentry` structs
+- **Append-only insertion** at tail
+- **Removal only from ends** (scrollback pruning)
+- **Line numbers** are cumulative subline counts from head
+- **No entry identification** beyond memory address
+- **No modification support** after insertion
+
+### What IRCv3 Features Need
+
+| Feature | Requirement | Current Support |
+|---------|-------------|-----------------|
+| Chathistory (older) | Prepend at head | ❌ No |
+| Chathistory (gaps) | Insert at arbitrary position by timestamp | ❌ No |
+| Message redaction | Find by msgid, replace content | ❌ No |
+| Echo-message | Update entry state (pending → confirmed) | ❌ No |
+| Reactions | Attach metadata to existing entry | ❌ No |
+| Reply/threading | Find entry by msgid, scroll to it | ❌ No |
+| Read marker | Track position that survives insertions | ⚠️ Partial (breaks on insert) |
+| Multiline | Cohesive multi-line entry | ⚠️ Partial (word-wrap exists) |
+
+---
+
+## 2. Proposed Architecture
+
+### 2.1 Entry Identification
+
+**Current:** Entries identified only by memory pointer (unstable reference)
+
+**Proposed:** Each entry has a stable identifier
+
+```c
+typedef struct textentry {
+    /* NEW: Stable identification */
+    char *msgid;              /* Server-assigned message ID (may be NULL) */
+    guint64 entry_id;         /* Local unique ID (always set, monotonic) */
+    time_t timestamp;         /* Message timestamp (for ordering) */
+
+    /* Existing fields... */
+    textentry *next, *prev;
+    unsigned char *str;
+    // ...
+} textentry;
+```
+
+**Benefits:**
+- Find entries by msgid in O(1) via hash table
+- Stable references for markers, selections, plugins
+- Entry survives content modification
+
+### 2.2 Indexed Access
+
+**Current:** O(n) traversal to find entry by line number
+
+**Proposed:** Hybrid structure with O(log n) access
+
+```c
+typedef struct xtext_buffer {
+    /* Linked list (for sequential traversal) */
+    textentry *text_first, *text_last;
+
+    /* NEW: Hash tables for O(1) lookup */
+    GHashTable *entries_by_msgid;   /* msgid string → textentry* */
+    GHashTable *entries_by_id;      /* entry_id → textentry* */
+
+    /* NEW: Ordered index for timestamp-based insertion */
+    GSequence *entries_by_time;     /* Sorted by timestamp, O(log n) insert */
+
+    /* Existing fields... */
+} xtext_buffer;
+```
+
+**GSequence** (GLib's balanced tree):
+- O(log n) insertion at sorted position
+- O(log n) lookup by position
+- Bidirectional iteration
+- Perfect for timestamp-ordered insertion
+
+### 2.3 Insertion Modes
+
+**Current:** Only `gtk_xtext_append()`
+
+**Proposed:** Multiple insertion functions
+
+```c
+/* Append at end (existing behavior, optimized path) */
+void gtk_xtext_append(xtext_buffer *buf, const char *text, int len, time_t stamp);
+
+/* Prepend at beginning (for chathistory older messages) */
+void gtk_xtext_prepend(xtext_buffer *buf, const char *text, int len, time_t stamp);
+
+/* Insert at sorted position by timestamp (for gap filling) */
+void gtk_xtext_insert_sorted(xtext_buffer *buf, const char *text, int len,
+                              time_t stamp, const char *msgid);
+
+/* Batch insert (for chathistory batches - more efficient) */
+void gtk_xtext_insert_batch(xtext_buffer *buf, GPtrArray *entries,
+                            xtext_insert_position pos);
+
+typedef enum {
+    XTEXT_INSERT_APPEND,    /* At end */
+    XTEXT_INSERT_PREPEND,   /* At beginning */
+    XTEXT_INSERT_SORTED     /* By timestamp */
+} xtext_insert_position;
+```
+
+### 2.4 Entry Modification
+
+**Current:** No modification support
+
+**Proposed:** Modify existing entries by reference
+
+```c
+/* Find entry by msgid */
+textentry *gtk_xtext_find_by_msgid(xtext_buffer *buf, const char *msgid);
+
+/* Modify entry content (for redaction) */
+void gtk_xtext_entry_set_text(xtext_buffer *buf, textentry *ent,
+                               const char *new_text, int len);
+
+/* Modify entry metadata */
+void gtk_xtext_entry_set_state(xtext_buffer *buf, textentry *ent,
+                                xtext_entry_state state);
+
+typedef enum {
+    XTEXT_STATE_NORMAL,
+    XTEXT_STATE_PENDING,     /* Echo-message: awaiting confirmation */
+    XTEXT_STATE_REDACTED,    /* Message was deleted */
+    XTEXT_STATE_EDITED       /* Message was edited (future) */
+} xtext_entry_state;
+
+/* Attach metadata (for reactions, etc.) */
+void gtk_xtext_entry_set_metadata(xtext_buffer *buf, textentry *ent,
+                                   const char *key, gpointer value);
+```
+
+### 2.5 Scroll Position Stability
+
+**Current:** Scroll position is absolute line number (breaks on insert)
+
+**Proposed:** Anchor-based scroll position
+
+```c
+typedef struct xtext_scroll_anchor {
+    textentry *anchor_entry;   /* Entry to anchor to */
+    int subline_offset;        /* Subline within entry */
+    int pixel_offset;          /* Pixel offset for smooth scroll */
+    gboolean anchor_to_bottom; /* Special: always show newest */
+} xtext_scroll_anchor;
+
+/* Save current scroll state */
+void gtk_xtext_save_scroll_anchor(xtext_buffer *buf, xtext_scroll_anchor *anchor);
+
+/* Restore scroll state after buffer modification */
+void gtk_xtext_restore_scroll_anchor(xtext_buffer *buf, const xtext_scroll_anchor *anchor);
+```
+
+**Behavior:**
+- Before insert/modify: save anchor
+- After operation: restore anchor
+- If anchor entry deleted: fall back to nearest neighbor
+- If `anchor_to_bottom`: always scroll to show newest
+
+### 2.6 Reference Stability
+
+**Current:** Markers/selections use entry pointers (break on modification)
+
+**Proposed:** Use entry IDs for all references
+
+```c
+typedef struct xtext_buffer {
+    /* NEW: Marker by entry ID instead of pointer */
+    guint64 marker_entry_id;      /* Entry ID of marker position */
+    int marker_subline;           /* Subline within that entry */
+
+    /* Selection by entry ID */
+    guint64 select_start_entry_id;
+    guint64 select_end_entry_id;
+    int select_start_offset, select_end_offset;
+
+    /* ... */
+} xtext_buffer;
+```
+
+---
+
+## 3. Implementation Phases
+
+### Phase 1: Entry Identification (Foundation)
+
+**Goal:** Add stable IDs without changing buffer structure
+
+**Changes:**
+1. Add `msgid`, `entry_id`, `timestamp` fields to `textentry`
+2. Add `entries_by_msgid` hash table to `xtext_buffer`
+3. Generate `entry_id` on entry creation (monotonic counter)
+4. Populate hash table in `gtk_xtext_append_entry()`
+5. Add `gtk_xtext_find_by_msgid()` lookup function
+
+**Risk:** Low - additive change, no existing behavior modified
+
+**Files:**
+- `xtext.h` - struct changes
+- `xtext.c` - hash table management, ID generation
+
+### Phase 2: Scroll Anchor System
+
+**Goal:** Make scroll position survive content changes
+
+**Changes:**
+1. Implement `xtext_scroll_anchor` struct
+2. Add `gtk_xtext_save_scroll_anchor()` / `gtk_xtext_restore_scroll_anchor()`
+3. Convert internal scroll state to use anchors
+4. Update `gtk_xtext_adjustment_changed()` to work with anchors
+
+**Risk:** Medium - changes scroll behavior, needs thorough testing
+
+**Files:**
+- `xtext.h` - anchor struct
+- `xtext.c` - scroll functions
+
+### Phase 3: Insertion Modes
+
+**Goal:** Support prepend and sorted insert
+
+**Changes:**
+1. Add `GSequence *entries_by_time` for sorted access
+2. Implement `gtk_xtext_prepend()`
+3. Implement `gtk_xtext_insert_sorted()`
+4. Update line number calculation to handle non-tail insertion
+5. Implement batch insert for efficiency
+
+**Risk:** High - significant logic changes, extensive testing needed
+
+**Files:**
+- `xtext.h` - new function declarations
+- `xtext.c` - insertion logic, line numbering
+
+### Phase 4: Entry Modification
+
+**Goal:** Support modifying existing entries
+
+**Changes:**
+1. Implement `gtk_xtext_entry_set_text()`
+2. Implement `gtk_xtext_entry_set_state()`
+3. Add state rendering (pending = muted, redacted = strikethrough)
+4. Handle subline recalculation on text change
+5. Trigger appropriate redraws
+
+**Risk:** Medium - isolated to modification path
+
+**Files:**
+- `xtext.h` - modification API
+- `xtext.c` - modification logic, rendering changes
+
+### Phase 5: Reference Migration
+
+**Goal:** Use entry IDs for all internal references
+
+**Changes:**
+1. Convert `marker_pos` from pointer to entry ID
+2. Convert selection state to use entry IDs
+3. Update all code that compares entry pointers
+4. Add fallback behavior when referenced entry is deleted
+
+**Risk:** Medium - touches many locations, but straightforward
+
+**Files:**
+- `xtext.h` - state struct changes
+- `xtext.c` - reference handling throughout
+
+### Phase 6: Performance Optimization
+
+**Goal:** Ensure acceptable performance with new architecture
+
+**Changes:**
+1. Profile insertion/lookup performance
+2. Optimize GSequence usage patterns
+3. Consider caching strategies for hot paths
+4. Batch operations where possible
+5. Lazy recalculation of line numbers
+
+**Risk:** Low - optimization pass, no functional changes
+
+---
+
+## 4. API Changes Summary
+
+### New Public Functions
+
+```c
+/* Entry lookup */
+textentry *gtk_xtext_find_by_msgid(xtext_buffer *buf, const char *msgid);
+textentry *gtk_xtext_find_by_id(xtext_buffer *buf, guint64 entry_id);
+
+/* Insertion modes */
+void gtk_xtext_prepend(xtext_buffer *buf, const char *text, int len, time_t stamp);
+void gtk_xtext_insert_sorted(xtext_buffer *buf, const char *text, int len,
+                              time_t stamp, const char *msgid);
+void gtk_xtext_insert_batch(xtext_buffer *buf, GPtrArray *entries,
+                            xtext_insert_position pos);
+
+/* Entry modification */
+void gtk_xtext_entry_set_text(xtext_buffer *buf, textentry *ent,
+                               const char *new_text, int len);
+void gtk_xtext_entry_set_state(xtext_buffer *buf, textentry *ent,
+                                xtext_entry_state state);
+
+/* Scroll anchoring */
+void gtk_xtext_save_scroll_anchor(xtext_buffer *buf, xtext_scroll_anchor *anchor);
+void gtk_xtext_restore_scroll_anchor(xtext_buffer *buf,
+                                      const xtext_scroll_anchor *anchor);
+
+/* Scroll to entry */
+void gtk_xtext_scroll_to_entry(xtext_buffer *buf, textentry *ent, int subline);
+void gtk_xtext_scroll_to_msgid(xtext_buffer *buf, const char *msgid);
+```
+
+### Deprecations
+
+```c
+/* These continue to work but are discouraged for new code */
+// Direct pointer comparisons for position (use entry_id instead)
+// Assuming scroll position is stable across modifications
+```
+
+---
+
+## 5. Integration with IRCv3 Features
+
+### Replies (draft/reply)
+
+**Protocol:** Incoming PRIVMSG has tag `+draft/reply=<target_msgid>`
+
+**Data Model:**
+```c
+typedef struct textentry {
+    /* ... existing fields ... */
+
+    /* Reply reference */
+    char *reply_to_msgid;        /* msgid this message is replying to */
+    char *reply_preview;         /* Cached preview text of original (for rendering) */
+} textentry;
+```
+
+**Implementation:**
+```c
+/* When receiving a message with +draft/reply tag */
+void handle_reply_message(session *sess, const char *text, const char *reply_to_msgid,
+                          message_tags_data *tags) {
+    textentry *original = NULL;
+    char *preview = NULL;
+
+    /* Find the original message being replied to */
+    if (reply_to_msgid) {
+        original = gtk_xtext_find_by_msgid(sess->xtext->buffer, reply_to_msgid);
+        if (original) {
+            /* Extract preview (first N chars, strip formatting) */
+            preview = gtk_xtext_entry_get_preview(original, 50);
+        }
+    }
+
+    /* Append the reply with reference metadata */
+    textentry *ent = gtk_xtext_append_ex(sess->xtext->buffer, text, -1,
+                                          tags->timestamp, tags->msgid);
+    if (ent && reply_to_msgid) {
+        ent->reply_to_msgid = g_strdup(reply_to_msgid);
+        ent->reply_preview = preview;  /* May be NULL if original not found */
+    }
+}
+
+/* Rendering: Show reply context above message */
+void gtk_xtext_render_reply_context(GtkXText *xtext, textentry *ent, int x, int y) {
+    if (!ent->reply_to_msgid)
+        return;
+
+    /* Draw reply indicator: "↩ In reply to <nick>: <preview>" */
+    char *context;
+    if (ent->reply_preview) {
+        context = g_strdup_printf("↩ %s", ent->reply_preview);
+    } else {
+        context = g_strdup("↩ [original message not found]");
+    }
+
+    /* Render in muted color, smaller or italic */
+    backend_draw_text_emph(xtext, x, y - xtext->fontsize,
+                           context, strlen(context), -1, EMPH_ITAL);
+    g_free(context);
+}
+
+/* Click handling: Jump to original */
+void handle_reply_click(session *sess, textentry *ent) {
+    if (!ent->reply_to_msgid)
+        return;
+
+    textentry *original = gtk_xtext_find_by_msgid(sess->xtext->buffer,
+                                                   ent->reply_to_msgid);
+    if (original) {
+        gtk_xtext_scroll_to_entry(sess->xtext->buffer, original, 0);
+        gtk_xtext_flash_entry(sess->xtext->buffer, original, 500);  /* Brief highlight */
+    } else {
+        /* Original not in buffer - could fetch via chathistory AROUND */
+        PrintText(sess, "Original message not in scrollback.\n");
+    }
+}
+```
+
+**Rendering Design:**
+```
+┌─────────────────────────────────────────────────┐
+│ [12:34] ↩ <alice> I think we should...          │  ← Reply context (muted, clickable)
+│ [12:35] <bob> Agreed! Let's do that.            │  ← The reply message
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+### Reactions (draft/react)
+
+**Protocol:** TAGMSG with `+draft/react=<emoji>;msgid=<target_msgid>`
+
+**Data Model:**
+```c
+/* Reaction from a single user */
+typedef struct {
+    char *emoji;         /* The reaction emoji (e.g., "👍", ":+1:") */
+    char *nick;          /* Who reacted */
+    char *account;       /* Account name if available */
+    time_t timestamp;    /* When reaction was added */
+} xtext_reaction;
+
+/* Aggregated reactions for an entry */
+typedef struct {
+    GHashTable *by_emoji;    /* emoji string → GSList of xtext_reaction* */
+    int total_count;         /* Total reaction count */
+} xtext_reactions;
+
+typedef struct textentry {
+    /* ... existing fields ... */
+
+    xtext_reactions *reactions;  /* NULL until first reaction received */
+} textentry;
+```
+
+**Implementation:**
+```c
+/* When receiving a reaction TAGMSG */
+void handle_reaction(session *sess, const char *target_msgid, const char *emoji,
+                     const char *nick, const char *account, time_t timestamp) {
+    textentry *ent = gtk_xtext_find_by_msgid(sess->xtext->buffer, target_msgid);
+    if (!ent) {
+        /* Target message not in buffer - ignore or queue */
+        return;
+    }
+
+    /* Add reaction to entry */
+    gtk_xtext_entry_add_reaction(sess->xtext->buffer, ent, emoji, nick,
+                                  account, timestamp);
+}
+
+void gtk_xtext_entry_add_reaction(xtext_buffer *buf, textentry *ent,
+                                   const char *emoji, const char *nick,
+                                   const char *account, time_t timestamp) {
+    /* Lazy-allocate reactions struct */
+    if (!ent->reactions) {
+        ent->reactions = g_new0(xtext_reactions, 1);
+        ent->reactions->by_emoji = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                                          g_free, NULL);
+    }
+
+    /* Create reaction record */
+    xtext_reaction *react = g_new0(xtext_reaction, 1);
+    react->emoji = g_strdup(emoji);
+    react->nick = g_strdup(nick);
+    react->account = account ? g_strdup(account) : NULL;
+    react->timestamp = timestamp;
+
+    /* Add to aggregation */
+    GSList *list = g_hash_table_lookup(ent->reactions->by_emoji, emoji);
+    list = g_slist_append(list, react);
+    g_hash_table_replace(ent->reactions->by_emoji, g_strdup(emoji), list);
+    ent->reactions->total_count++;
+
+    /* Trigger redraw of this entry */
+    gtk_xtext_entry_invalidate(buf, ent);
+}
+
+/* Remove reaction (for unreact) */
+void gtk_xtext_entry_remove_reaction(xtext_buffer *buf, textentry *ent,
+                                      const char *emoji, const char *nick) {
+    if (!ent->reactions)
+        return;
+
+    GSList *list = g_hash_table_lookup(ent->reactions->by_emoji, emoji);
+    for (GSList *iter = list; iter; iter = iter->next) {
+        xtext_reaction *react = iter->data;
+        if (strcmp(react->nick, nick) == 0) {
+            list = g_slist_remove(list, react);
+            xtext_reaction_free(react);
+            ent->reactions->total_count--;
+            break;
+        }
+    }
+
+    if (list)
+        g_hash_table_replace(ent->reactions->by_emoji, g_strdup(emoji), list);
+    else
+        g_hash_table_remove(ent->reactions->by_emoji, emoji);
+
+    gtk_xtext_entry_invalidate(buf, ent);
+}
+
+/* Rendering: Show reactions below message */
+void gtk_xtext_render_reactions(GtkXText *xtext, textentry *ent, int x, int y) {
+    if (!ent->reactions || ent->reactions->total_count == 0)
+        return;
+
+    int rx = x;
+    GHashTableIter iter;
+    gpointer key, value;
+
+    g_hash_table_iter_init(&iter, ent->reactions->by_emoji);
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        const char *emoji = key;
+        GSList *reactors = value;
+        int count = g_slist_length(reactors);
+
+        /* Draw: [emoji count] */
+        char *badge = g_strdup_printf("%s %d", emoji, count);
+        int badge_width = gtk_xtext_text_width(xtext, badge, strlen(badge));
+
+        /* Draw rounded badge background */
+        xtext_draw_bg(xtext, rx, y, badge_width + 8, xtext->fontsize + 4);
+        backend_draw_text(xtext, rx + 4, y + 2, badge, strlen(badge), badge_width);
+
+        rx += badge_width + 12;  /* Space between badges */
+        g_free(badge);
+    }
+}
+```
+
+**Rendering Design:**
+```
+┌─────────────────────────────────────────────────┐
+│ [12:34] <alice> This is amazing news!           │
+│         [👍 3] [❤️ 2] [🎉 1]                    │  ← Reaction badges
+└─────────────────────────────────────────────────┘
+```
+
+**Tooltip on hover:** Show who reacted
+```
+👍 alice, bob, charlie
+```
+
+**Click action:** Add same reaction (if supported) or show reactor list
+
+---
+
+### Chathistory
+
+```c
+/* On receiving chathistory batch */
+void chathistory_process_batch(server *serv, batch_info *batch) {
+    // Save scroll position
+    xtext_scroll_anchor anchor;
+    gtk_xtext_save_scroll_anchor(sess->xtext->buffer, &anchor);
+
+    // Insert messages sorted by timestamp
+    for (msg in batch->messages) {
+        gtk_xtext_insert_sorted(buf, msg->text, msg->len,
+                                msg->timestamp, msg->msgid);
+    }
+
+    // Restore scroll position (user sees no jump)
+    gtk_xtext_restore_scroll_anchor(sess->xtext->buffer, &anchor);
+}
+```
+
+### Message Redaction
+
+```c
+/* On receiving REDACT command */
+void handle_redact(session *sess, const char *msgid, const char *reason) {
+    textentry *ent = gtk_xtext_find_by_msgid(sess->xtext->buffer, msgid);
+    if (ent) {
+        char *redacted_text = g_strdup_printf("[Message deleted%s%s]",
+            reason ? ": " : "", reason ? reason : "");
+        gtk_xtext_entry_set_text(sess->xtext->buffer, ent, redacted_text, -1);
+        gtk_xtext_entry_set_state(sess->xtext->buffer, ent, XTEXT_STATE_REDACTED);
+        g_free(redacted_text);
+    }
+}
+```
+
+### Echo-Message
+
+```c
+/* On sending message (before echo) */
+void send_message(session *sess, const char *text) {
+    // Display with pending state
+    textentry *ent = gtk_xtext_append_with_state(sess->xtext->buffer, text, -1,
+                                                  time(NULL), XTEXT_STATE_PENDING);
+    // Track pending message for echo correlation
+    pending_msg_add(sess, ent->entry_id, expected_msgid);
+}
+
+/* On receiving echo */
+void handle_echo(session *sess, const char *msgid, const char *text) {
+    guint64 entry_id = pending_msg_find(sess, msgid);
+    if (entry_id) {
+        textentry *ent = gtk_xtext_find_by_id(sess->xtext->buffer, entry_id);
+        if (ent) {
+            gtk_xtext_entry_set_state(sess->xtext->buffer, ent, XTEXT_STATE_NORMAL);
+            pending_msg_remove(sess, msgid);
+        }
+    }
+}
+```
+
+### Reply Threading
+
+```c
+/* On clicking reply reference */
+void handle_reply_click(session *sess, const char *reply_to_msgid) {
+    textentry *ent = gtk_xtext_find_by_msgid(sess->xtext->buffer, reply_to_msgid);
+    if (ent) {
+        gtk_xtext_scroll_to_entry(sess->xtext->buffer, ent, 0);
+        // Briefly highlight the entry
+        gtk_xtext_flash_entry(sess->xtext->buffer, ent);
+    }
+}
+```
+
+---
+
+## 6. Testing Strategy
+
+### Unit Tests
+
+1. **Entry ID generation**: Verify monotonic, unique
+2. **Hash table operations**: Insert, lookup, remove by msgid
+3. **Sorted insertion**: Verify timestamp ordering
+4. **Scroll anchor**: Save/restore across various operations
+5. **Entry modification**: Text change, state change, redraw
+
+### Integration Tests
+
+1. **Chathistory prepend**: Load older history, verify order
+2. **Chathistory gap fill**: Insert messages in middle
+3. **Redaction**: Delete message, verify display
+4. **Echo-message**: Send, see pending, receive echo, see confirmed
+5. **Scroll stability**: Modify buffer while scrolled mid-way
+
+### Performance Tests
+
+1. **Large buffer**: 100k+ entries, insertion at head
+2. **Rapid insertion**: Batch insert 1000 entries
+3. **Scroll performance**: Smooth scrolling with frequent inserts
+4. **Memory usage**: Compare old vs new architecture
+
+---
+
+## 7. Migration Path
+
+### Backward Compatibility
+
+- Existing `gtk_xtext_append()` continues to work unchanged
+- Existing scrollback files remain compatible
+- Plugins using xtext API see no breakage
+- New features opt-in to new APIs
+
+### Deprecation Timeline
+
+1. **Phase 1-3**: New APIs coexist with old
+2. **Phase 4-5**: Internal migration to new model
+3. **Future**: Document deprecation of pointer-based references
+
+---
+
+## 8. Estimated Effort
+
+| Phase | Effort | Risk | Dependencies |
+|-------|--------|------|--------------|
+| Phase 1: Entry ID | 2-3 days | Low | None |
+| Phase 2: Scroll Anchor | 3-4 days | Medium | Phase 1 |
+| Phase 3: Insertion Modes | 5-7 days | High | Phase 1, 2 |
+| Phase 4: Entry Modification | 3-4 days | Medium | Phase 1 |
+| Phase 5: Reference Migration | 2-3 days | Medium | Phase 1 |
+| Phase 6: Optimization | 2-3 days | Low | All above |
+
+**Total: ~3-4 weeks of focused work**
+
+---
+
+## 9. Alternatives Considered
+
+### Alternative 1: Separate History Buffer
+
+**Idea:** Keep append-only buffer, add separate prepend buffer for history
+
+**Rejected because:**
+- Complicates rendering (two buffers)
+- Doesn't solve modification/redaction
+- Gap filling still impossible
+- More complexity, less capability
+
+### Alternative 2: Replace xtext Entirely
+
+**Idea:** Use GtkTextView or other existing widget
+
+**Rejected because:**
+- GtkTextView designed for editing, not chat display
+- Would lose HexChat-specific features (mIRC colors, etc.)
+- Massive rewrite with uncertain benefits
+- xtext is fundamentally sound, just needs enhancement
+
+### Alternative 3: Virtual Scrolling
+
+**Idea:** Don't store rendered text, regenerate on demand
+
+**Rejected because:**
+- Requires storing source data separately
+- Increases memory (source + render cache)
+- Complicates selection, search, export
+- Not addressing core issue (insertion)
+
+---
+
+## 10. Open Questions
+
+1. **Timestamp collisions**: What if two messages have identical timestamps?
+   - Proposed: Use (timestamp, entry_id) tuple for ordering
+
+2. **Large gap fills**: What if chathistory returns 1000+ messages for a gap?
+   - Proposed: Batch insert with single redraw
+
+3. **Scrollback pruning**: How does max_lines interact with sorted insert?
+   - Proposed: Prune from oldest regardless of insert position
+
+4. **Plugin API**: Should plugins get access to new APIs?
+   - Proposed: Yes, expose find/modify for scripting
+
+---
+
+## Appendix: Current textentry struct
+
+```c
+/* Current (44 bytes, optimized) */
+struct textentry {
+    textentry *next, *prev;      // 16 bytes
+    unsigned char *str;          // 8 bytes (inline allocated)
+    time_t stamp;                // 8 bytes
+    gint16 str_width;            // 2 bytes
+    gint16 str_len;              // 2 bytes
+    gint16 mark_start, mark_end; // 4 bytes
+    gint16 indent;               // 2 bytes
+    gint16 left_len;             // 2 bytes
+    GSList *slp;                 // 8 bytes
+    GSList *sublines;            // 8 bytes
+    guchar tag;                  // 1 byte
+    guchar pad1, pad2;           // 2 bytes
+    GList *marks;                // 8 bytes
+};
+
+/* Proposed additions */
+struct textentry {
+    /* ... existing fields ... */
+
+    char *msgid;                 // 8 bytes (server message ID, may be NULL)
+    guint64 entry_id;            // 8 bytes (local unique ID)
+    guint8 state;                // 1 byte (normal/pending/redacted/edited)
+    guint8 flags;                // 1 byte (reserved)
+    GHashTable *metadata;        // 8 bytes (reactions, etc. - lazy allocated)
+};
+
+/* New size: ~70 bytes per entry (acceptable overhead) */
+```
