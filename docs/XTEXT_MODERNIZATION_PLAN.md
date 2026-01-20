@@ -321,20 +321,242 @@ Phase 5 (Inline Rendering) ───┼─────────┼───�
 
 ### Phase 4: Entry Modification
 
-**Goal:** Support modifying existing entries
+**Goal:** Support modifying existing entries with full redaction accountability
 
 **Changes:**
 1. Implement `gtk_xtext_entry_set_text()`
 2. Implement `gtk_xtext_entry_set_state()`
-3. Add state rendering (pending = muted, redacted = strikethrough)
+3. Add state rendering:
+   - **Pending** = muted/italic color (theme-aware)
+   - **Redacted** = content REPLACED with placeholder (not strikethrough)
 4. Handle subline recalculation on text change
 5. Trigger appropriate redraws
+6. **Implement redaction accountability per IRCv3 spec**
+
+#### Redaction Accountability Model
+
+Per the draft/message-redaction spec:
+> "It is strongly encouraged that clients provide visible redaction history to users,
+> and that servers provide deletion logs via CHATHISTORY...Clients MAY chose to display
+> the content of redacted messages, if explicitly requested by a user."
+
+**Extended textentry fields for redaction:**
+```c
+typedef struct textentry {
+    /* ... existing fields ... */
+
+    /* State tracking */
+    guint8 state;                    /* NORMAL, PENDING, REDACTED */
+
+    /* Redaction accountability (Phase 4) */
+    char *original_content;          /* Preserved for audit/reveal */
+    char *redacted_by;               /* Nick who issued REDACT */
+    char *redaction_reason;          /* Optional reason from REDACT */
+    time_t redaction_time;           /* When redaction was received */
+} textentry;
+```
+
+**Redaction handling:**
+```c
+void handle_redact(session *sess, const char *msgid, const char *redactor,
+                   const char *reason, time_t redact_time) {
+    textentry *ent = gtk_xtext_find_by_msgid(sess->xtext->buffer, msgid);
+    if (!ent)
+        return;
+
+    /* Preserve original content for accountability */
+    ent->original_content = g_strdup(ent->str);
+    ent->redacted_by = g_strdup(redactor);
+    ent->redaction_reason = reason ? g_strdup(reason) : NULL;
+    ent->redaction_time = redact_time;
+
+    /* REPLACE the visible content with placeholder */
+    char *placeholder = g_strdup_printf("[Message deleted by %s%s%s]",
+        redactor,
+        reason ? ": " : "",
+        reason ? reason : "");
+    gtk_xtext_entry_set_text(sess->xtext->buffer, ent, placeholder, -1);
+    gtk_xtext_entry_set_state(sess->xtext->buffer, ent, XTEXT_STATE_REDACTED);
+    g_free(placeholder);
+}
+```
+
+**User interface for accountability:**
+
+1. **Tooltip on hover:**
+   ```
+   Message deleted by bob at 12:34:05
+   Reason: spam
+   [Right-click to view original content]
+   ```
+
+2. **Context menu on redacted message:**
+   - "Show original content" → Opens dialog or inline expansion
+   - "Copy redaction info" → Copies "[Deleted by X at Y: reason]"
+
+3. **Optional inline reveal:**
+   ```c
+   /* Toggle showing original content */
+   void gtk_xtext_entry_toggle_reveal(xtext_buffer *buf, textentry *ent) {
+       if (ent->state != XTEXT_STATE_REDACTED || !ent->original_content)
+           return;
+
+       if (ent->revealed) {
+           /* Hide again */
+           gtk_xtext_entry_set_text_internal(buf, ent, placeholder);
+           ent->revealed = FALSE;
+       } else {
+           /* Show original with visual warning */
+           char *revealed = g_strdup_printf("[REDACTED - showing original] %s",
+                                            ent->original_content);
+           gtk_xtext_entry_set_text_internal(buf, ent, revealed);
+           g_free(revealed);
+           ent->revealed = TRUE;
+       }
+       gtk_xtext_entry_invalidate(buf, ent);
+   }
+   ```
+
+**Why not strikethrough:**
+- Moderation: deleted content should not be readable by default
+- Privacy: user may have shared sensitive info accidentally
+- Legal: some jurisdictions require actual removal from view
+- Consistency: matches Discord/Slack "[message deleted]" behavior
+
+**But accountability requires:**
+- Original content preserved (not destroyed)
+- Redaction metadata visible (who, when, why)
+- User can reveal original on explicit request
+
+#### Chathistory and Redaction Interaction
+
+Per the spec, chathistory responses handle redacted messages in one of two ways:
+
+**Option A: Excluded entirely**
+- Server omits redacted messages from response
+- Client sees no evidence of deleted content
+- Simpler but less transparent
+
+**Option B: Placeholder + REDACT event (recommended)**
+- Server sends the original message with placeholder content
+- Server includes a REDACT message immediately after (doesn't count towards limit)
+- REDACT inclusion does NOT require `event-playback` capability
+
+**Handling both scenarios:**
+```c
+void chathistory_process_batch(server *serv, batch_info *batch) {
+    /* Process messages in order received (already chronological) */
+    for (int i = 0; i < batch->messages->len; i++) {
+        message_info *msg = g_ptr_array_index(batch->messages, i);
+
+        if (msg->command == CMD_REDACT) {
+            /*
+             * REDACT event in chathistory (doesn't count towards limit)
+             * May arrive even without event-playback capability
+             */
+            textentry *ent = gtk_xtext_find_by_msgid(buf, msg->target_msgid);
+            if (ent) {
+                /* Apply redaction to the just-inserted message */
+                handle_redact(sess, msg->target_msgid, msg->redactor,
+                             msg->reason, msg->timestamp);
+            } else {
+                /*
+                 * REDACT for message not in batch/buffer
+                 * This shouldn't happen per spec but handle gracefully
+                 */
+                log_debug("REDACT for unknown msgid %s", msg->target_msgid);
+            }
+        } else {
+            /*
+             * Normal message - content may already be placeholder
+             * if server chose to hide original
+             */
+            textentry *ent = gtk_xtext_insert_sorted(buf, msg->text, -1,
+                                                      msg->timestamp, msg->msgid);
+
+            /* Check if message is already marked as redacted placeholder */
+            if (msg->is_placeholder) {
+                /* Server sent placeholder instead of original content */
+                ent->state = XTEXT_STATE_REDACTED;
+                ent->original_content = NULL;  /* Original not available */
+                /* REDACT event may follow with metadata */
+            }
+        }
+    }
+}
+```
+
+**Detecting placeholder content:**
+- Server MAY replace content with placeholder text
+- Server MAY strip tags like `msgid` from redacted messages
+- Look for common placeholder patterns: `[REDACTED]`, empty content, etc.
+- Or rely on following REDACT event to mark the state
+
+**When original content is available:**
+- If we see message → REDACT in sequence, we captured the original
+- Store in `original_content` for reveal feature
+- Full accountability preserved
+
+**When only placeholder available:**
+- Server hid original before sending
+- `original_content` stays NULL
+- Reveal feature shows "Original content not available"
+- Still show redaction metadata (who, when, why) from REDACT event
+```
+
+#### Scrollback File Format for Redaction
+
+**Current scrollback format:**
+```
+T 1705780800 *<tab>alice<tab>Hello world
+```
+
+**Extended format with redaction:**
+```
+# Normal message
+T 1705780800 *<tab>alice<tab>Hello world<tab>msgid=abc123
+
+# Redacted message (preserves original for local audit)
+R 1705780900 *<tab>alice<tab>REDACTED<tab>msgid=abc123<tab>redactor=bob<tab>reason=spam<tab>original=Hello world
+```
+
+**Key design decisions:**
+- `R` marker distinguishes redacted entries
+- Original content stored in `original=` field (escaped if contains tabs)
+- Metadata preserved: who redacted, when, why
+- On scrollback load, reconstruct full redaction state
+
+**Alternative: Separate deletion log file:**
+```c
+/* hexchat/deletions/<network>/<target>.log */
+1705780900	abc123	bob	spam	Hello world
+```
+- Keeps scrollback clean
+- Allows deletion log to be separate from message history
+- Matches spec recommendation for "deletion logs"
+
+#### Preferences
+
+```c
+/* User preferences for redaction */
+{"hex_irc_redact_reveal", P_OFFINT(hex_irc_redact_reveal), TYPE_BOOL},
+    /* Allow revealing redacted content (default: TRUE) */
+
+{"hex_irc_redact_preserve", P_OFFINT(hex_irc_redact_preserve), TYPE_BOOL},
+    /* Preserve original in scrollback (default: TRUE) */
+
+{"hex_irc_redact_confirm", P_OFFINT(hex_irc_redact_confirm), TYPE_BOOL},
+    /* Confirm before redacting own messages (default: TRUE) */
+```
 
 **Risk:** Medium - isolated to modification path
 
 **Files:**
-- `xtext.h` - modification API
+- `xtext.h` - modification API, extended textentry
 - `xtext.c` - modification logic, rendering changes
+- `text.c` - scrollback format extensions
+- `menu.c` - context menu for reveal
+- `cfgfiles.c` - redaction preferences
 
 ---
 
@@ -344,13 +566,20 @@ Phase 5 (Inline Rendering) ───┼─────────┼───�
 
 **This is foundational for reactions looking good.** Without it, reaction badges use unreliable font emoji.
 
+**Key principle: Visual consistency.** When sprite rendering is enabled, ALL emoji should use sprites:
+- Unicode emoji in messages (😀, 👍, 🎉) → sprite from Twemoji/etc
+- Reaction badges → same sprites
+- Custom emoji (`:pogchamp:`) → server-provided images
+
+This ensures a user never sees some emojis rendered crisply and others as ugly font glyphs.
+
 **Changes:**
 1. Add emoji sprite cache infrastructure (`xtext_emoji_cache`)
-2. Implement emoji codepoint detection (ZWJ, skin tones, flags)
+2. Implement Unicode emoji codepoint detection (ZWJ, skin tones, flags)
 3. Modify `backend_draw_text_emph()` to interleave text and sprites
 4. Update width calculation to account for inline images
 5. Add custom emoji support (`:name:` → image lookup)
-6. Handle selection/copy with inline images
+6. Handle selection/copy with inline images (copy as Unicode codepoints)
 
 **Structures:**
 ```c
@@ -945,6 +1174,26 @@ Font-based emoji rendering is fundamentally unreliable for a modern chat experie
 ### Solution: Inline Graphical Sprites
 
 Render emojis as actual images inline with text, similar to Discord/Slack/Telegram.
+
+### Critical: Visual Consistency
+
+When sprite rendering is enabled, **ALL emoji must use sprites**:
+
+| Emoji Type | Source | Example |
+|------------|--------|---------|
+| Unicode emoji in text | Twemoji sprites | `I love it! 😀` → sprite for 😀 |
+| Reaction badges | Same Twemoji sprites | `[👍 3]` → sprite for 👍 |
+| Custom emoji | Server-provided images | `:pogchamp:` → custom image |
+
+**Why this matters:**
+- Mixed rendering (some font, some sprite) looks jarring and unprofessional
+- Users expect consistent emoji appearance like Discord/Slack
+- Reactions would look different from inline emoji otherwise
+
+**Copy/paste behavior:**
+- When user copies text containing sprite-rendered emoji, copy the **Unicode codepoints**
+- This ensures paste into other apps works correctly
+- Example: Copy "Hello 😀" → clipboard contains `Hello \U0001F600`
 
 **Architecture:**
 
