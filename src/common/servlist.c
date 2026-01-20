@@ -339,6 +339,7 @@ static const struct defaultserver def[] =
 };
 
 GSList *network_list = 0;
+GSList *sts_policy_list = NULL;
 
 favchannel *
 servlist_favchan_copy (favchannel *fav)
@@ -872,6 +873,10 @@ servlist_cleanup (void)
 		/* Clear OAuth secrets */
 		free_and_clear (net->oauth_client_secret);
 	}
+
+	/* Save and cleanup STS policies */
+	sts_policy_save ();
+	sts_policy_cleanup ();
 }
 
 void
@@ -1135,6 +1140,9 @@ servlist_init (void)
 	if (!network_list)
 		if (!servlist_load ())
 			servlist_load_defaults ();
+
+	/* Load STS policies */
+	sts_policy_init ();
 }
 
 /* check if a charset is known by Iconv */
@@ -1326,4 +1334,198 @@ joinlist_is_in_list (server *serv, char *channel)
 	{
 		return FALSE;
 	}
+}
+
+/* ======================= STS (Strict Transport Security) ======================= */
+
+static void
+sts_policy_free (sts_policy *policy)
+{
+	if (policy)
+	{
+		g_free (policy->host);
+		g_free (policy);
+	}
+}
+
+void
+sts_policy_init (void)
+{
+	char buf[512];
+	char *cfg;
+	FILE *fp;
+
+	cfg = g_build_filename (get_xdir (), "sts.conf", NULL);
+	fp = g_fopen (cfg, "r");
+	g_free (cfg);
+
+	if (!fp)
+		return;
+
+	while (fgets (buf, sizeof (buf), fp))
+	{
+		char *host, *port_str, *expires_str;
+		int port;
+		time_t expires;
+
+		/* Format: host port expires_timestamp */
+		host = strtok (buf, " \t\n");
+		port_str = strtok (NULL, " \t\n");
+		expires_str = strtok (NULL, " \t\n");
+
+		if (!host || !port_str || !expires_str)
+			continue;
+
+		port = atoi (port_str);
+		expires = (time_t) g_ascii_strtoll (expires_str, NULL, 10);
+
+		/* Skip expired policies */
+		if (expires > 0 && expires < time (NULL))
+			continue;
+
+		sts_policy_add (host, port, 0); /* duration=0 since we have absolute expiry */
+		/* Manually set the expiry time from the file */
+		if (sts_policy_list)
+		{
+			sts_policy *policy = sts_policy_list->data;
+			policy->expires = expires;
+		}
+	}
+
+	fclose (fp);
+}
+
+void
+sts_policy_save (void)
+{
+	char *cfg;
+	FILE *fp;
+	GSList *list;
+	time_t now;
+
+	cfg = g_build_filename (get_xdir (), "sts.conf", NULL);
+	fp = g_fopen (cfg, "w");
+	g_free (cfg);
+
+	if (!fp)
+		return;
+
+	now = time (NULL);
+
+	for (list = sts_policy_list; list; list = list->next)
+	{
+		sts_policy *policy = list->data;
+
+		/* Only save non-expired policies with non-zero duration */
+		if (policy->expires == 0)
+			continue; /* Session-only policy */
+		if (policy->expires < now)
+			continue; /* Expired */
+
+		fprintf (fp, "%s %d %" G_GINT64_FORMAT "\n",
+		         policy->host, policy->port, (gint64) policy->expires);
+	}
+
+	fclose (fp);
+}
+
+void
+sts_policy_cleanup (void)
+{
+	g_slist_free_full (sts_policy_list, (GDestroyNotify) sts_policy_free);
+	sts_policy_list = NULL;
+}
+
+sts_policy *
+sts_policy_find (const char *host)
+{
+	GSList *list;
+	time_t now;
+
+	if (!host)
+		return NULL;
+
+	now = time (NULL);
+
+	for (list = sts_policy_list; list; list = list->next)
+	{
+		sts_policy *policy = list->data;
+
+		if (g_ascii_strcasecmp (policy->host, host) == 0)
+		{
+			/* Check if expired */
+			if (policy->expires > 0 && policy->expires < now)
+			{
+				/* Remove expired policy */
+				sts_policy_list = g_slist_remove (sts_policy_list, policy);
+				sts_policy_free (policy);
+				return NULL;
+			}
+			return policy;
+		}
+	}
+
+	return NULL;
+}
+
+void
+sts_policy_add (const char *host, int port, int duration)
+{
+	sts_policy *policy;
+
+	if (!host || port <= 0)
+		return;
+
+	/* Check if policy already exists for this host */
+	policy = sts_policy_find (host);
+	if (policy)
+	{
+		/* Update existing policy */
+		policy->port = port;
+		if (duration > 0)
+			policy->expires = time (NULL) + duration;
+		else if (duration == 0)
+			policy->expires = 0; /* Session-only */
+		return;
+	}
+
+	/* Create new policy */
+	policy = g_new0 (sts_policy, 1);
+	policy->host = g_strdup (host);
+	policy->port = port;
+	if (duration > 0)
+		policy->expires = time (NULL) + duration;
+	else
+		policy->expires = 0; /* Session-only */
+
+	sts_policy_list = g_slist_prepend (sts_policy_list, policy);
+}
+
+void
+sts_policy_remove (const char *host)
+{
+	sts_policy *policy;
+
+	policy = sts_policy_find (host);
+	if (policy)
+	{
+		sts_policy_list = g_slist_remove (sts_policy_list, policy);
+		sts_policy_free (policy);
+	}
+}
+
+gboolean
+sts_policy_check (const char *host, int *tls_port)
+{
+	sts_policy *policy;
+
+	policy = sts_policy_find (host);
+	if (policy)
+	{
+		if (tls_port)
+			*tls_port = policy->port;
+		return TRUE;
+	}
+
+	return FALSE;
 }

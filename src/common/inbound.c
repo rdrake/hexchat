@@ -2334,6 +2334,42 @@ inbound_cap_ls (server *serv, char *nick, char *extensions_str,
 			continue;
 		}
 
+		/* IRCv3 STS (Strict Transport Security) - parse but don't request
+		 * Format: sts=port=6697,duration=2592000
+		 */
+		if (!g_strcmp0 (extension, "sts") && value)
+		{
+			int sts_port = 0;
+			int sts_duration = 0;
+			char **tokens = g_strsplit (value, ",", 0);
+			int j;
+
+			for (j = 0; tokens[j]; j++)
+			{
+				if (g_str_has_prefix (tokens[j], "port="))
+					sts_port = atoi (tokens[j] + 5);
+				else if (g_str_has_prefix (tokens[j], "duration="))
+					sts_duration = atoi (tokens[j] + 9);
+			}
+			g_strfreev (tokens);
+
+			if (sts_port > 0)
+			{
+				/* Store the STS policy */
+				sts_policy_add (serv->hostname, sts_port, sts_duration);
+
+				/* If we're on a non-TLS connection, we need to upgrade */
+				if (!serv->ssl)
+				{
+					serv->sts_upgrade_port = sts_port;
+					EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, serv->server_session,
+						"STS policy received - upgrading to TLS", NULL, NULL, NULL,
+						0, tags_data->timestamp);
+				}
+			}
+			continue;
+		}
+
 		for (x = 0; x < G_N_ELEMENTS(supported_caps); ++x)
 		{
 			if (!g_strcmp0 (extension, supported_caps[x]))
@@ -2357,6 +2393,25 @@ inbound_cap_ls (server *serv, char *nick, char *extensions_str,
 	}
 	if (!serv->waiting_on_sasl && !serv->waiting_on_cap)
 	{
+		/* Check if STS upgrade is needed before sending CAP END */
+		if (serv->sts_upgrade_port > 0)
+		{
+			/* Need to reconnect with TLS - close this connection */
+			int sts_port = serv->sts_upgrade_port;
+			serv->sts_upgrade_port = 0;
+			serv->sent_capend = TRUE; /* Prevent further processing */
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, serv->server_session,
+				"Reconnecting with TLS due to STS policy...", NULL, NULL, NULL,
+				0, tags_data->timestamp);
+			/* Trigger reconnect with TLS */
+			serv->use_ssl = TRUE;
+			serv->accept_invalid_cert = FALSE;
+			serv->port = sts_port;
+			serv->disconnect (serv->server_session, FALSE, -1);
+			serv->connect (serv, serv->hostname, sts_port, FALSE);
+			return;
+		}
+
 		/* if we use SASL, CAP END is dealt via raw numerics */
 		serv->sent_capend = TRUE;
 		tcp_send_len (serv, "CAP END\r\n", 9);
@@ -2378,6 +2433,21 @@ inbound_cap_nak (server *serv, char *extensions_str, const message_tags_data *ta
 
 	if (!serv->waiting_on_cap && !serv->waiting_on_sasl && !serv->sent_capend)
 	{
+		/* Check if STS upgrade is needed */
+		if (serv->sts_upgrade_port > 0)
+		{
+			int sts_port = serv->sts_upgrade_port;
+			serv->sts_upgrade_port = 0;
+			serv->sent_capend = TRUE;
+			serv->use_ssl = TRUE;
+			serv->accept_invalid_cert = FALSE;
+			serv->port = sts_port;
+			serv->disconnect (serv->server_session, FALSE, -1);
+			serv->connect (serv, serv->hostname, sts_port, FALSE);
+			g_strfreev (extensions);
+			return;
+		}
+
 		serv->sent_capend = TRUE;
 		tcp_send_len (serv, "CAP END\r\n", 9);
 	}

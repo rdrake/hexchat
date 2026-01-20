@@ -1598,8 +1598,23 @@ server_connect (server *serv, char *hostname, int port, int no_login)
 {
 	int pid, read_des[2];
 	session *sess = serv->server_session;
+	int sts_port = 0;
+
+	if (!hostname[0])
+		return;
 
 #ifdef USE_OPENSSL
+	/* Check for STS (Strict Transport Security) policy */
+	if (!serv->use_ssl && sts_policy_check (hostname, &sts_port))
+	{
+		/* STS policy exists - must use TLS */
+		EMIT_SIGNAL (XP_TE_SERVTEXT, sess,
+			"STS policy active - enforcing TLS connection", NULL, NULL, NULL, 0);
+		serv->use_ssl = TRUE;
+		serv->accept_invalid_cert = FALSE; /* STS requires valid certs */
+		port = sts_port;
+	}
+
 	if (!serv->ctx && serv->use_ssl)
 	{
 		if (!(serv->ctx = _SSL_context_init (ssl_cb_info)))
@@ -1609,9 +1624,6 @@ server_connect (server *serv, char *hostname, int port, int no_login)
 		}
 	}
 #endif
-
-	if (!hostname[0])
-		return;
 
 	if (port < 1 || port > 65535)
 	{

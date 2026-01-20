@@ -91,6 +91,14 @@ struct nbexec
 	struct session *sess;
 };
 
+/* IRCv3 STS (Strict Transport Security) policy */
+typedef struct sts_policy
+{
+	char *host;			/* hostname this policy applies to */
+	int port;			/* TLS port to use */
+	time_t expires;		/* when this policy expires (0 = session-only) */
+} sts_policy;
+
 struct hexchatprefs
 {
 	/* these are the rebranded, consistent, sorted hexchat variables */
@@ -556,6 +564,7 @@ typedef struct server
 	int chathistory_limit;			/* max messages per CHATHISTORY request (from ISUPPORT) */
 	int multiline_max_bytes;		/* max bytes in multiline batch (from ISUPPORT) */
 	int multiline_max_lines;		/* max lines in multiline batch (from ISUPPORT) */
+	int sts_upgrade_port;			/* STS TLS port to upgrade to (0 = no upgrade needed) */
 
 	void *network;						/* points to entry in servlist.c or NULL! */
 

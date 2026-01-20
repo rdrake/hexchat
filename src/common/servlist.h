@@ -136,6 +136,17 @@ GSList *servlist_favchan_listadd (GSList *chanlist, char *channel, char *key);
 
 gboolean joinlist_is_in_list (server *serv, char *channel);
 
+/* IRCv3 STS (Strict Transport Security) */
+extern GSList *sts_policy_list;
+
+void sts_policy_init (void);
+void sts_policy_save (void);
+void sts_policy_cleanup (void);
+sts_policy *sts_policy_find (const char *host);
+void sts_policy_add (const char *host, int port, int duration);
+void sts_policy_remove (const char *host);
+gboolean sts_policy_check (const char *host, int *tls_port);
+
 /* FIXME
 void joinlist_split (char *autojoin, GSList **channels, GSList **keys);
 void joinlist_free (GSList *channels, GSList *keys);
