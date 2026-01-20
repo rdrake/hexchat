@@ -248,7 +248,9 @@ typedef struct xtext_buffer {
 
 ```
 Phase 1 (Entry IDs) ──────────┬──────────────────────────────────────┐
-                              │                                      │
+          │                   │                                      │
+Phase 1.5 (Multiline) ────────┤                                      │
+          │                   │                                      │
 Phase 2 (Scroll Anchor) ──────┼──► Phase 3 (Insertion Modes)         │
                               │                                      │
                               ├──► Phase 4 (Entry Modification)      │
@@ -260,6 +262,9 @@ Phase 5 (Inline Rendering) ───┼─────────┼───�
                                                      │
                                         Phase 8 (Optimization)
 ```
+
+**Critical dependency:** Phase 1.5 (Multiline) must be completed before Phase 4 (Entry Modification).
+Redaction, reactions, and replies all require proper 1:1 message-to-entry mapping.
 
 ---
 
@@ -279,6 +284,135 @@ Phase 5 (Inline Rendering) ───┼─────────┼───�
 **Files:**
 - `xtext.h` - struct changes
 - `xtext.c` - hash table management, ID generation
+
+**Status:** ✅ COMPLETE (committed c8fdcdd7)
+
+---
+
+### Phase 1.5: Multiline Entry Support
+
+**Goal:** Ensure IRCv3 multiline batches create single entries with proper msgid mapping
+
+**Problem Statement:**
+
+IRCv3 `draft/multiline` batches send multiple PRIVMSG lines with ONE msgid:
+```
+BATCH +abc multiline #channel
+@msgid=xyz PRIVMSG #channel :line 1
+PRIVMSG #channel :line 2
+PRIVMSG #channel :line 3
+BATCH -abc
+```
+
+Currently this creates 3 separate textentries. This breaks:
+- Redaction (which entries to delete?)
+- Reactions (attach to which entry?)
+- Reply quoting (quote all lines or just first?)
+- Selection (can't select as cohesive unit)
+- msgid mapping (only first entry has msgid)
+
+**Design Decision: Option A - Single Entry with Embedded `\n`**
+
+After analysis of three options:
+- **Option A**: Single textentry with embedded `\n` (CHOSEN)
+- **Option B**: Multiple entries linked by group_id
+- **Option C**: Collapse at inbound layer (variant of A)
+
+Option A provides:
+- Clean 1:1 model: 1 IRC message = 1 entry = 1 msgid
+- All operations work naturally (redact, react, select, copy)
+- No "range" logic complexity
+- Consistent with modern chat apps
+
+**Implementation:**
+
+1. **Batch processing layer** (inbound.c / chathistory.c):
+   - Detect `multiline` batch type
+   - Join lines with `\n` before calling PrintText
+   - Set single msgid for the combined message
+
+```c
+void process_multiline_batch(session *sess, batch_info *batch) {
+    GString *combined = g_string_new(NULL);
+
+    for (GSList *iter = batch->messages; iter; iter = iter->next) {
+        batch_message *msg = iter->data;
+        if (combined->len > 0)
+            g_string_append_c(combined, '\n');
+        g_string_append(combined, msg->text);
+    }
+
+    /* Single entry with batch-level msgid */
+    sess->current_msgid = batch->msgid;
+    inbound_chanmsg(serv, sess, chan, nick, combined->str, FALSE, 0, &tags_data);
+
+    g_string_free(combined, TRUE);
+}
+```
+
+2. **xtext rendering** (xtext.c):
+   - Modify `backend_draw_text_emph()` to handle embedded `\n`
+   - Render as visual line breaks within single entry
+   - Continuation lines: no timestamp/nick prefix, subtle indent
+
+3. **Subline handling**:
+   - Each `\n` within entry adds to subline count
+   - Selection within multi-line entry works normally
+   - Copy preserves `\n` as actual newlines
+
+4. **Width calculation**:
+   - Calculate max width across all lines in entry
+   - Or calculate per-line and use widest for indent
+
+**Rendering Design:**
+```
+┌─────────────────────────────────────────────────┐
+│ [12:34] <alice> Here's the code:                │  ← Entry start
+│                 def foo():                       │  ← Continuation (no timestamp)
+│                     return bar                   │
+│                 # end                            │  ← Entry end
+└─────────────────────────────────────────────────┘
+```
+
+**Format Toggle (UX Enhancement):**
+
+IRCv3 multiline has no way to signal "code" vs "prose" - just lines. Add a toggle
+for user control when viewing expanded multiline content:
+
+```
+┌─────────────────────────────────────────────────┐
+│ [12:34] <alice> [multiline - 15 lines]          │
+│ │ def calculate_score(data):                    │
+│ │     return sum(data) / len(data)              │
+│ │ ...                                           │
+│ │ [Expand] [Code ▼]                             │  ← Format toggle
+└─────────────────────────────────────────────────┘
+```
+
+- **Text mode**: Normal font, word-wrap allowed, mIRC colors honored
+- **Code mode**: Monospace font, preserve exact whitespace, no word-wrap
+
+Implementation:
+- Toggle button visible on truncated preview and expanded view
+- Per-entry state (not persisted, defaults to auto-detect)
+- Auto-detect heuristic: leading whitespace, common code patterns → default to Code
+- Context menu also offers "View as Code" / "View as Text"
+
+**What NOT to change:**
+- MOTD, server messages, etc. still split into separate entries
+- Only IRCv3 `multiline` batches get single-entry treatment
+- Pasted multi-line input (sending) is separate concern
+
+**Risk:** Medium - rendering changes, but isolated to multiline batch path
+
+**Files:**
+- `inbound.c` - multiline batch handler
+- `xtext.c` - embedded `\n` rendering
+- `chathistory.c` - historical multiline batches
+
+**Dependencies:**
+- Requires Phase 1 (entry identification) ✅
+- Required by Phase 4 (entry modification) - redaction needs proper message identity
 
 ---
 
@@ -1060,6 +1194,9 @@ void handle_reply_click(session *sess, const char *reply_to_msgid) {
 3. **Redaction**: Delete message, verify display
 4. **Echo-message**: Send, see pending, receive echo, see confirmed
 5. **Scroll stability**: Modify buffer while scrolled mid-way
+6. **Multiline batch**: Receive multiline, verify single entry with one msgid
+7. **Multiline selection**: Select across lines within entry, copy preserves newlines
+8. **Multiline redaction**: Redact multiline message, all lines replaced
 
 ### Performance Tests
 
@@ -1089,20 +1226,22 @@ void handle_reply_click(session *sess, const char *reply_to_msgid) {
 
 ## 8. Estimated Effort
 
-| Phase | Effort | Risk | Dependencies | Enables |
-|-------|--------|------|--------------|---------|
-| Phase 1: Entry ID | 2-3 days | Low | None | All lookups |
-| Phase 2: Scroll Anchor | 3-4 days | Medium | Phase 1 | Insertion modes |
-| Phase 3: Insertion Modes | 5-7 days | High | Phase 1, 2 | Chathistory |
-| Phase 4: Entry Modification | 3-4 days | Medium | Phase 1 | Redaction, echo |
-| Phase 5: Inline Rendering | 4-5 days | Medium | None | Reactions |
-| Phase 6: Rich Content | 4-5 days | Medium | Phase 1, 4, 5 | Full modern UX |
-| Phase 7: Reference Migration | 2-3 days | Medium | Phase 1 | Stability |
-| Phase 8: Optimization | 2-3 days | Low | All above | Performance |
+| Phase | Effort | Risk | Dependencies | Enables | Status |
+|-------|--------|------|--------------|---------|--------|
+| Phase 1: Entry ID | 2-3 days | Low | None | All lookups | ✅ DONE |
+| Phase 1.5: Multiline | 2-3 days | Medium | Phase 1 | Proper message identity | ✅ DONE |
+| Phase 2: Scroll Anchor | 3-4 days | Medium | Phase 1 | Insertion modes | ✅ DONE |
+| Phase 3: Insertion Modes | 5-7 days | High | Phase 1, 2 | Chathistory prepend | ⬜ |
+| Phase 4: Entry Modification | 3-4 days | Medium | Phase 1, 1.5 | Redaction, echo | ⬜ |
+| Phase 5: Inline Rendering | 4-5 days | Medium | None | Reactions | ⬜ |
+| Phase 6: Rich Content | 4-5 days | Medium | Phase 1, 4, 5 | Full modern UX | ⬜ |
+| Phase 7: Reference Migration | 2-3 days | Medium | Phase 1 | Stability | ⬜ |
+| Phase 8: Optimization | 2-3 days | Low | All above | Performance | ⬜ |
 
 **Total: ~4-5 weeks of focused work**
 
-**Critical path:** Phase 1 → Phase 2 → Phase 3 (chathistory fully functional)
+**Critical path:** Phase 1 ✅ → Phase 1.5 → Phase 2 → Phase 3 (chathistory fully functional)
+**Blocking path:** Phase 1.5 → Phase 4 (redaction/reactions need proper message identity)
 **Parallel track:** Phase 5 → Phase 6 (modern rich content)
 **Polish:** Phase 7, 8 (can be done last)
 

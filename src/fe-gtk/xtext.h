@@ -78,6 +78,17 @@ typedef enum marker_reset_reason_e {
 	MARKER_RESET_BY_CLEAR
 } marker_reset_reason;
 
+/* IRCv3 modernization: scroll anchor for stable scroll position (Phase 2)
+ * Used to preserve scroll position across buffer modifications (prepend, insert, delete).
+ * Uses entry_id for stability - pointers can become invalid during modifications.
+ */
+typedef struct xtext_scroll_anchor {
+	guint64 anchor_entry_id;   /* Entry ID to anchor to (0 = not set/invalid) */
+	int subline_offset;        /* Subline within entry (0 = first subline) */
+	int pixel_offset;          /* Pixel offset for smooth scroll preservation */
+	gboolean anchor_to_bottom; /* Special: always show newest (ignores entry_id) */
+} xtext_scroll_anchor;
+
 typedef struct {
 	GtkXText *xtext;					/* attached to this widget */
 
@@ -327,5 +338,15 @@ const char *gtk_xtext_get_msgid (textentry *ent);
 textentry *gtk_xtext_buffer_get_last (xtext_buffer *buf);
 textentry *gtk_xtext_buffer_get_first (xtext_buffer *buf);
 textentry *gtk_xtext_entry_get_next (textentry *ent);
+
+/* IRCv3 modernization: scroll anchor system (Phase 2)
+ * Save/restore scroll position across buffer modifications.
+ * Uses entry_id for stability - survives prepend, insert, delete operations.
+ */
+void gtk_xtext_save_scroll_anchor (xtext_buffer *buf, xtext_scroll_anchor *anchor);
+void gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *anchor);
+
+/* Calculate line number for an entry (needed for scroll anchor restoration) */
+int gtk_xtext_entry_get_line (xtext_buffer *buf, textentry *ent);
 
 #endif

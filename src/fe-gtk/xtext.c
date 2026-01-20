@@ -5393,3 +5393,175 @@ gtk_xtext_entry_get_next (textentry *ent)
 {
 	return ent ? ent->next : NULL;
 }
+
+/* IRCv3 modernization: scroll anchor system (Phase 2)
+ * These functions allow saving and restoring scroll position across buffer
+ * modifications (prepend, insert, delete). Uses entry_id for stability.
+ */
+
+/**
+ * Calculate the line number for an entry (sum of sublines of all previous entries).
+ * Used for scroll anchor restoration.
+ *
+ * @param buf The xtext buffer
+ * @param target_ent The entry to find the line number for
+ * @return Line number (0-based), or -1 if entry not found
+ */
+int
+gtk_xtext_entry_get_line (xtext_buffer *buf, textentry *target_ent)
+{
+	textentry *ent;
+	int lines = 0;
+
+	if (!buf || !target_ent)
+		return -1;
+
+	ent = buf->text_first;
+	while (ent)
+	{
+		if (ent == target_ent)
+			return lines;
+
+		/* Add sublines for this entry (need to calculate if not yet done) */
+		if (ent->sublines)
+			lines += g_slist_length (ent->sublines);
+		else
+			lines += 1;  /* Entry not yet rendered, assume 1 line */
+
+		ent = ent->next;
+	}
+
+	return -1;  /* Entry not found in buffer */
+}
+
+/**
+ * Save the current scroll position as an anchor.
+ * The anchor uses entry_id for stability - it will survive buffer modifications.
+ *
+ * @param buf The xtext buffer to save scroll position from
+ * @param anchor Output struct to store the anchor state
+ */
+void
+gtk_xtext_save_scroll_anchor (xtext_buffer *buf, xtext_scroll_anchor *anchor)
+{
+	if (!buf || !anchor)
+		return;
+
+	/* Initialize anchor */
+	anchor->anchor_entry_id = 0;
+	anchor->subline_offset = 0;
+	anchor->pixel_offset = 0;
+	anchor->anchor_to_bottom = FALSE;
+
+	/* Special case: if scrolled to bottom, just anchor to bottom */
+	if (buf->scrollbar_down)
+	{
+		anchor->anchor_to_bottom = TRUE;
+		return;
+	}
+
+	/* Use pagetop_ent if available (most accurate) */
+	if (buf->pagetop_ent)
+	{
+		anchor->anchor_entry_id = buf->pagetop_ent->entry_id;
+		anchor->subline_offset = buf->pagetop_subline;
+		anchor->pixel_offset = buf->xtext ? buf->xtext->pixel_offset : 0;
+		return;
+	}
+
+	/* Fallback: try to calculate from adjustment value */
+	if (buf->xtext && buf->xtext->adj)
+	{
+		int subline;
+		textentry *ent = gtk_xtext_nth (buf->xtext,
+		                                (int)gtk_adjustment_get_value (buf->xtext->adj),
+		                                &subline);
+		if (ent)
+		{
+			anchor->anchor_entry_id = ent->entry_id;
+			anchor->subline_offset = subline;
+			anchor->pixel_offset = buf->xtext->pixel_offset;
+		}
+	}
+}
+
+/**
+ * Restore scroll position from a saved anchor.
+ * After buffer modifications (prepend, insert, delete), call this to restore
+ * the user's view to approximately the same position.
+ *
+ * @param buf The xtext buffer to restore scroll position to
+ * @param anchor The anchor state previously saved with gtk_xtext_save_scroll_anchor
+ */
+void
+gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *anchor)
+{
+	GtkAdjustment *adj;
+	textentry *ent;
+	int target_line;
+	gdouble new_value, upper, page_size;
+
+	if (!buf || !anchor || !buf->xtext)
+		return;
+
+	adj = buf->xtext->adj;
+	if (!adj)
+		return;
+
+	/* Special case: anchor to bottom */
+	if (anchor->anchor_to_bottom)
+	{
+		buf->scrollbar_down = TRUE;
+		upper = gtk_adjustment_get_upper (adj);
+		page_size = gtk_adjustment_get_page_size (adj);
+		gtk_adjustment_set_value (adj, upper - page_size);
+		return;
+	}
+
+	/* Find the anchor entry by ID */
+	if (anchor->anchor_entry_id == 0)
+		return;  /* Invalid anchor */
+
+	ent = gtk_xtext_find_by_id (buf, anchor->anchor_entry_id);
+
+	if (!ent)
+	{
+		/* Anchor entry was deleted - try to find nearest neighbor.
+		 * For now, just stay at current position or scroll to top.
+		 * Future enhancement: find entry with nearest timestamp. */
+		return;
+	}
+
+	/* Calculate the line number for this entry */
+	target_line = gtk_xtext_entry_get_line (buf, ent);
+	if (target_line < 0)
+		return;  /* Entry not found (shouldn't happen) */
+
+	/* Add subline offset */
+	target_line += anchor->subline_offset;
+
+	/* Clamp to valid range */
+	upper = gtk_adjustment_get_upper (adj);
+	page_size = gtk_adjustment_get_page_size (adj);
+	new_value = (gdouble)target_line;
+
+	if (new_value > upper - page_size)
+		new_value = upper - page_size;
+	if (new_value < 0)
+		new_value = 0;
+
+	/* Update scrollbar_down flag based on new position */
+	if (new_value >= upper - page_size - 0.5)
+		buf->scrollbar_down = TRUE;
+	else
+		buf->scrollbar_down = FALSE;
+
+	/* Set the new scroll position */
+	gtk_adjustment_set_value (adj, new_value);
+
+	/* Invalidate pagetop cache since position changed */
+	buf->pagetop_ent = NULL;
+
+	/* Store pixel offset for smooth scrolling (used by render_page) */
+	buf->xtext->pixel_offset = anchor->pixel_offset;
+}

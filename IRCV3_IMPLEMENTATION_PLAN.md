@@ -1793,3 +1793,57 @@ Based on dependencies and UX impact:
 8. **Phase 7** - Redaction (message management)
 9. **Phase 8** - Reply/React (lower priority)
 10. **Phase 9-12** - Remaining features
+
+---
+
+## Known Oversights & TODOs
+
+This section tracks identified gaps discovered during implementation audit (January 2026).
+
+### Missing Text Events
+
+| Event | Purpose | Status |
+|-------|---------|--------|
+| `XP_TE_WARN` | WARN standard reply display | ⬜ Not created |
+| `XP_TE_NOTE` | NOTE standard reply display | ⬜ Not created |
+| `XP_TE_CHANRENAME` | Channel rename notification | ⬜ Not created |
+| `XP_TE_STSUPGRADE` | STS TLS upgrade notification | ⬜ Not created |
+
+### In-Code TODOs
+
+| Location | Description | Priority |
+|----------|-------------|----------|
+| `inbound.c:~2101` | Typing indicator UI display | Medium |
+| `inbound.c:~2124` | Reaction display handling | Medium |
+| `inbound.c:~2129` | Reply quote display | Medium |
+
+### Batch Handling Gaps
+
+| Batch Type | CAP Negotiation | Handler Implementation |
+|------------|-----------------|------------------------|
+| `multiline` | ✅ | ✅ (`process_multiline_batch`) |
+| `chathistory` | ✅ | ✅ (`chathistory_process_batch`) |
+| `labeled-response` | ✅ (cap) | ⬜ No ACK correlation |
+| `netjoin` | ⚠️ Parsed | ⬜ Not processed (falls through) |
+| `netsplit` | ⚠️ Parsed | ⬜ Not processed (falls through) |
+
+### Echo-Message UX Gaps
+
+While the echo-message capability is negotiated and basic self-echo detection exists, UX enhancements are missing:
+
+- ⬜ **Pending visual** - Messages should show muted/italic style while awaiting echo
+- ⬜ **Timeout mechanism** - Fall back to local display if echo not received within ~10 seconds
+- ⬜ **Msgid correlation** - Match received echo to pending message for confirmation
+- ⬜ **Failed message handling** - Visual indicator when message delivery uncertain
+
+### xtext Modernization Status
+
+See [XTEXT_MODERNIZATION_PLAN.md](docs/XTEXT_MODERNIZATION_PLAN.md) for detailed xtext buffer modernization status.
+
+| Phase | Status |
+|-------|--------|
+| Phase 1: Entry Identification | ✅ Complete |
+| Phase 1.5: Multiline Entry Support | ✅ Complete |
+| Phase 2: Scroll Anchor System | ⬜ Not started |
+| Phase 3: Insertion Modes | ⬜ Not started |
+| Phase 4: Entry Modification | ⬜ Not started |
