@@ -28,6 +28,7 @@
 #include "fe.h"
 #include "util.h"
 #include "inbound.h"
+#include "chathistory.h"
 #ifdef HAVE_STRINGS_H
 #include <strings.h>
 #endif
@@ -939,6 +940,11 @@ inbound_005 (server * serv, char *word[], const message_tags_data *tags_data)
 			/* supports LIST >< min/max user counts? */
 			if (strchr (tokvalue, 'U') || strchr (tokvalue, 'u'))
 				serv->use_listargs = TRUE;
+		} else if (g_strcmp0 (tokname, "CHATHISTORY") == 0)
+		{
+			/* IRCv3 draft/chathistory ISUPPORT token
+			 * Format: CHATHISTORY=<limit> or CHATHISTORY=limit=N,retention=Xd */
+			chathistory_parse_isupport (serv, tokvalue);
 		}
 
 		g_free (tokname);

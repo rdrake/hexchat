@@ -28,19 +28,27 @@
 		NULL, /* account name */		\
 		FALSE, /* identified to nick */ \
 		(time_t)0, /* timestamp */		\
+		NULL, /* batch_id */			\
+		NULL, /* msgid */				\
+		NULL, /* label */				\
+		NULL, /* all_tags hash table */	\
 	}
 
 #define STRIP_COLON(word, word_eol, idx) (word)[(idx)][0] == ':' ? (word_eol)[(idx)]+1 : (word)[(idx)]
 
 /* Message tag information that might be passed along with a server message
  *
- * See http://ircv3.atheme.org/specification/capability-negotiation-3.1
+ * See https://ircv3.net/specs/extensions/message-tags
  */
-typedef struct 
+typedef struct
 {
 	char *account;
 	gboolean identified;
 	time_t timestamp;
+	char *batch_id;       /* batch tag - reference to active batch */
+	char *msgid;          /* msgid tag - unique message identifier */
+	char *label;          /* label tag - for labeled-response correlation */
+	GHashTable *all_tags; /* Full tag storage for plugins and extensions */
 } message_tags_data;
 
 void message_tags_data_free (message_tags_data *tags_data);

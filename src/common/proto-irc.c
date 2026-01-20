@@ -1226,6 +1226,10 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 
 		case WORDL('N','O','T','I'):
 			{
+				/* Check if this message belongs to a batch (e.g., chathistory) */
+				if (inbound_batch_add_message (serv, word[1], "NOTICE", word, PDIWORDS, tags_data))
+					return; /* Message collected for batch processing */
+
 				text = word_eol[4];
 				if (*text == ':')
 				{
@@ -1263,6 +1267,11 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 			{
 				char *to = word[3];
 				int len;
+
+				/* Check if this message belongs to a batch (e.g., chathistory) */
+				if (inbound_batch_add_message (serv, word[1], "PRIVMSG", word, PDIWORDS, tags_data))
+					return; /* Message collected for batch processing */
+
 				if (*to)
 				{
 					/* Handle limited channel messages, for now no special event */
@@ -1341,6 +1350,40 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 				text++;
 			EMIT_SIGNAL_TIMESTAMP (XP_TE_WALLOPS, sess, nick, text, NULL, NULL, 0,
 										  tags_data->timestamp);
+			return;
+
+		case WORDL('B','A','T','C'):
+			/* BATCH +ref type [params] or BATCH -ref */
+			if (serv->have_batch)
+			{
+				char *ref = word[3];
+				if (*ref == '+')
+				{
+					/* Start of batch */
+					char *batch_type = word[4];
+					inbound_batch_start (serv, ref + 1, batch_type, word, tags_data);
+				}
+				else if (*ref == '-')
+				{
+					/* End of batch */
+					inbound_batch_end (serv, ref + 1, tags_data);
+				}
+			}
+			return;
+
+		case WORDL('T','A','G','M'):
+			/* TAGMSG - tag-only message (no text content)
+			 * Used for typing indicators, reactions, etc.
+			 * Format: :nick!user@host TAGMSG <target>
+			 */
+			if (serv->have_message_tags)
+			{
+				char *to = word[3];
+				if (*to)
+				{
+					inbound_tagmsg (serv, to, nick, ip, tags_data);
+				}
+			}
 			return;
 		}
 	}
@@ -1523,9 +1566,68 @@ handle_message_tag_time (const char *time, message_tags_data *tags_data)
 	}
 }
 
+/* Unescape IRCv3 message tag values
+ * See https://ircv3.net/specs/extensions/message-tags#escaping-values
+ *
+ * Escape sequences:
+ *   \: -> ; (semicolon)
+ *   \s -> SPACE
+ *   \\ -> \ (backslash)
+ *   \r -> CR
+ *   \n -> LF
+ */
+static char *
+unescape_tag_value (const char *value)
+{
+	GString *result;
+	const char *p;
+
+	if (!value || !*value)
+		return g_strdup ("");
+
+	result = g_string_sized_new (strlen (value));
+
+	for (p = value; *p; p++)
+	{
+		if (*p == '\\' && *(p + 1))
+		{
+			p++;
+			switch (*p)
+			{
+				case ':':
+					g_string_append_c (result, ';');
+					break;
+				case 's':
+					g_string_append_c (result, ' ');
+					break;
+				case '\\':
+					g_string_append_c (result, '\\');
+					break;
+				case 'r':
+					g_string_append_c (result, '\r');
+					break;
+				case 'n':
+					g_string_append_c (result, '\n');
+					break;
+				default:
+					/* Unknown escape, include the backslash */
+					g_string_append_c (result, '\\');
+					g_string_append_c (result, *p);
+					break;
+			}
+		}
+		else
+		{
+			g_string_append_c (result, *p);
+		}
+	}
+
+	return g_string_free (result, FALSE);
+}
+
 /* Handle message tags.
  *
- * See http://ircv3.atheme.org/specification/message-tags-3.2 
+ * See https://ircv3.net/specs/extensions/message-tags
  */
 static void
 handle_message_tags (server *serv, const char *tags_str,
@@ -1533,33 +1635,85 @@ handle_message_tags (server *serv, const char *tags_str,
 {
 	char **tags;
 	int i;
+	gboolean store_all_tags;
 
-	/* FIXME We might want to avoid the allocation overhead here since 
+	/* Determine if we should store all tags (for plugins/extensions) */
+	store_all_tags = serv->have_message_tags || serv->have_batch;
+
+	if (store_all_tags && !tags_data->all_tags)
+	{
+		tags_data->all_tags = g_hash_table_new_full (g_str_hash, g_str_equal,
+		                                             g_free, g_free);
+	}
+
+	/* FIXME We might want to avoid the allocation overhead here since
 	 * this might be called for every message from the server.
 	 */
 	tags = g_strsplit (tags_str, ";", 0);
 
-	for (i=0; tags[i]; i++)
+	for (i = 0; tags[i]; i++)
 	{
 		char *key = tags[i];
 		char *value = strchr (tags[i], '=');
+		char *unescaped_value = NULL;
 
-		if (!value)
-			continue;
+		if (value)
+		{
+			*value = '\0';
+			value++;
+			unescaped_value = unescape_tag_value (value);
+		}
+		else
+		{
+			/* Tag without value - treat as empty string */
+			unescaped_value = g_strdup ("");
+		}
 
-		*value = '\0';
-		value++;
+		/* Store in all_tags hash table if enabled */
+		if (store_all_tags && tags_data->all_tags)
+		{
+			g_hash_table_insert (tags_data->all_tags,
+			                     g_strdup (key),
+			                     g_strdup (unescaped_value));
+		}
 
+		/* Handle specific tags we care about */
 		if (serv->have_account_tag && !strcmp (key, "account"))
-			tags_data->account = g_strdup (value);
+		{
+			g_free (tags_data->account);
+			tags_data->account = g_strdup (unescaped_value);
+		}
 
-		if (serv->have_idmsg && strcmp (key, "solanum.chat/identified"))
+		if (serv->have_idmsg && !strcmp (key, "solanum.chat/identified"))
 			tags_data->identified = TRUE;
 
 		if (serv->have_server_time && !strcmp (key, "time"))
-			handle_message_tag_time (value, tags_data);
+			handle_message_tag_time (unescaped_value, tags_data);
+
+		/* IRCv3 batch tag - reference to active batch */
+		if (serv->have_batch && !strcmp (key, "batch"))
+		{
+			g_free (tags_data->batch_id);
+			tags_data->batch_id = g_strdup (unescaped_value);
+		}
+
+		/* IRCv3 msgid tag - unique message identifier */
+		if (serv->have_message_tags && !strcmp (key, "msgid"))
+		{
+			g_free (tags_data->msgid);
+			tags_data->msgid = g_strdup (unescaped_value);
+		}
+
+		/* IRCv3 labeled-response label tag */
+		if (serv->have_labeled_response && !strcmp (key, "label"))
+		{
+			g_free (tags_data->label);
+			tags_data->label = g_strdup (unescaped_value);
+		}
+
+		g_free (unescaped_value);
 	}
-	
+
 	g_strfreev (tags);
 }
 
@@ -1661,6 +1815,10 @@ void
 message_tags_data_free (message_tags_data *tags_data)
 {
 	g_clear_pointer (&tags_data->account, g_free);
+	g_clear_pointer (&tags_data->batch_id, g_free);
+	g_clear_pointer (&tags_data->msgid, g_free);
+	g_clear_pointer (&tags_data->label, g_free);
+	g_clear_pointer (&tags_data->all_tags, g_hash_table_destroy);
 }
 
 void

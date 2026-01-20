@@ -12,6 +12,8 @@
 
 #include "config.h"
 
+#ifdef USE_LIBWEBSOCKETS
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -573,3 +575,5 @@ hc_client_get_data(HcClient *client)
 {
 	return client ? client->user_data : NULL;
 }
+
+#endif /* USE_LIBWEBSOCKETS */

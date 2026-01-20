@@ -52,6 +52,7 @@
     <ClInclude Include="ws-server.h" />
     <ClInclude Include="oauth.h" />
     <ClInclude Include="secure-storage.h" />
+    <ClInclude Include="chathistory.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="cfgfiles.c" />
@@ -84,6 +85,7 @@
     <ClCompile Include="ws-server.c" />
     <ClCompile Include="oauth.c" />
     <ClCompile Include="secure-storage.c" />
+    <ClCompile Include="chathistory.c" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\win32\config.h.tt" />

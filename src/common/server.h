@@ -25,6 +25,8 @@ extern GSList *serv_list;
 /* eventually need to keep the tcp_* functions isolated to server.c */
 int tcp_send_len (server *serv, char *buf, int len);
 void tcp_sendf (server *serv, const char *fmt, ...) G_GNUC_PRINTF (2, 3);
+char *tcp_generate_label (server *serv);
+char *tcp_sendf_labeled (server *serv, const char *fmt, ...) G_GNUC_PRINTF (2, 3);
 int tcp_send_real (void *ssl, int sok, GIConv write_converter, char *buf, int len);
 
 server *server_new (void);

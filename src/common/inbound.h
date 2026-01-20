@@ -104,4 +104,18 @@ void do_dns (session *sess, char *nick, char *host,
 gboolean alert_match_word (char *word, char *masks);
 gboolean alert_match_text (char *text, char *masks);
 
+/* IRCv3 batch support */
+void inbound_batch_start (server *serv, const char *batch_id, const char *batch_type,
+                          char *word[], const message_tags_data *tags_data);
+void inbound_batch_end (server *serv, const char *batch_id,
+                        const message_tags_data *tags_data);
+gboolean inbound_batch_is_active (server *serv, const message_tags_data *tags_data);
+gboolean inbound_batch_add_message (server *serv, const char *prefix, const char *command,
+                                    char *word[], int word_count,
+                                    const message_tags_data *tags_data);
+
+/* IRCv3 TAGMSG support */
+void inbound_tagmsg (server *serv, char *to, char *nick, char *ip,
+                     const message_tags_data *tags_data);
+
 #endif

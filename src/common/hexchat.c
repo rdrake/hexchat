@@ -679,6 +679,8 @@ session_free (session *killsess)
 	history_free (&killsess->history);
 	g_free (killsess->topic);
 	g_free (killsess->current_modes);
+	g_free (killsess->oldest_msgid);
+	g_free (killsess->newest_msgid);
 
 	fe_session_callback (killsess);
 

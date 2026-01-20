@@ -262,6 +262,60 @@ tcp_sendf (server *serv, const char *fmt, ...)
 	tcp_send_len (serv, send_buf, len);
 }
 
+/* Generate a unique label for labeled-response */
+char *
+tcp_generate_label (server *serv)
+{
+	char *label;
+	guint32 counter;
+
+	counter = serv->label_counter++;
+	label = g_strdup_printf ("hc%u", counter);
+
+	return label;
+}
+
+/* Send IRC command with a label tag for labeled-response correlation
+ * Returns the label string (caller must free) or NULL if labeled-response unavailable
+ */
+char *
+tcp_sendf_labeled (server *serv, const char *fmt, ...)
+{
+	va_list args;
+	static char cmd_buf[1540];
+	static char send_buf[1600];
+	char *label;
+	int cmd_len, len;
+
+	/* Generate the command first */
+	va_start (args, fmt);
+	cmd_len = g_vsnprintf (cmd_buf, sizeof (cmd_buf) - 1, fmt, args);
+	va_end (args);
+
+	cmd_buf[sizeof (cmd_buf) - 1] = '\0';
+	if (cmd_len < 0 || cmd_len > (int)(sizeof (cmd_buf) - 1))
+		cmd_len = strlen (cmd_buf);
+
+	/* If labeled-response is not available, send without label */
+	if (!serv->have_labeled_response)
+	{
+		tcp_send_len (serv, cmd_buf, cmd_len);
+		return NULL;
+	}
+
+	/* Generate label and prepend to command */
+	label = tcp_generate_label (serv);
+	len = g_snprintf (send_buf, sizeof (send_buf), "@label=%s %s", label, cmd_buf);
+
+	send_buf[sizeof (send_buf) - 1] = '\0';
+	if (len < 0 || len > (int)(sizeof (send_buf) - 1))
+		len = strlen (send_buf);
+
+	tcp_send_len (serv, send_buf, len);
+
+	return label;
+}
+
 static int
 close_socket_cb (gpointer sok)
 {

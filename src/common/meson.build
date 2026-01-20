@@ -1,6 +1,7 @@
 common_sources = [
   'cfgfiles.c',
   'chanopt.c',
+  'chathistory.c',
   'ctcp.c',
   'dcc.c',
   'hexchat.c',

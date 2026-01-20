@@ -422,10 +422,14 @@ typedef struct session
 	int end_of_names:1;
 	int doing_who:1;		/* /who sent on this channel */
 	int done_away_check:1;	/* done checking for away status changes */
+	int history_loading:1;	/* chathistory request in progress */
+	int history_exhausted:1; /* server has no more history for this target */
 	tab_state_flags tab_state;
 	tab_state_flags last_tab_state; /* before event is handled */
 	gtk_xtext_search_flags lastlog_flags;
 	void (*scrollback_replay_marklast) (struct session *sess);
+	char *oldest_msgid;		/* oldest message in buffer (for BEFORE requests) */
+	char *newest_msgid;		/* newest message in buffer (for AFTER requests) */
 } session;
 
 /* SASL Mechanisms */
@@ -435,6 +439,33 @@ typedef struct session
 #define MECH_SCRAM_SHA_256 3
 #define MECH_SCRAM_SHA_512 4
 #define MECH_OAUTHBEARER 5
+
+/* IRCv3 Batch information
+ * Used to collect messages belonging to a batch for processing as a unit
+ * See https://ircv3.net/specs/extensions/batch
+ */
+typedef struct batch_info
+{
+	char *id;            /* Unique batch identifier */
+	char *type;          /* Batch type: chathistory, multiline, netjoin, netsplit, etc. */
+	char **params;       /* Additional parameters after the type */
+	int param_count;     /* Number of parameters */
+	char *outer_batch;   /* For nested batches: reference to parent batch ID */
+	GSList *messages;    /* Collected messages (each element is batch_message) */
+	time_t started;      /* When the batch was opened */
+} batch_info;
+
+/* A single message collected within a batch */
+typedef struct batch_message
+{
+	char *prefix;        /* Message source (nick!user@host) */
+	char *command;       /* IRC command (PRIVMSG, NOTICE, JOIN, etc.) */
+	char **params;       /* Command parameters */
+	int param_count;     /* Number of parameters */
+	GHashTable *tags;    /* Message tags (copied from message_tags_data.all_tags) */
+	time_t timestamp;    /* Server time if available */
+	char *msgid;         /* Message ID if available */
+} batch_message;
 
 typedef struct server
 {
@@ -521,6 +552,7 @@ typedef struct server
 	char *nick_modes;					/* e.g. "aohv" */
 	char *bad_nick_prefixes;		/* for ircd that doesn't give the modes */
 	int modes_per_line;				/* 6 on undernet, 4 on efnet etc... */
+	int chathistory_limit;			/* max messages per CHATHISTORY request (from ISUPPORT) */
 
 	void *network;						/* points to entry in servlist.c or NULL! */
 
@@ -579,6 +611,11 @@ typedef struct server
 	unsigned int have_account_tag:1;	/* cap account-tag */
 	unsigned int have_server_time:1;	/* cap server-time */
 	unsigned int have_sasl:1;		/* SASL capability */
+	unsigned int have_batch:1;		/* IRCv3 batch capability */
+	unsigned int have_message_tags:1;	/* IRCv3 message-tags capability */
+	unsigned int have_echo_message:1;	/* IRCv3 echo-message capability */
+	unsigned int have_labeled_response:1; /* IRCv3 labeled-response capability */
+	unsigned int have_chathistory:1;	/* IRCv3 draft/chathistory capability */
 	unsigned int have_except:1;	/* ban exemptions +e */
 	unsigned int have_invite:1;	/* invite exemptions +I */
 	unsigned int have_cert:1;	/* have loaded a cert */
@@ -598,6 +635,11 @@ typedef struct server
 	char *oauth_access_token;				/* Current access token for SASL OAUTHBEARER */
 	time_t oauth_token_expires;				/* When current token expires */
 #endif
+
+	/* IRCv3 batch state */
+	GHashTable *active_batches;	/* batch_id (string) -> batch_info* */
+	guint32 label_counter;		/* Counter for generating unique labels */
+	GHashTable *pending_labels;	/* label (string) -> pending command info */
 } server;
 
 typedef int (*cmd_callback) (struct session * sess, char *tbuf, char *word[],

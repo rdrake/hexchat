@@ -47,6 +47,7 @@
 #include "ctcp.h"
 #include "hexchatc.h"
 #include "chanopt.h"
+#include "chathistory.h"
 #ifdef USE_LIBWEBSOCKETS
 #include "oauth.h"
 #endif
@@ -1636,6 +1637,289 @@ inbound_login_end (session *sess, char *text, const message_tags_data *tags_data
 								  NULL, 0, tags_data->timestamp);
 }
 
+/* IRCv3 Batch helper functions */
+
+static void
+batch_message_free (batch_message *msg)
+{
+	if (!msg)
+		return;
+
+	g_free (msg->prefix);
+	g_free (msg->command);
+	g_strfreev (msg->params);
+	if (msg->tags)
+		g_hash_table_destroy (msg->tags);
+	g_free (msg->msgid);
+	g_free (msg);
+}
+
+static void
+batch_info_free (batch_info *batch)
+{
+	if (!batch)
+		return;
+
+	g_free (batch->id);
+	g_free (batch->type);
+	g_strfreev (batch->params);
+	g_free (batch->outer_batch);
+	g_slist_free_full (batch->messages, (GDestroyNotify) batch_message_free);
+	g_free (batch);
+}
+
+static batch_info *
+batch_info_new (const char *id, const char *type, char *word[],
+                const message_tags_data *tags_data)
+{
+	batch_info *batch;
+	int i, param_count;
+
+	batch = g_new0 (batch_info, 1);
+	batch->id = g_strdup (id);
+	batch->type = g_strdup (type);
+	batch->started = time (NULL);
+
+	/* Copy outer batch reference if this batch is nested */
+	if (tags_data->batch_id)
+		batch->outer_batch = g_strdup (tags_data->batch_id);
+
+	/* Count and copy parameters (starting from word[5]) */
+	param_count = 0;
+	for (i = 5; word[i] && *word[i]; i++)
+		param_count++;
+
+	if (param_count > 0)
+	{
+		batch->params = g_new0 (char *, param_count + 1);
+		batch->param_count = param_count;
+		for (i = 0; i < param_count; i++)
+		{
+			char *param = word[5 + i];
+			if (*param == ':')
+				param++;
+			batch->params[i] = g_strdup (param);
+		}
+	}
+
+	return batch;
+}
+
+void
+inbound_batch_start (server *serv, const char *batch_id, const char *batch_type,
+                     char *word[], const message_tags_data *tags_data)
+{
+	batch_info *batch;
+
+	if (!serv->have_batch)
+		return;
+
+	/* Initialize active_batches hash table if needed */
+	if (!serv->active_batches)
+	{
+		serv->active_batches = g_hash_table_new_full (g_str_hash, g_str_equal,
+		                                              g_free,
+		                                              (GDestroyNotify) batch_info_free);
+	}
+
+	/* Check if batch already exists (shouldn't happen, but be defensive) */
+	if (g_hash_table_contains (serv->active_batches, batch_id))
+	{
+		g_warning ("Duplicate batch ID received: %s", batch_id);
+		return;
+	}
+
+	/* Create and store the new batch */
+	batch = batch_info_new (batch_id, batch_type, word, tags_data);
+	g_hash_table_insert (serv->active_batches, g_strdup (batch_id), batch);
+
+	/* For now, just log that we started a batch - actual batch type handling
+	 * will be implemented as we add support for specific batch types
+	 * (chathistory, multiline, netjoin, netsplit, etc.)
+	 */
+}
+
+void
+inbound_batch_end (server *serv, const char *batch_id,
+                   const message_tags_data *tags_data)
+{
+	batch_info *batch;
+
+	if (!serv->have_batch || !serv->active_batches)
+		return;
+
+	/* Look up the batch */
+	batch = g_hash_table_lookup (serv->active_batches, batch_id);
+	if (!batch)
+	{
+		g_warning ("End of unknown batch: %s", batch_id);
+		return;
+	}
+
+	/* Process the batch based on its type */
+	if (batch->type)
+	{
+		if (g_ascii_strcasecmp (batch->type, "chathistory") == 0)
+		{
+			/* Process chat history batch */
+			chathistory_process_batch (serv, batch);
+		}
+		/* TODO: Handle other batch types:
+		 * - "multiline": Concatenate messages and display as single unit
+		 * - "netjoin"/"netsplit": Collapse join/quit messages
+		 * - "labeled-response": Correlate response with pending command
+		 */
+	}
+
+	/* Remove the batch from active batches (this also frees it) */
+	g_hash_table_remove (serv->active_batches, batch_id);
+}
+
+/* Check if a message belongs to an active batch and should be deferred */
+gboolean
+inbound_batch_is_active (server *serv, const message_tags_data *tags_data)
+{
+	if (!serv->have_batch || !tags_data->batch_id || !serv->active_batches)
+		return FALSE;
+
+	return g_hash_table_contains (serv->active_batches, tags_data->batch_id);
+}
+
+/* Add a message to an active batch
+ * Returns TRUE if message was added to batch (and should not be processed immediately)
+ * Returns FALSE if message is not part of a batch (process normally)
+ */
+gboolean
+inbound_batch_add_message (server *serv, const char *prefix, const char *command,
+                           char *word[], int word_count,
+                           const message_tags_data *tags_data)
+{
+	batch_info *batch;
+	batch_message *msg;
+	int i, param_count;
+
+	if (!serv->have_batch || !tags_data->batch_id || !serv->active_batches)
+		return FALSE;
+
+	batch = g_hash_table_lookup (serv->active_batches, tags_data->batch_id);
+	if (!batch)
+		return FALSE;
+
+	/* Create batch_message struct */
+	msg = g_new0 (batch_message, 1);
+	msg->prefix = g_strdup (prefix);
+	msg->command = g_strdup (command);
+	msg->timestamp = tags_data->timestamp;
+	if (tags_data->msgid)
+		msg->msgid = g_strdup (tags_data->msgid);
+
+	/* Copy all_tags if available */
+	if (tags_data->all_tags)
+	{
+		GHashTableIter iter;
+		gpointer key, value;
+
+		msg->tags = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+		g_hash_table_iter_init (&iter, tags_data->all_tags);
+		while (g_hash_table_iter_next (&iter, &key, &value))
+		{
+			g_hash_table_insert (msg->tags, g_strdup (key), g_strdup (value));
+		}
+	}
+
+	/* Count parameters (start from word[3] which is typically the first param) */
+	param_count = 0;
+	for (i = 3; i < word_count && word[i] && *word[i]; i++)
+		param_count++;
+
+	if (param_count > 0)
+	{
+		msg->params = g_new0 (char *, param_count + 1);
+		msg->param_count = param_count;
+		for (i = 0; i < param_count; i++)
+		{
+			msg->params[i] = g_strdup (word[3 + i]);
+		}
+	}
+
+	/* Add to batch's message list (appending maintains chronological order) */
+	batch->messages = g_slist_append (batch->messages, msg);
+
+	return TRUE;
+}
+
+/* IRCv3 TAGMSG - tag-only messages
+ * Used for typing indicators (+typing), reactions (+react), replies (+reply), etc.
+ * See https://ircv3.net/specs/extensions/message-tags#the-tagmsg-tag
+ */
+void
+inbound_tagmsg (server *serv, char *to, char *nick, char *ip,
+                const message_tags_data *tags_data)
+{
+	session *sess;
+	const char *typing_value;
+
+	if (!serv->have_message_tags)
+		return;
+
+	/* Find the appropriate session */
+	if (is_channel (serv, to))
+	{
+		sess = find_channel (serv, to);
+		if (!sess)
+			sess = serv->server_session;
+	}
+	else
+	{
+		/* Private TAGMSG */
+		sess = find_dialog (serv, nick);
+		if (!sess)
+			sess = serv->server_session;
+	}
+
+	/* Handle +typing tag for typing indicators
+	 * Values: "active" (typing), "paused" (stopped briefly), "done" (finished/sent)
+	 */
+	if (tags_data->all_tags)
+	{
+		typing_value = g_hash_table_lookup (tags_data->all_tags, "+typing");
+		if (typing_value)
+		{
+			/* TODO: Update typing indicator UI
+			 * For now, we just acknowledge the typing notification.
+			 * Future implementation will:
+			 * - Show typing indicator icon next to nick in userlist
+			 * - Show "User is typing..." in status bar for queries
+			 */
+			if (!strcmp (typing_value, "active"))
+			{
+				/* User started typing */
+			}
+			else if (!strcmp (typing_value, "paused"))
+			{
+				/* User paused typing */
+			}
+			else if (!strcmp (typing_value, "done"))
+			{
+				/* User finished typing */
+			}
+		}
+
+		/* Handle +react tag for reactions (future)
+		 * Format: +react=<emoji>
+		 */
+		/* TODO: Implement reaction handling */
+
+		/* Handle +reply tag for replies (future)
+		 * Format: +reply=<msgid>
+		 */
+		/* TODO: Implement reply threading */
+	}
+
+	/* Emit plugin hook for TAGMSG so plugins can handle custom tags */
+	/* Note: The full tags are available in tags_data->all_tags */
+}
+
 void
 inbound_identified (server *serv)	/* 'MODE +e MYSELF' on freenode */
 {
@@ -1688,6 +1972,16 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_awaynotify = enable;
 		else if (!strcmp (extension, "account-tag"))
 			serv->have_account_tag = enable;
+		else if (!strcmp (extension, "batch"))
+			serv->have_batch = enable;
+		else if (!strcmp (extension, "message-tags"))
+			serv->have_message_tags = enable;
+		else if (!strcmp (extension, "echo-message"))
+			serv->have_echo_message = enable;
+		else if (!strcmp (extension, "labeled-response"))
+			serv->have_labeled_response = enable;
+		else if (!strcmp (extension, "draft/chathistory"))
+			serv->have_chathistory = enable;
 		else if (!strcmp (extension, "sasl"))
 		{
 			serv->have_sasl = enable;
@@ -1753,6 +2047,15 @@ static const char * const supported_caps[] = {
 	"invite-notify",
 	"account-tag",
 	"extended-monitor",
+
+	/* IRCv3 message-tags and batch */
+	"batch",
+	"message-tags",
+	"echo-message",
+	"labeled-response",
+
+	/* IRCv3 chathistory */
+	"draft/chathistory",
 
 	/* ZNC */
 	"znc.in/server-time-iso",

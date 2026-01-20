@@ -55,6 +55,7 @@
 #include "tree.h"
 #include "outbound.h"
 #include "chanopt.h"
+#include "chathistory.h"
 
 #define TBUFSIZE 4096
 
@@ -2258,6 +2259,74 @@ show_help_line (session *sess, help_list *hl, char *name, char *usage)
 }
 
 static int
+cmd_history (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	int limit = 0;
+	const char *target = NULL;
+
+	/* Check if chathistory is available */
+	if (!serv->have_chathistory)
+	{
+		PrintText (sess, "Chat history is not available on this server.\n");
+		return TRUE;
+	}
+
+	if (!serv->connected)
+	{
+		notc_msg (sess);
+		return TRUE;
+	}
+
+	/* Parse arguments: /HISTORY [target] [limit] */
+	if (word[2][0])
+	{
+		/* Check if first arg is a number (limit) or target */
+		if (g_ascii_isdigit (word[2][0]))
+		{
+			limit = atoi (word[2]);
+		}
+		else
+		{
+			target = word[2];
+			if (word[3][0])
+				limit = atoi (word[3]);
+		}
+	}
+
+	/* If no target specified, use current session */
+	if (!target)
+	{
+		if (sess->type == SESS_CHANNEL || sess->type == SESS_DIALOG)
+		{
+			chathistory_request_latest (sess, limit);
+		}
+		else
+		{
+			PrintText (sess, "Use /HISTORY in a channel or query window, or specify a target.\n");
+		}
+	}
+	else
+	{
+		/* Find or create session for target */
+		session *target_sess = find_channel (serv, (char *)target);
+		if (!target_sess)
+			target_sess = find_dialog (serv, (char *)target);
+
+		if (target_sess)
+		{
+			chathistory_request_latest (target_sess, limit);
+		}
+		else
+		{
+			PrintTextf (sess, "No open window for %s. Join the channel or open a query first.\n", target);
+		}
+	}
+
+	return TRUE;
+}
+
+static int
 cmd_help (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	int i = 0, longfmt = 0;
@@ -2744,10 +2813,11 @@ cmd_me (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			while ((split_text = split_up_text (sess, act + offset, cmd_length, split_text)))
 			{
 				sess->server->p_action (sess->server, sess->channel, split_text);
-				/* print it to screen */
-				inbound_action (sess, sess->channel, sess->server->nick, "",
-									 split_text, TRUE, FALSE,
-									 &no_tags);
+				/* With echo-message, server echoes our messages back - don't display locally */
+				if (!sess->server->have_echo_message)
+					inbound_action (sess, sess->channel, sess->server->nick, "",
+										 split_text, TRUE, FALSE,
+										 &no_tags);
 
 				if (*split_text)
 					offset += strlen(split_text);
@@ -2756,9 +2826,10 @@ cmd_me (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			}
 
 			sess->server->p_action (sess->server, sess->channel, act + offset);
-			/* print it to screen */
-			inbound_action (sess, sess->channel, sess->server->nick, "",
-								 act + offset, TRUE, FALSE, &no_tags);
+			/* With echo-message, server echoes our messages back - don't display locally */
+			if (!sess->server->have_echo_message)
+				inbound_action (sess, sess->channel, sess->server->nick, "",
+									 act + offset, TRUE, FALSE, &no_tags);
 		} else
 		{
 			notc_msg (sess);
@@ -2875,7 +2946,8 @@ cmd_msg (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			newsess = find_dialog (sess->server, nick);
 			if (!newsess)
 				newsess = find_channel (sess->server, nick);
-			if (newsess)
+			/* With echo-message, server echoes our messages back - don't display locally */
+			if (newsess && !sess->server->have_echo_message)
 			{
 				message_tags_data no_tags = MESSAGE_TAGS_DATA_INIT;
 
@@ -4034,6 +4106,8 @@ const struct commands xc_cmds[] = {
 									  "       GUI [MSGBOX <text>|MENU TOGGLE]\n"
 									  "       GUI COLOR <n> [-NOOVERRIDE]"},
 	{"HELP", cmd_help, 0, 0, 1, 0},
+	{"HISTORY", cmd_history, 1, 0, 1,
+	 N_("HISTORY [target] [limit], requests chat history from the server (IRCv3)")},
 	{"HOP", cmd_hop, 1, 1, 1,
 	 N_("HOP <nick>, gives chanhalf-op status to the nick (needs chanop)")},
 	{"ID", cmd_id, 1, 0, 1, N_("ID <password>, identifies yourself to nickserv")},
@@ -4649,18 +4723,22 @@ handle_say (session *sess, char *text, int check_spch)
 
 		while ((split_text = split_up_text (sess, text + offset, cmd_length, split_text)))
 		{
-			inbound_chanmsg (sess->server, sess, sess->channel, sess->server->nick,
-								  split_text, TRUE, FALSE, &no_tags);
+			/* With echo-message, server echoes our messages back - don't display locally */
+			if (!sess->server->have_echo_message)
+				inbound_chanmsg (sess->server, sess, sess->channel, sess->server->nick,
+									  split_text, TRUE, FALSE, &no_tags);
 			sess->server->p_message (sess->server, sess->channel, split_text);
-			
+
 			if (*split_text)
 				offset += strlen(split_text);
-			
+
 			g_free (split_text);
 		}
 
-		inbound_chanmsg (sess->server, sess, sess->channel, sess->server->nick,
-							  text + offset, TRUE, FALSE, &no_tags);
+		/* With echo-message, server echoes our messages back - don't display locally */
+		if (!sess->server->have_echo_message)
+			inbound_chanmsg (sess->server, sess, sess->channel, sess->server->nick,
+								  text + offset, TRUE, FALSE, &no_tags);
 		sess->server->p_message (sess->server, sess->channel, text + offset);
 	} else
 	{
