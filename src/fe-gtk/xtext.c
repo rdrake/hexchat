@@ -3544,7 +3544,8 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 
 	/* draw the timestamp */
 	if (xtext->auto_indent && xtext->buffer->time_stamp &&
-		 (!xtext->skip_stamp || xtext->mark_stamp || xtext->force_stamp))
+		 (!xtext->skip_stamp || xtext->mark_stamp || xtext->force_stamp) &&
+		 ent->left_len != 0)
 	{
 		char *time_str;
 		int len;
@@ -3552,6 +3553,14 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 		len = xtext_get_stamp_str (ent->stamp, &time_str);
 		gtk_xtext_render_stamp (xtext, ent, time_str, len, line, win_width);
 		g_free (time_str);
+	}
+	else if (xtext->auto_indent && xtext->buffer->time_stamp &&
+				ent->left_len == 0)
+	{
+		/* Continuation line (multiline message) - fill stamp area with background */
+		int y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
+		xtext_draw_bg (xtext, 0, y - xtext->font->ascent,
+							xtext->stamp_width, xtext->fontsize);
 	}
 
 	/* draw each line one by one */
@@ -4829,6 +4838,258 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	}
 }
 
+/* IRCv3 modernization: prepend entry at head (Phase 3)
+ * Used for chathistory BEFORE requests - adds older messages at the start.
+ * Key differences from append:
+ * - Inserts at head of linked list
+ * - Adjusts scroll position to preserve user's view
+ * - Does NOT update marker_pos (historical entries)
+ * - Prunes from bottom if exceeding max_lines
+ */
+static void
+gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
+{
+	int i;
+	int new_lines;
+
+	/* we don't like tabs */
+	i = 0;
+	while (i < ent->str_len)
+	{
+		if (ent->str[i] == '\t')
+			ent->str[i] = ' ';
+		i++;
+	}
+
+	ent->stamp = stamp;
+	if (stamp == 0)
+		ent->stamp = time (0);
+	ent->slp = NULL;
+	ent->str_width = gtk_xtext_text_width_ent (buf->xtext, ent);
+	ent->mark_start = -1;
+	ent->mark_end = -1;
+	ent->prev = NULL;
+	ent->marks = NULL;
+
+	/* IRCv3 modernization: entry identification (Phase 1) */
+	ent->msgid = NULL;	/* Will be set later via gtk_xtext_set_msgid() if available */
+	ent->entry_id = buf->next_entry_id++;
+	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
+
+	if (ent->indent < MARGIN)
+		ent->indent = MARGIN;	  /* 2 pixels is the left margin */
+
+	/* prepend to our linked list */
+	if (buf->text_first)
+		buf->text_first->prev = ent;
+	else
+		buf->text_last = ent;
+	ent->next = buf->text_first;
+	buf->text_first = ent;
+
+	ent->sublines = NULL;
+	new_lines = gtk_xtext_lines_taken (buf, ent);
+	buf->num_lines += new_lines;
+
+	/* Adjust scroll position - we added lines at the top, so everything shifts down */
+	buf->pagetop_line += new_lines;
+	buf->old_value += new_lines;
+	if (buf->xtext && buf->xtext->buffer == buf)
+	{
+		buf->xtext->select_start_adj += new_lines;
+		/* Update adjustment value to keep view stable */
+		g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+		gtk_adjustment_set_value (buf->xtext->adj,
+			gtk_adjustment_get_value (buf->xtext->adj) + new_lines);
+		g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+	}
+
+	/* Don't update marker_pos for historical entries - they're old */
+	/* marker_pos should stay where it was */
+
+	/* Prune from BOTTOM if exceeding max_lines (opposite of append) */
+	if (buf->xtext->max_lines > 2 && buf->xtext->max_lines < buf->num_lines)
+	{
+		gtk_xtext_remove_bottom (buf);
+	}
+
+	/* Schedule render if this buffer is active */
+	if (buf->xtext->buffer == buf)
+	{
+		if (!buf->xtext->add_io_tag)
+		{
+			if (buf->xtext->io_tag)
+			{
+				g_source_remove (buf->xtext->io_tag);
+				buf->xtext->io_tag = 0;
+			}
+			buf->xtext->add_io_tag = g_timeout_add (REFRESH_TIMEOUT * 2,
+													(GSourceFunc)
+													gtk_xtext_render_page_timeout,
+													buf->xtext);
+		}
+	}
+
+	/* Handle search follow mode */
+	if (buf->search_flags & follow)
+	{
+		GList *gl;
+
+		gl = gtk_xtext_search_textentry (buf, ent);
+		gtk_xtext_search_textentry_add (buf, ent, gl, FALSE);
+	}
+}
+
+/* IRCv3 modernization: insert entry sorted by timestamp (Phase 3)
+ * Used for chathistory gap filling - inserts at correct chronological position.
+ * Walks the list to find insertion point (O(n) - acceptable for gap filling).
+ * For bulk operations, use prepend/append which are O(1).
+ */
+static void
+gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
+{
+	int i;
+	int new_lines;
+	int lines_before_insert = 0;
+	textentry *pos;
+	gboolean inserted_before_pagetop = FALSE;
+
+	/* we don't like tabs */
+	i = 0;
+	while (i < ent->str_len)
+	{
+		if (ent->str[i] == '\t')
+			ent->str[i] = ' ';
+		i++;
+	}
+
+	ent->stamp = stamp;
+	if (stamp == 0)
+		ent->stamp = time (0);
+	ent->slp = NULL;
+	ent->str_width = gtk_xtext_text_width_ent (buf->xtext, ent);
+	ent->mark_start = -1;
+	ent->mark_end = -1;
+	ent->marks = NULL;
+
+	/* IRCv3 modernization: entry identification (Phase 1) */
+	ent->msgid = NULL;
+	ent->entry_id = buf->next_entry_id++;
+	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
+
+	if (ent->indent < MARGIN)
+		ent->indent = MARGIN;
+
+	/* Find insertion point - walk from head to find first entry with stamp > ent->stamp */
+	pos = buf->text_first;
+	while (pos && pos->stamp <= ent->stamp)
+	{
+		if (pos->sublines)
+			lines_before_insert += g_slist_length (pos->sublines);
+		else
+			lines_before_insert += 1;
+		pos = pos->next;
+	}
+
+	/* Insert before pos (or at end if pos is NULL) */
+	if (pos == NULL)
+	{
+		/* Insert at end (append case) */
+		ent->next = NULL;
+		if (buf->text_last)
+			buf->text_last->next = ent;
+		else
+			buf->text_first = ent;
+		ent->prev = buf->text_last;
+		buf->text_last = ent;
+	}
+	else if (pos == buf->text_first)
+	{
+		/* Insert at head (prepend case) */
+		ent->prev = NULL;
+		ent->next = buf->text_first;
+		buf->text_first->prev = ent;
+		buf->text_first = ent;
+		inserted_before_pagetop = TRUE;
+	}
+	else
+	{
+		/* Insert in middle */
+		ent->prev = pos->prev;
+		ent->next = pos;
+		pos->prev->next = ent;
+		pos->prev = ent;
+
+		/* Check if we inserted before the current view */
+		if (buf->pagetop_ent)
+		{
+			textentry *check = buf->text_first;
+			while (check && check != buf->pagetop_ent)
+			{
+				if (check == ent)
+				{
+					inserted_before_pagetop = TRUE;
+					break;
+				}
+				check = check->next;
+			}
+		}
+	}
+
+	ent->sublines = NULL;
+	new_lines = gtk_xtext_lines_taken (buf, ent);
+	buf->num_lines += new_lines;
+
+	/* Adjust scroll position if we inserted before current view */
+	if (inserted_before_pagetop)
+	{
+		buf->pagetop_line += new_lines;
+		buf->old_value += new_lines;
+		if (buf->xtext && buf->xtext->buffer == buf)
+		{
+			buf->xtext->select_start_adj += new_lines;
+			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+			gtk_adjustment_set_value (buf->xtext->adj,
+				gtk_adjustment_get_value (buf->xtext->adj) + new_lines);
+			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+		}
+	}
+
+	/* Don't update marker_pos for historical entries */
+
+	/* For sorted insert, we don't have a clear pruning strategy.
+	 * The caller should manage buffer size appropriately.
+	 * If max_lines is exceeded, we could prune oldest, but that might
+	 * remove the entry we just inserted if it's oldest.
+	 */
+
+	/* Schedule render if this buffer is active */
+	if (buf->xtext->buffer == buf)
+	{
+		if (!buf->xtext->add_io_tag)
+		{
+			if (buf->xtext->io_tag)
+			{
+				g_source_remove (buf->xtext->io_tag);
+				buf->xtext->io_tag = 0;
+			}
+			buf->xtext->add_io_tag = g_timeout_add (REFRESH_TIMEOUT * 2,
+													(GSourceFunc)
+													gtk_xtext_render_page_timeout,
+													buf->xtext);
+		}
+	}
+
+	/* Handle search follow mode */
+	if (buf->search_flags & follow)
+	{
+		GList *gl;
+
+		gl = gtk_xtext_search_textentry (buf, ent);
+		gtk_xtext_search_textentry_add (buf, ent, gl, FALSE);
+	}
+}
+
 /* the main two public functions */
 
 void
@@ -4941,6 +5202,236 @@ gtk_xtext_append (xtext_buffer *buf, unsigned char *text, int len, time_t stamp)
 	ent->left_len = -1;
 
 	gtk_xtext_append_entry (buf, ent, stamp);
+}
+
+/* IRCv3 modernization: prepend functions for chathistory (Phase 3)
+ * These insert at the head of the buffer for older messages.
+ */
+
+void
+gtk_xtext_prepend_indent (xtext_buffer *buf,
+								 unsigned char *left_text, int left_len,
+								 unsigned char *right_text, int right_len,
+								 time_t stamp)
+{
+	textentry *ent;
+	unsigned char *str;
+	int space;
+	int tempindent;
+	int left_width;
+
+	if (left_len == -1)
+		left_len = strlen (left_text);
+
+	if (right_len == -1)
+		right_len = strlen (right_text);
+
+	if (left_len + right_len + 2 >= sizeof (buf->xtext->scratch_buffer))
+		right_len = sizeof (buf->xtext->scratch_buffer) - left_len - 2;
+
+	if (right_text[right_len-1] == '\n')
+		right_len--;
+
+	ent = g_malloc (left_len + right_len + 2 + sizeof (textentry));
+	str = (unsigned char *) ent + sizeof (textentry);
+
+	if (left_len)
+		memcpy (str, left_text, left_len);
+	str[left_len] = ' ';
+	if (right_len)
+		memcpy (str + left_len + 1, right_text, right_len);
+	str[left_len + 1 + right_len] = 0;
+
+	left_width = gtk_xtext_text_width (buf->xtext, left_text, left_len);
+
+	ent->left_len = left_len;
+	ent->str = str;
+	ent->str_len = left_len + 1 + right_len;
+	ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
+
+	/* This is copied into the scratch buffer later, double check math */
+	g_assert (ent->str_len < sizeof (buf->xtext->scratch_buffer));
+
+	if (buf->time_stamp)
+		space = buf->xtext->stamp_width;
+	else
+		space = 0;
+
+	/* do we need to auto adjust the separator position? */
+	if (buf->xtext->auto_indent &&
+		 buf->indent < buf->xtext->max_auto_indent &&
+		 ent->indent < MARGIN + space)
+	{
+		tempindent = MARGIN + space + buf->xtext->space_width + left_width;
+
+		if (tempindent > buf->indent)
+			buf->indent = tempindent;
+
+		if (buf->indent > buf->xtext->max_auto_indent)
+			buf->indent = buf->xtext->max_auto_indent;
+
+		gtk_xtext_fix_indent (buf);
+		gtk_xtext_recalc_widths (buf, FALSE);
+
+		ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
+		buf->xtext->force_render = TRUE;
+	}
+
+	gtk_xtext_prepend_entry (buf, ent, stamp);
+}
+
+void
+gtk_xtext_prepend (xtext_buffer *buf, unsigned char *text, int len, time_t stamp)
+{
+	textentry *ent;
+	gboolean truncate = FALSE;
+
+	if (len == -1)
+		len = strlen (text);
+
+	if (text[len-1] == '\n')
+		len--;
+
+	if (len >= sizeof (buf->xtext->scratch_buffer))
+	{
+		len = sizeof (buf->xtext->scratch_buffer) - 1;
+		truncate = TRUE;
+	}
+
+	ent = g_malloc (len + 1 + sizeof (textentry));
+	ent->str = (unsigned char *) ent + sizeof (textentry);
+	ent->str_len = len;
+	if (len)
+	{
+		if (!truncate)
+		{
+			memcpy (ent->str, text, len);
+			ent->str[len] = '\0';
+		}
+		else
+		{
+			safe_strcpy (ent->str, text, sizeof (buf->xtext->scratch_buffer));
+			ent->str_len = strlen (ent->str);
+		}
+	}
+	ent->indent = 0;
+	ent->left_len = -1;
+
+	gtk_xtext_prepend_entry (buf, ent, stamp);
+}
+
+/* IRCv3 modernization: sorted insert for chathistory gap filling (Phase 3)
+ * These insert at the correct chronological position by timestamp.
+ */
+
+void
+gtk_xtext_insert_sorted_indent (xtext_buffer *buf,
+								unsigned char *left_text, int left_len,
+								unsigned char *right_text, int right_len,
+								time_t stamp)
+{
+	textentry *ent;
+	unsigned char *str;
+	int space;
+	int tempindent;
+	int left_width;
+
+	if (left_len == -1)
+		left_len = strlen (left_text);
+
+	if (right_len == -1)
+		right_len = strlen (right_text);
+
+	if (left_len + right_len + 2 >= sizeof (buf->xtext->scratch_buffer))
+		right_len = sizeof (buf->xtext->scratch_buffer) - left_len - 2;
+
+	if (right_text[right_len-1] == '\n')
+		right_len--;
+
+	ent = g_malloc (left_len + right_len + 2 + sizeof (textentry));
+	str = (unsigned char *) ent + sizeof (textentry);
+
+	if (left_len)
+		memcpy (str, left_text, left_len);
+	str[left_len] = ' ';
+	if (right_len)
+		memcpy (str + left_len + 1, right_text, right_len);
+	str[left_len + 1 + right_len] = 0;
+
+	left_width = gtk_xtext_text_width (buf->xtext, left_text, left_len);
+
+	ent->left_len = left_len;
+	ent->str = str;
+	ent->str_len = left_len + 1 + right_len;
+	ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
+
+	g_assert (ent->str_len < sizeof (buf->xtext->scratch_buffer));
+
+	if (buf->time_stamp)
+		space = buf->xtext->stamp_width;
+	else
+		space = 0;
+
+	if (buf->xtext->auto_indent &&
+		 buf->indent < buf->xtext->max_auto_indent &&
+		 ent->indent < MARGIN + space)
+	{
+		tempindent = MARGIN + space + buf->xtext->space_width + left_width;
+
+		if (tempindent > buf->indent)
+			buf->indent = tempindent;
+
+		if (buf->indent > buf->xtext->max_auto_indent)
+			buf->indent = buf->xtext->max_auto_indent;
+
+		gtk_xtext_fix_indent (buf);
+		gtk_xtext_recalc_widths (buf, FALSE);
+
+		ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
+		buf->xtext->force_render = TRUE;
+	}
+
+	gtk_xtext_insert_sorted_entry (buf, ent, stamp);
+}
+
+void
+gtk_xtext_insert_sorted (xtext_buffer *buf, unsigned char *text, int len, time_t stamp)
+{
+	textentry *ent;
+	gboolean truncate = FALSE;
+
+	if (len == -1)
+		len = strlen (text);
+
+	if (text[len-1] == '\n')
+		len--;
+
+	if (len >= sizeof (buf->xtext->scratch_buffer))
+	{
+		len = sizeof (buf->xtext->scratch_buffer) - 1;
+		truncate = TRUE;
+	}
+
+	ent = g_malloc (len + 1 + sizeof (textentry));
+	ent->str = (unsigned char *) ent + sizeof (textentry);
+	ent->str_len = len;
+	if (len)
+	{
+		if (!truncate)
+		{
+			memcpy (ent->str, text, len);
+			ent->str[len] = '\0';
+		}
+		else
+		{
+			safe_strcpy (ent->str, text, sizeof (buf->xtext->scratch_buffer));
+			ent->str_len = strlen (ent->str);
+		}
+	}
+	ent->indent = 0;
+	ent->left_len = -1;
+
+	gtk_xtext_insert_sorted_entry (buf, ent, stamp);
 }
 
 gboolean

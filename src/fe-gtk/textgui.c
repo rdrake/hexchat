@@ -227,6 +227,199 @@ PrintTextRaw (void *xtbuf, unsigned char *text, int indent, time_t stamp)
 	}
 }
 
+/* IRCv3 modernization: prepend variants for chathistory BEFORE requests (Phase 3) */
+
+static void
+PrintTextLinePrepend (xtext_buffer *xtbuf, unsigned char *text, int len, int indent, time_t timet)
+{
+	unsigned char *tab, *new_text;
+	int leftlen;
+
+	if (len == 0)
+		len = 1;
+
+	if (!indent)
+	{
+		if (prefs.hex_stamp_text)
+		{
+			int stamp_size;
+			char *stamp;
+
+			if (timet == 0)
+				timet = time (0);
+
+			stamp_size = get_stamp_str (prefs.hex_stamp_text_format, timet, &stamp);
+			new_text = g_malloc (len + stamp_size + 1);
+			memcpy (new_text, stamp, stamp_size);
+			g_free (stamp);
+			memcpy (new_text + stamp_size, text, len);
+			gtk_xtext_prepend (xtbuf, new_text, len + stamp_size, timet);
+			g_free (new_text);
+		} else
+			gtk_xtext_prepend (xtbuf, text, len, timet);
+		return;
+	}
+
+	tab = strchr (text, '\t');
+	if (tab && tab < (text + len))
+	{
+		leftlen = tab - text;
+		gtk_xtext_prepend_indent (xtbuf,
+										 text, leftlen, tab + 1, len - (leftlen + 1), timet);
+	} else
+		gtk_xtext_prepend_indent (xtbuf, 0, 0, text, len, timet);
+}
+
+void
+PrintTextRawPrepend (void *xtbuf, unsigned char *text, int indent, time_t stamp)
+{
+	char *last_text = text;
+	int len = 0;
+	int beep_done = FALSE;
+	GSList *lines = NULL;
+	GSList *iter;
+
+	/* Collect all lines first, then prepend in reverse order
+	 * so that the final order in the buffer is correct */
+
+	/* split the text into separate lines */
+	while (1)
+	{
+		switch (*text)
+		{
+		case 0:
+			if (len > 0 || last_text == (char *)text)
+			{
+				/* Store line info: pointer, length, stamp */
+				lines = g_slist_prepend (lines, GINT_TO_POINTER (len));
+				lines = g_slist_prepend (lines, last_text);
+			}
+			goto process_lines;
+		case '\n':
+			lines = g_slist_prepend (lines, GINT_TO_POINTER (len));
+			lines = g_slist_prepend (lines, last_text);
+			text++;
+			if (*text == 0)
+				goto process_lines;
+			last_text = text;
+			len = 0;
+			break;
+		case ATTR_BEEP:
+			*text = ' ';
+			if (!beep_done)
+			{
+				beep_done = TRUE;
+				if (!prefs.hex_input_filter_beep)
+					gdk_beep ();
+			}
+		default:
+			text++;
+			len++;
+		}
+	}
+
+process_lines:
+	/* lines list is now in reverse order (last line first).
+	 * Prepend each line - this will result in correct chronological order */
+	iter = lines;
+	while (iter)
+	{
+		char *line_text = iter->data;
+		iter = iter->next;
+		if (iter)
+		{
+			int line_len = GPOINTER_TO_INT (iter->data);
+			iter = iter->next;
+			PrintTextLinePrepend (xtbuf, line_text, line_len, indent, stamp);
+		}
+	}
+	g_slist_free (lines);
+}
+
+/* IRCv3 modernization: insert_sorted variants for chathistory AFTER requests (Phase 3)
+ * These insert messages at their correct timestamp position, for catch-up messages
+ * that need to be placed between scrollback and the join banner.
+ */
+
+static void
+PrintTextLineInsertSorted (xtext_buffer *xtbuf, unsigned char *text, int len, int indent, time_t timet)
+{
+	unsigned char *tab, *new_text;
+	int leftlen;
+
+	if (len == 0)
+		len = 1;
+
+	if (!indent)
+	{
+		if (prefs.hex_stamp_text)
+		{
+			int stamp_size;
+			char *stamp;
+
+			if (timet == 0)
+				timet = time (0);
+
+			stamp_size = get_stamp_str (prefs.hex_stamp_text_format, timet, &stamp);
+			new_text = g_malloc (len + stamp_size + 1);
+			memcpy (new_text, stamp, stamp_size);
+			g_free (stamp);
+			memcpy (new_text + stamp_size, text, len);
+			gtk_xtext_insert_sorted (xtbuf, new_text, len + stamp_size, timet);
+			g_free (new_text);
+		} else
+			gtk_xtext_insert_sorted (xtbuf, text, len, timet);
+		return;
+	}
+
+	tab = strchr (text, '\t');
+	if (tab && tab < (text + len))
+	{
+		leftlen = tab - text;
+		gtk_xtext_insert_sorted_indent (xtbuf,
+										 text, leftlen, tab + 1, len - (leftlen + 1), timet);
+	} else
+		gtk_xtext_insert_sorted_indent (xtbuf, 0, 0, text, len, timet);
+}
+
+void
+PrintTextRawInsertSorted (void *xtbuf, unsigned char *text, int indent, time_t stamp)
+{
+	char *last_text = text;
+	int len = 0;
+	int beep_done = FALSE;
+
+	/* split the text into separate lines and insert each at correct position */
+	while (1)
+	{
+		switch (*text)
+		{
+		case 0:
+			PrintTextLineInsertSorted (xtbuf, last_text, len, indent, stamp);
+			return;
+		case '\n':
+			PrintTextLineInsertSorted (xtbuf, last_text, len, indent, stamp);
+			text++;
+			if (*text == 0)
+				return;
+			last_text = text;
+			len = 0;
+			break;
+		case ATTR_BEEP:
+			*text = ' ';
+			if (!beep_done)
+			{
+				beep_done = TRUE;
+				if (!prefs.hex_input_filter_beep)
+					gdk_beep ();
+			}
+		default:
+			text++;
+			len++;
+		}
+	}
+}
+
 static void
 pevent_dialog_close (GtkWidget *wid, gpointer arg)
 {

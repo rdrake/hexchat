@@ -291,6 +291,18 @@ void gtk_xtext_append_indent (xtext_buffer *buf,
 										unsigned char *left_text, int left_len,
 										unsigned char *right_text, int right_len,
 										time_t stamp);
+/* IRCv3 modernization: prepend for chathistory BEFORE requests (Phase 3) */
+void gtk_xtext_prepend (xtext_buffer *buf, unsigned char *text, int len, time_t stamp);
+void gtk_xtext_prepend_indent (xtext_buffer *buf,
+										unsigned char *left_text, int left_len,
+										unsigned char *right_text, int right_len,
+										time_t stamp);
+/* IRCv3 modernization: sorted insert for chathistory gap filling (Phase 3) */
+void gtk_xtext_insert_sorted (xtext_buffer *buf, unsigned char *text, int len, time_t stamp);
+void gtk_xtext_insert_sorted_indent (xtext_buffer *buf,
+										unsigned char *left_text, int left_len,
+										unsigned char *right_text, int right_len,
+										time_t stamp);
 int gtk_xtext_set_font (GtkXText *xtext, char *name);
 void gtk_xtext_set_background (GtkXText * xtext, cairo_surface_t * pixmap);
 void gtk_xtext_set_palette (GtkXText * xtext, GdkRGBA palette[]);

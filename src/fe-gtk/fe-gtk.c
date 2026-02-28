@@ -848,6 +848,45 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 			   gboolean no_activity)
 {
 	textentry *first_new_entry;
+	textentry *new_entry;
+
+	/* IRCv3 modernization: check if we should prepend (Phase 3)
+	 * For CHATHISTORY BEFORE requests processed in reverse order,
+	 * we prepend each message to maintain chronological order.
+	 */
+	if (sess->history_request_is_before && sess->history_prepend_mode)
+	{
+		/* For prepend, track the entry at the head before we add */
+		first_new_entry = gtk_xtext_buffer_get_first (sess->res->buffer);
+
+		PrintTextRawPrepend (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
+
+		/* After prepend, find the new first entry */
+		new_entry = gtk_xtext_buffer_get_first (sess->res->buffer);
+
+		/* Associate msgid with the new entry if it's different from old first */
+		if (sess->current_msgid && new_entry && new_entry != first_new_entry)
+		{
+			gtk_xtext_set_msgid (sess->res->buffer, new_entry, sess->current_msgid);
+		}
+
+		/* Don't update tab colors for historical messages */
+		return;
+	}
+
+	/* IRCv3 modernization: check if we should insert sorted (Phase 3)
+	 * For CHATHISTORY AFTER requests, we insert at the correct timestamp position.
+	 * This places catch-up messages between scrollback and the join banner.
+	 */
+	if (sess->history_insert_sorted_mode)
+	{
+		PrintTextRawInsertSorted (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
+
+		/* Don't update tab colors for historical messages */
+		return;
+	}
+
+	/* Normal append path */
 
 	/* IRCv3 modernization: track first entry for msgid association (Phase 1)
 	 * Important: A single IRC message may create multiple xtext entries
@@ -882,6 +921,33 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 		fe_set_tab_color (sess, FE_COLOR_NEW_MSG);
 	else
 		fe_set_tab_color (sess, FE_COLOR_NEW_DATA);
+}
+
+/* IRCv3 modernization: prepend text for chathistory BEFORE requests (Phase 3)
+ * Inserts at head of buffer to maintain chronological order.
+ * For BEFORE requests, messages come oldest-to-newest - we process in reverse
+ * and prepend each, resulting in oldest at top.
+ */
+void
+fe_print_text_prepend (struct session *sess, char *text, time_t stamp)
+{
+	textentry *first_new_entry;
+
+	/* For prepend, the "first" entry will be at the head after prepending */
+	first_new_entry = gtk_xtext_buffer_get_first (sess->res->buffer);
+
+	PrintTextRawPrepend (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
+
+	/* After prepend, the new first entry is at the head */
+	textentry *new_first = gtk_xtext_buffer_get_first (sess->res->buffer);
+
+	/* Associate msgid with the new entry if different from old first */
+	if (sess->current_msgid && new_first && new_first != first_new_entry)
+	{
+		gtk_xtext_set_msgid (sess->res->buffer, new_first, sess->current_msgid);
+	}
+
+	/* Don't update tab colors for historical messages - they're not "new" activity */
 }
 
 void

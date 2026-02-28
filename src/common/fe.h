@@ -97,6 +97,8 @@ void fe_progressbar_start (struct session *sess);
 void fe_progressbar_end (struct server *serv);
 void fe_print_text (struct session *sess, char *text, time_t stamp,
 					gboolean no_activity);
+/* IRCv3 modernization: prepend for chathistory BEFORE requests (Phase 3) */
+void fe_print_text_prepend (struct session *sess, char *text, time_t stamp);
 void fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel);
 int fe_userlist_remove (struct session *sess, struct User *user);
 void fe_userlist_rehash (struct session *sess, struct User *user);

@@ -21,6 +21,10 @@
 #define HEXCHAT_TEXTGUI_H
 
 void PrintTextRaw (void *xtbuf, unsigned char *text, int indent, time_t stamp);
+/* IRCv3 modernization: prepend for chathistory BEFORE requests (Phase 3) */
+void PrintTextRawPrepend (void *xtbuf, unsigned char *text, int indent, time_t stamp);
+/* IRCv3 modernization: insert_sorted for chathistory AFTER requests (Phase 3) */
+void PrintTextRawInsertSorted (void *xtbuf, unsigned char *text, int indent, time_t stamp);
 void pevent_dialog_show (void);
 
 #endif
