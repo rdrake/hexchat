@@ -38,21 +38,26 @@
 /* Forward declarations */
 static void schedule_background_fetch (session *sess);
 
-/* Get effective limit, respecting server and configured limits */
+/* Get effective limit for a CHATHISTORY request.
+ * Prefers the server-advertised ISUPPORT CHATHISTORY=N value (the server is
+ * telling us the optimal batch size).  Falls back to CHATHISTORY_DEFAULT_LIMIT
+ * when the server doesn't advertise one, and never exceeds CHATHISTORY_MAX_LIMIT
+ * as a safety cap. */
 static int
 get_effective_limit (server *serv, int requested)
 {
-	int limit = requested;
+	int limit;
 
-	if (limit <= 0)
+	/* Use server-advertised limit when available, otherwise the caller's value */
+	if (serv->chathistory_limit > 0)
+		limit = serv->chathistory_limit;
+	else if (requested > 0)
+		limit = requested;
+	else
 		limit = CHATHISTORY_DEFAULT_LIMIT;
 
 	if (limit > CHATHISTORY_MAX_LIMIT)
 		limit = CHATHISTORY_MAX_LIMIT;
-
-	/* Respect server-advertised limit */
-	if (serv->chathistory_limit > 0 && limit > serv->chathistory_limit)
-		limit = serv->chathistory_limit;
 
 	return limit;
 }
@@ -652,13 +657,10 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		return;
 	}
 
-	/* For initial join, don't print separator before history - just show messages.
-	 * For background fetching, also stay silent (it's automatic).
-	 * For scroll-to-load or manual /HISTORY, print the separator. */
-	if (!is_initial_join && !sess->background_history_active)
-	{
-		PrintText (sess, "--- Earlier messages ---\n");
-	}
+	/* TODO: Replace these history banners with a toast/notification overlay once
+	 * the xtext status area is implemented (see XTEXT_MODERNIZATION_PLAN.md).
+	 * Currently banners get appended at the bottom while history is prepended
+	 * at the top, so the user never sees them until scrolling back down. */
 
 	/* For initial join requests, pre-scan to find the LATEST own JOIN msgid to skip.
 	 * Messages are in chronological order, so scan forward to find the last one.
@@ -796,13 +798,7 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	}
 	else
 	{
-		/* Print end separator for manual/scroll-to-load requests (not background fetch) */
-		if (!sess->background_history_active && msg_count > 0)
-		{
-			char buf[256];
-			g_snprintf (buf, sizeof (buf), "--- %d message(s) from history ---\n", msg_count);
-			PrintText (sess, buf);
-		}
+		/* History count banner disabled — see TODO above about toast/notification. */
 
 		/* If background fetching is active and we haven't hit limits, schedule next fetch */
 		if (sess->background_history_active && !sess->history_exhausted && !hit_age_limit)
