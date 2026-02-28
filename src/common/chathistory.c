@@ -427,19 +427,15 @@ process_batch_message (server *serv, session *sess, batch_message *msg,
 			return TRUE;  /* Counted as processed but not displayed */
 		}
 
-		/* JOIN has params: channel, [account], [realname] for extended-join */
+		/* Historical JOIN - display only, don't modify nicklist.
+		 * The current channel membership comes from NAMES, not replayed history. */
 		char *account = NULL;
-		char *realname = NULL;
 		if (msg->param_count >= 2)
 			account = msg->params[1];
-		if (msg->param_count >= 3)
-			realname = msg->params[2];
 		if (account && *account == ':')
 			account++;
-		if (realname && *realname == ':')
-			realname++;
-		inbound_join (serv, sess->channel, nick, host ? host : "",
-		              account, realname, &tags_data);
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_JOIN, sess, nick, sess->channel,
+		                       host ? host : "", account, 0, tags_data.timestamp);
 	}
 	else if (g_ascii_strcasecmp (msg->command, "PART") == 0)
 	{
@@ -450,8 +446,13 @@ process_batch_message (server *serv, session *sess, batch_message *msg,
 			if (reason && *reason == ':')
 				reason++;
 		}
-		inbound_part (serv, sess->channel, nick, host ? host : "",
-		              reason ? reason : "", &tags_data);
+		/* Historical PART - display only, don't modify nicklist */
+		if (reason && *reason)
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_PARTREASON, sess, nick, host ? host : "",
+			                       sess->channel, reason, 0, tags_data.timestamp);
+		else
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_PART, sess, nick, host ? host : "",
+			                       sess->channel, NULL, 0, tags_data.timestamp);
 	}
 	else if (g_ascii_strcasecmp (msg->command, "QUIT") == 0)
 	{
@@ -480,8 +481,10 @@ process_batch_message (server *serv, session *sess, batch_message *msg,
 				if (reason && *reason == ':')
 					reason++;
 			}
-			inbound_kick (serv, sess->channel, kicked, nick,
-			              reason ? reason : "", &tags_data);
+			/* Historical KICK - display only, don't modify nicklist */
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_KICK, sess, nick, kicked,
+			                       sess->channel, reason ? reason : "", 0,
+			                       tags_data.timestamp);
 		}
 	}
 	else if (g_ascii_strcasecmp (msg->command, "TOPIC") == 0)
@@ -501,7 +504,9 @@ process_batch_message (server *serv, session *sess, batch_message *msg,
 			char *newnick = msg->params[0];
 			if (newnick && *newnick == ':')
 				newnick++;
-			inbound_newnick (serv, nick, newnick, FALSE, &tags_data);
+			/* Historical NICK - display only, don't modify nicklist */
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANGENICK, sess, nick,
+			                       newnick, NULL, NULL, 0, tags_data.timestamp);
 		}
 	}
 

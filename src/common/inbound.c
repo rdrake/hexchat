@@ -2292,8 +2292,6 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_event_playback = enable;
 		else if (!strcmp (extension, "draft/read-marker"))
 			serv->have_read_marker = enable;
-		else if (!strcmp (extension, "draft/no-implicit-names"))
-			serv->have_no_implicit_names = enable;
 		else if (!strcmp (extension, "draft/message-redaction"))
 			serv->have_redact = enable;
 		else if (!strcmp (extension, "draft/account-registration"))
@@ -2381,7 +2379,6 @@ static const char * const supported_caps[] = {
 	"draft/multiline",
 	"draft/event-playback",
 	"draft/read-marker",
-	"draft/no-implicit-names",
 	"draft/message-redaction",
 	"draft/account-registration",
 	"draft/metadata-2",

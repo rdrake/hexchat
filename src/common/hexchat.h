@@ -656,7 +656,6 @@ typedef struct server
 	unsigned int have_multiline:1;		/* IRCv3 draft/multiline capability */
 	unsigned int have_event_playback:1;	/* IRCv3 draft/event-playback capability */
 	unsigned int have_read_marker:1;	/* IRCv3 draft/read-marker capability */
-	unsigned int have_no_implicit_names:1; /* IRCv3 draft/no-implicit-names capability */
 	unsigned int have_redact:1;		/* IRCv3 draft/message-redaction capability */
 	unsigned int have_account_registration:1; /* IRCv3 draft/account-registration capability */
 	unsigned int accreg_before_connect:1;     /* account-registration: before-connect supported */
