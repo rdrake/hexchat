@@ -30,6 +30,7 @@
 
 #include "hexchat.h"
 #include "proto-irc.h"
+#include "chathistory.h"
 #include "ctcp.h"
 #include "fe.h"
 #include "ignore.h"
@@ -1282,6 +1283,13 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 
 		case WORDL('F','A','I','L'):
 			text = STRIP_COLON(word, word_eol, trailing_index(word_eol));
+			/* Handle CHATHISTORY failures specifically - clear loading state and try fallback.
+			 * Raw: :server FAIL CHATHISTORY <code> [<context>] :<description>
+			 * word[3] = subcommand, word[4] = code, word[5] = context or description */
+			if (g_ascii_strcasecmp (word[3], "CHATHISTORY") == 0)
+			{
+				chathistory_handle_fail (serv, word[5]);
+			}
 			if (g_strcmp0(word[3], "*") == 0)
 			{
 				EMIT_SIGNAL_TIMESTAMP (XP_TE_FAIL, sess, word[4], text, NULL, NULL, NULL, tags_data->timestamp);
@@ -2009,10 +2017,13 @@ handle_message_tags (server *serv, const char *tags_str,
 			handle_message_tag_time (unescaped_value, tags_data);
 
 		/* IRCv3 batch tag - reference to active batch */
-		if (serv->have_batch && !strcmp (key, "batch"))
+		if (!strcmp (key, "batch"))
 		{
-			g_free (tags_data->batch_id);
-			tags_data->batch_id = g_strdup (unescaped_value);
+			if (serv->have_batch)
+			{
+				g_free (tags_data->batch_id);
+				tags_data->batch_id = g_strdup (unescaped_value);
+			}
 		}
 
 		/* IRCv3 msgid tag - unique message identifier */
@@ -2061,7 +2072,7 @@ irc_inline (server *serv, char *buf, int len)
 
 		if (!sep)
 			goto xit;
-		
+
 		*sep = '\0';
 		buf = sep + 1;
 

@@ -595,7 +595,6 @@ inbound_ujoin (server *serv, char *chan, char *nick, char *ip,
 {
 	session *sess;
 	int found_unused = FALSE;
-	int should_defer_join = FALSE;
 
 	/* already joined? probably a bnc */
 	sess = find_channel (serv, chan);
@@ -639,51 +638,43 @@ inbound_ujoin (server *serv, char *chan, char *nick, char *ip,
 	/* sends a MODE */
 	serv->p_join_info (sess->server, chan);
 
-	/* Check if we should fetch chathistory before showing join banner.
-	 * Per UX decision #2, chathistory should appear BEFORE "You are now talking on"
-	 * on initial joins. */
+	/* Show join banner immediately - no deferral needed now that we have prepend */
+	EMIT_SIGNAL_TIMESTAMP (XP_TE_UJOIN, sess, nick, chan, ip, NULL, 0,
+								  tags_data->timestamp);
+
+	/* Request chathistory on join.
+	 * - If we have scrollback: request AFTER (catch-up) with APPEND mode
+	 * - If no scrollback: request LATEST with PREPEND mode */
 	if (prefs.hex_irc_chathistory_auto && serv->have_chathistory &&
 	    !sess->history_loading)
 	{
-		/* Defer join banner while we fetch history */
-		should_defer_join = TRUE;
-
-		/* Store deferred join info */
-		g_free (sess->deferred_join_nick);
-		g_free (sess->deferred_join_ip);
-		sess->deferred_join_nick = g_strdup (nick);
-		sess->deferred_join_ip = g_strdup (ip ? ip : "");
-		sess->deferred_join_time = tags_data->timestamp;
+		/* Mark as initial join history (used by batch handler for behavior decisions) */
 		sess->join_deferred = TRUE;
 
-		/* Request chathistory - prefer msgid > timestamp > LATEST
-		 * msgid is more reliable than timestamp for avoiding duplicates */
 		if (sess->scrollback_newest_msgid && sess->scrollback_newest_msgid[0])
 		{
-			/* Best case: msgid-based request */
+			/* Catch-up: get messages since last known msgid.
+			 * These are NEWER than scrollback, so APPEND (don't prepend). */
 			chathistory_request_after_msgid (sess, sess->scrollback_newest_msgid,
 			                                 prefs.hex_irc_chathistory_lines);
+			/* AFTER uses append mode (default) - messages go after join banner */
 		}
 		else if (sess->scrollback_newest_time > 0)
 		{
-			/* Fallback: timestamp-based request */
+			/* Catch-up: get messages since last known timestamp.
+			 * These are NEWER than scrollback, so APPEND (don't prepend). */
 			chathistory_request_after_timestamp (sess, sess->scrollback_newest_time,
 			                                     prefs.hex_irc_chathistory_lines);
+			/* AFTER uses append mode (default) - messages go after join banner */
 		}
 		else
 		{
-			/* No scrollback - fetch most recent messages */
+			/* No scrollback - fetch most recent context.
+			 * These should appear BEFORE the join banner, so PREPEND. */
 			chathistory_request_latest (sess, prefs.hex_irc_chathistory_lines);
+			/* Force prepend mode - history appears before "You have joined" */
+			sess->history_request_is_before = TRUE;
 		}
-
-		/* Schedule fallback timeout in case chathistory never arrives */
-		chathistory_schedule_deferred_join_timeout (sess);
-	}
-
-	if (!should_defer_join)
-	{
-		EMIT_SIGNAL_TIMESTAMP (XP_TE_UJOIN, sess, nick, chan, ip, NULL, 0,
-									  tags_data->timestamp);
 	}
 
 	if (prefs.hex_irc_who_join)
@@ -1799,11 +1790,6 @@ inbound_batch_start (server *serv, const char *batch_id, const char *batch_type,
 	/* Create and store the new batch */
 	batch = batch_info_new (batch_id, batch_type, word, tags_data);
 	g_hash_table_insert (serv->active_batches, g_strdup (batch_id), batch);
-
-	/* For now, just log that we started a batch - actual batch type handling
-	 * will be implemented as we add support for specific batch types
-	 * (chathistory, multiline, netjoin, netsplit, etc.)
-	 */
 }
 
 /* Process a multiline batch: concatenate messages and display as single message */
@@ -1927,6 +1913,97 @@ process_multiline_batch (server *serv, batch_info *batch)
 	g_free (host);
 }
 
+/* Collapse a multiline batch into a single batch_message and add to parent batch.
+ * Used when a draft/multiline batch is nested inside a chathistory batch so that
+ * the assembled message gets processed in chronological order with other messages. */
+static void
+collapse_multiline_to_parent (batch_info *batch, batch_info *parent)
+{
+	GSList *iter;
+	GString *combined_text;
+	batch_message *first_msg = NULL;
+	batch_message *result;
+	gboolean first_line = TRUE;
+	const char *target = NULL;
+
+	if (!batch || !batch->messages)
+		return;
+
+	/* Get target from batch params */
+	if (batch->param_count >= 1 && batch->params[0])
+		target = batch->params[0];
+
+	/* Build combined text from all PRIVMSG lines */
+	combined_text = g_string_new (NULL);
+
+	for (iter = batch->messages; iter; iter = iter->next)
+	{
+		batch_message *msg = iter->data;
+
+		if (!msg || !msg->command)
+			continue;
+
+		if (g_ascii_strcasecmp (msg->command, "PRIVMSG") != 0)
+			continue;
+
+		if (!first_msg)
+			first_msg = msg;
+
+		/* Get message text (params[1]) */
+		if (msg->param_count >= 2 && msg->params[1])
+		{
+			char *text = msg->params[1];
+			if (text[0] == ':')
+				text++;
+
+			if (!first_line)
+				g_string_append_c (combined_text, '\n');
+			first_line = FALSE;
+
+			g_string_append (combined_text, text);
+		}
+	}
+
+	if (combined_text->len == 0 || !first_msg)
+	{
+		g_string_free (combined_text, TRUE);
+		return;
+	}
+
+	/* Create a batch_message with the combined text */
+	result = g_new0 (batch_message, 1);
+	result->prefix = g_strdup (first_msg->prefix);
+	result->command = g_strdup ("PRIVMSG");
+	result->timestamp = first_msg->timestamp;
+	if (first_msg->msgid)
+		result->msgid = g_strdup (first_msg->msgid);
+
+	/* Copy tags from first message */
+	if (first_msg->tags)
+	{
+		GHashTableIter tag_iter;
+		gpointer key, value;
+
+		result->tags = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+		g_hash_table_iter_init (&tag_iter, first_msg->tags);
+		while (g_hash_table_iter_next (&tag_iter, &key, &value))
+		{
+			g_hash_table_insert (result->tags, g_strdup (key), g_strdup (value));
+		}
+	}
+
+	/* Set params: [target, :combined_text] */
+	result->params = g_new0 (char *, 3);
+	result->param_count = 2;
+	result->params[0] = g_strdup (target ? target : "");
+	result->params[1] = g_strdup_printf (":%s", combined_text->str);
+
+	/* Add to parent batch's message list */
+	parent->messages = g_slist_append (parent->messages, result);
+
+	g_string_free (combined_text, TRUE);
+}
+
 void
 inbound_batch_end (server *serv, const char *batch_id,
                    const message_tags_data *tags_data)
@@ -1955,8 +2032,22 @@ inbound_batch_end (server *serv, const char *batch_id,
 		else if (g_ascii_strcasecmp (batch->type, "draft/multiline") == 0 ||
 		         g_ascii_strcasecmp (batch->type, "multiline") == 0)
 		{
-			/* Process multiline batch - concatenate and display as single message */
-			process_multiline_batch (serv, batch);
+			/* Check if this multiline batch is nested inside a parent batch */
+			batch_info *parent = NULL;
+			if (batch->outer_batch)
+				parent = g_hash_table_lookup (serv->active_batches, batch->outer_batch);
+
+			if (parent)
+			{
+				/* Nested inside parent batch (e.g., chathistory) - collapse into
+				 * a single message and add to parent's list for chronological ordering */
+				collapse_multiline_to_parent (batch, parent);
+			}
+			else
+			{
+				/* Standalone multiline batch - process immediately */
+				process_multiline_batch (serv, batch);
+			}
 		}
 		/* TODO: Handle other batch types:
 		 * - "netjoin"/"netsplit": Collapse join/quit messages

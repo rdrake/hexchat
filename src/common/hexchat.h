@@ -437,7 +437,12 @@ typedef struct session
 	int doing_who:1;		/* /who sent on this channel */
 	int done_away_check:1;	/* done checking for away status changes */
 	int history_loading:1;	/* chathistory request in progress */
+	int history_request_is_before:1; /* current request is BEFORE (needs prepend) */
+	int history_request_is_after:1;  /* current request is AFTER (needs insert_sorted) */
+	int history_prepend_mode:1; /* currently processing BEFORE batch with prepend */
+	int history_insert_sorted_mode:1; /* currently processing AFTER batch with timestamp sort */
 	int history_exhausted:1; /* server has no more history for this target */
+	int history_request_used_msgid:1; /* current request used msgid reference (vs timestamp) */
 	int join_deferred:1;	/* waiting for chathistory before showing join banner */
 	int background_history_active:1; /* background history fetch enabled for this session */
 	guint deferred_join_timeout;	/* timeout tag for deferred join fallback */

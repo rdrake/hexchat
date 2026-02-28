@@ -141,6 +141,15 @@ void chathistory_request_targets (server *serv, const char *start_ref,
 void chathistory_process_batch (server *serv, batch_info *batch);
 
 /**
+ * Handle a FAIL CHATHISTORY response from the server.
+ * Clears loading state and attempts fallback (msgid → timestamp → LATEST).
+ *
+ * @param serv Server the FAIL came from
+ * @param context Optional context from FAIL message (may be target channel)
+ */
+void chathistory_handle_fail (server *serv, const char *context);
+
+/**
  * Parse CHATHISTORY ISUPPORT token.
  * Format: CHATHISTORY=<limit>
  *
@@ -176,15 +185,6 @@ gboolean chathistory_is_duplicate_msgid (session *sess, const char *msgid);
  * @return TRUE if more history may be available
  */
 gboolean chathistory_can_request_more (session *sess);
-
-/**
- * Schedule a timeout for deferred join fallback.
- * If chathistory doesn't complete within the timeout, the join banner
- * will be emitted anyway.
- *
- * @param sess Session with deferred join
- */
-void chathistory_schedule_deferred_join_timeout (session *sess);
 
 /**
  * Start background history fetching for a session.

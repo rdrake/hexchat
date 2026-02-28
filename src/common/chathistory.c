@@ -89,6 +89,9 @@ chathistory_request_latest (session *sess, int limit)
 
 	effective_limit = get_effective_limit (serv, limit);
 	sess->history_loading = TRUE;
+	sess->history_request_is_before = FALSE;
+	sess->history_request_is_after = FALSE;
+	sess->history_request_used_msgid = FALSE;
 
 	tcp_sendf (serv, "CHATHISTORY LATEST %s * %d\r\n", target, effective_limit);
 }
@@ -115,6 +118,8 @@ chathistory_request_before (session *sess, const char *reference, int limit)
 
 	effective_limit = get_effective_limit (serv, limit);
 	sess->history_loading = TRUE;
+	sess->history_request_is_before = TRUE;  /* Needs prepend when processing */
+	sess->history_request_is_after = FALSE;
 
 	tcp_sendf (serv, "CHATHISTORY BEFORE %s %s %d\r\n", target, reference, effective_limit);
 }
@@ -141,6 +146,8 @@ chathistory_request_after (session *sess, const char *reference, int limit)
 
 	effective_limit = get_effective_limit (serv, limit);
 	sess->history_loading = TRUE;
+	sess->history_request_is_before = FALSE;
+	sess->history_request_is_after = TRUE;  /* Needs insert_sorted when processing */
 
 	tcp_sendf (serv, "CHATHISTORY AFTER %s %s %d\r\n", target, reference, effective_limit);
 }
@@ -167,6 +174,8 @@ chathistory_request_around (session *sess, const char *reference, int limit)
 
 	effective_limit = get_effective_limit (serv, limit);
 	sess->history_loading = TRUE;
+	sess->history_request_is_before = FALSE;  /* AROUND returns mixed - use append */
+	sess->history_request_is_after = FALSE;
 
 	tcp_sendf (serv, "CHATHISTORY AROUND %s %s %d\r\n", target, reference, effective_limit);
 }
@@ -194,6 +203,8 @@ chathistory_request_between (session *sess, const char *start_ref,
 
 	effective_limit = get_effective_limit (serv, limit);
 	sess->history_loading = TRUE;
+	sess->history_request_is_before = FALSE;  /* BETWEEN used for gap-fill - append for now */
+	sess->history_request_is_after = FALSE;
 
 	tcp_sendf (serv, "CHATHISTORY BETWEEN %s %s %s %d\r\n",
 	           target, start_ref, end_ref, effective_limit);
@@ -225,6 +236,7 @@ chathistory_request_after_timestamp (session *sess, time_t timestamp, int limit)
 	/* Format timestamp reference per IRCv3 spec */
 	g_snprintf (ref, sizeof (ref), "timestamp=%ld", (long)timestamp);
 
+	sess->history_request_used_msgid = FALSE;
 	chathistory_request_after (sess, ref, limit);
 }
 
@@ -239,6 +251,7 @@ chathistory_request_after_msgid (session *sess, const char *msgid, int limit)
 	/* Format msgid reference per IRCv3 spec */
 	ref = g_strdup_printf ("msgid=%s", msgid);
 
+	sess->history_request_used_msgid = TRUE;
 	chathistory_request_after (sess, ref, limit);
 
 	g_free (ref);
@@ -263,17 +276,26 @@ chathistory_request_before_msgid (session *sess, const char *msgid, int limit)
 void
 chathistory_request_older (session *sess)
 {
+	const char *reference = NULL;
+
 	/* Request history before the oldest message in buffer.
-	 * Uses msgid if available, falls back to nothing (can't request without reference). */
+	 * Uses msgid if available, falls back to scrollback msgid or timestamp. */
 	if (!chathistory_can_request_more (sess))
 		return;
 
+	/* Try oldest_msgid first (tracks the oldest message from chathistory batches) */
 	if (sess->oldest_msgid && sess->oldest_msgid[0])
+		reference = sess->oldest_msgid;
+	/* Fall back to scrollback_oldest_msgid (from loaded scrollback) */
+	else if (sess->scrollback_oldest_msgid && sess->scrollback_oldest_msgid[0])
+		reference = sess->scrollback_oldest_msgid;
+
+	if (reference)
 	{
-		chathistory_request_before_msgid (sess, sess->oldest_msgid,
+		chathistory_request_before_msgid (sess, reference,
 		                                  prefs.hex_irc_chathistory_lines);
 	}
-	/* If no oldest_msgid, we can't make a BEFORE request without a reference point */
+	/* If no msgid reference available, we can't make a BEFORE request */
 }
 
 /* Find session for a target */
@@ -297,9 +319,11 @@ find_session_for_target (server *serv, const char *target)
 }
 
 /* Process a single message from the batch.
- * Returns TRUE if message was processed, FALSE if it was a duplicate. */
+ * Returns TRUE if message was processed, FALSE if it was a duplicate.
+ * skip_own_join_msgid: if set, skip displaying our own JOIN with this msgid */
 static gboolean
-process_batch_message (server *serv, session *sess, batch_message *msg)
+process_batch_message (server *serv, session *sess, batch_message *msg,
+                       const char *skip_own_join_msgid)
 {
 	message_tags_data tags_data;
 	char *nick = NULL;
@@ -320,12 +344,21 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 	tags_data.timestamp = msg->timestamp;
 	if (msg->tags)
 		tags_data.all_tags = msg->tags;
+
 	if (msg->msgid)
 	{
 		/* Set msgid so it gets saved to scrollback via inbound functions */
 		tags_data.msgid = msg->msgid;
 		/* Track msgids for pagination and deduplication */
 		chathistory_track_msgid (sess, msg->msgid, TRUE);
+		/* Set current_msgid directly for ALL message types including events.
+		 * Only inbound_chanmsg/inbound_action set this from tags_data,
+		 * but events (JOIN/PART/etc) also need their msgids captured. */
+		sess->current_msgid = msg->msgid;
+	}
+	else
+	{
+		sess->current_msgid = NULL;
 	}
 
 	/* Extract nick from prefix */
@@ -383,12 +416,15 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 	/* event-playback: Handle JOIN, PART, QUIT, KICK, MODE, TOPIC, NICK */
 	else if (g_ascii_strcasecmp (msg->command, "JOIN") == 0)
 	{
-		/* Skip our own JOIN in initial history - we'll show XP_TE_UJOIN separately */
-		if (sess->join_deferred && nick && serv->p_cmp (nick, serv->nick) == 0)
+		/* Skip only the LATEST own JOIN from AFTER requests (catch-up after rejoin).
+		 * The "Now talking on" banner already covers that specific join, but earlier
+		 * JOINs of ourselves (join/part/rejoin while away) should still be shown. */
+		if (skip_own_join_msgid && msg->msgid &&
+		    strcmp (msg->msgid, skip_own_join_msgid) == 0)
 		{
 			g_free (nick);
 			g_free (host);
-			return;
+			return TRUE;  /* Counted as processed but not displayed */
 		}
 
 		/* JOIN has params: channel, [account], [realname] for extended-join */
@@ -474,76 +510,70 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 	return TRUE;
 }
 
-/* Emit deferred join banner if one was waiting for history to complete */
-static void
-emit_deferred_join (session *sess)
+/* Find a session on this server that has a pending history request.
+ * Used when FAIL response doesn't include the target channel. */
+static session *
+find_session_with_pending_history (server *serv)
 {
-	if (sess->join_deferred && sess->deferred_join_nick)
+	GSList *list;
+
+	for (list = sess_list; list; list = list->next)
 	{
-		/* Cancel the timeout if it's still pending */
-		if (sess->deferred_join_timeout > 0)
-		{
-			g_source_remove (sess->deferred_join_timeout);
-			sess->deferred_join_timeout = 0;
-		}
-
-		/* Add blank line for visual separation (like "Loaded log from") */
-		PrintText (sess, "\n");
-
-		EMIT_SIGNAL_TIMESTAMP (XP_TE_UJOIN, sess, sess->deferred_join_nick,
-		                       sess->channel, sess->deferred_join_ip, NULL, 0,
-		                       sess->deferred_join_time);
-
-		/* Clear deferred state */
-		sess->join_deferred = FALSE;
-		g_free (sess->deferred_join_nick);
-		g_free (sess->deferred_join_ip);
-		sess->deferred_join_nick = NULL;
-		sess->deferred_join_ip = NULL;
-		sess->deferred_join_time = 0;
+		session *sess = list->data;
+		if (sess->server == serv && sess->history_loading)
+			return sess;
 	}
+	return NULL;
 }
 
-/* Timeout callback for deferred join - emit join banner if chathistory never arrived */
-static gboolean
-deferred_join_timeout_cb (gpointer data)
-{
-	session *sess = (session *)data;
-
-	/* Clear the timeout tag first */
-	sess->deferred_join_timeout = 0;
-
-	if (sess->join_deferred && sess->deferred_join_nick)
-	{
-		/* History request didn't complete in time, emit the join banner anyway */
-		/* Add blank line for visual separation (like "Loaded log from") */
-		PrintText (sess, "\n");
-
-		EMIT_SIGNAL_TIMESTAMP (XP_TE_UJOIN, sess, sess->deferred_join_nick,
-		                       sess->channel, sess->deferred_join_ip, NULL, 0,
-		                       sess->deferred_join_time);
-
-		/* Clear deferred state */
-		sess->join_deferred = FALSE;
-		g_free (sess->deferred_join_nick);
-		g_free (sess->deferred_join_ip);
-		sess->deferred_join_nick = NULL;
-		sess->deferred_join_ip = NULL;
-		sess->deferred_join_time = 0;
-
-		/* Also mark history as exhausted since we gave up waiting */
-		sess->history_loading = FALSE;
-	}
-
-	return G_SOURCE_REMOVE;
-}
-
-/* Schedule a timeout for deferred join fallback (called from inbound_ujoin) */
 void
-chathistory_schedule_deferred_join_timeout (session *sess)
+chathistory_handle_fail (server *serv, const char *context)
 {
-	/* 10 second timeout for chathistory response */
-	sess->deferred_join_timeout = g_timeout_add_seconds (10, deferred_join_timeout_cb, sess);
+	session *sess = NULL;
+
+	/* Try to find session from context (may be the target channel) */
+	if (context && context[0])
+		sess = find_session_for_target (serv, context);
+
+	/* Fall back to finding any session with a pending history request */
+	if (!sess)
+		sess = find_session_with_pending_history (serv);
+
+	if (!sess)
+		return;
+
+	/* Clear loading state so future requests aren't blocked */
+	sess->history_loading = FALSE;
+
+	if (sess->join_deferred)
+	{
+		/* Initial join - try fallback chain: msgid → timestamp → LATEST → give up */
+		if (sess->history_request_used_msgid && sess->scrollback_newest_time > 0)
+		{
+			chathistory_request_after_timestamp (sess, sess->scrollback_newest_time,
+			                                     prefs.hex_irc_chathistory_lines);
+			return;
+		}
+		else if (sess->history_request_is_after)
+		{
+			chathistory_request_latest (sess, prefs.hex_irc_chathistory_lines);
+			/* Use insert_sorted since we have scrollback in the buffer.
+			 * Prepend would put newest messages before oldest scrollback. */
+			sess->history_request_is_after = TRUE;
+			return;
+		}
+		/* All fallbacks exhausted */
+		sess->history_exhausted = TRUE;
+		sess->join_deferred = FALSE;
+	}
+}
+
+/* Clear the initial join flag after history processing.
+ * Join banner is shown immediately now (no deferral needed with prepend support). */
+static void
+clear_initial_join_flag (session *sess)
+{
+	sess->join_deferred = FALSE;
 }
 
 void
@@ -554,8 +584,11 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	int msg_count = 0;
 	gboolean is_initial_join;
 	time_t oldest_timestamp = 0;
+	time_t newest_timestamp = 0;  /* Track newest for AFTER separator */
 	time_t max_age_cutoff = 0;
 	gboolean hit_age_limit = FALSE;
+	char *batch_oldest_msgid = NULL;  /* Track oldest msgid for BEFORE requests */
+	const char *skip_own_join_msgid = NULL;  /* Latest own JOIN to skip for AFTER */
 
 	if (!batch || !batch->type)
 		return;
@@ -584,17 +617,33 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		max_age_cutoff = time (NULL) - (prefs.hex_irc_chathistory_background_max_age * 3600);
 	}
 
-	/* Check if batch is empty - that means no more history */
+	/* Check if batch is empty - try fallback for initial join, otherwise exhausted */
 	if (!batch->messages)
 	{
-		sess->history_exhausted = TRUE;
-		if (!is_initial_join)
+		if (is_initial_join)
 		{
-			/* Only show this message for manual history requests, not initial join */
-			PrintText (sess, "No more history available from server.\n");
+			/* Fallback chain: msgid → timestamp → LATEST → exhausted.
+			 * Server may not recognize our msgid (e.g., server restart, expired history). */
+			if (sess->history_request_used_msgid && sess->scrollback_newest_time > 0)
+			{
+				/* Msgid unknown to server, fall back to timestamp-based AFTER */
+				chathistory_request_after_timestamp (sess, sess->scrollback_newest_time,
+				                                     prefs.hex_irc_chathistory_lines);
+				return;  /* Don't clear join_deferred - still waiting for history */
+			}
+			else if (sess->history_request_is_after)
+			{
+				/* Timestamp-based AFTER also returned empty, fall back to LATEST */
+				chathistory_request_latest (sess, prefs.hex_irc_chathistory_lines);
+				/* Use insert_sorted since we have scrollback in the buffer.
+				 * Prepend would put newest messages before oldest scrollback. */
+				sess->history_request_is_after = TRUE;
+				return;
+			}
 		}
-		/* Still need to emit the deferred join banner */
-		emit_deferred_join (sess);
+		/* All fallbacks exhausted (or not initial join) */
+		sess->history_exhausted = TRUE;
+		clear_initial_join_flag (sess);
 		return;
 	}
 
@@ -606,15 +655,72 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		PrintText (sess, "--- Earlier messages ---\n");
 	}
 
-	/* Process messages in order (they should come in chronological order
-	 * from oldest to newest for BEFORE requests, but we need to insert
-	 * them appropriately). For now, just display in received order. */
+	/* For initial join requests, pre-scan to find the LATEST own JOIN msgid to skip.
+	 * Messages are in chronological order, so scan forward to find the last one.
+	 * We skip only the latest own JOIN since "Now talking on" covers it,
+	 * but earlier own JOINs (join/part/rejoin cycles) should be shown.
+	 * This applies to both AFTER (catch-up) and LATEST (no scrollback) requests. */
+	if (is_initial_join)
+	{
+		for (iter = batch->messages; iter; iter = iter->next)
+		{
+			batch_message *msg = iter->data;
+			if (msg && msg->command && msg->msgid &&
+			    g_ascii_strcasecmp (msg->command, "JOIN") == 0)
+			{
+				/* Extract nick from prefix to check if it's our own */
+				if (msg->prefix)
+				{
+					char *bang = strchr (msg->prefix, '!');
+					char *check_nick = bang ? g_strndup (msg->prefix, bang - msg->prefix)
+					                        : g_strdup (msg->prefix);
+					if (!serv->p_cmp (check_nick, serv->nick))
+					{
+						/* This is our JOIN - keep updating to get the latest one */
+						skip_own_join_msgid = msg->msgid;
+					}
+					g_free (check_nick);
+				}
+			}
+		}
+	}
+
+	/* IRCv3 modernization: For BEFORE requests, use prepend mode (Phase 3)
+	 * Messages come oldest→newest, but we want oldest at top of buffer.
+	 * Reverse the list and prepend each message to achieve correct order:
+	 * - Reverse: [oldest, ..., newest] → [newest, ..., oldest]
+	 * - Prepend newest: [newest, existing...]
+	 * - Prepend next: [next, newest, existing...]
+	 * - Prepend oldest: [oldest, ..., newest, existing...] ✓
+	 */
+	if (sess->history_request_is_before)
+	{
+		/* Capture oldest msgid BEFORE reversing (first in original server order) */
+		if (batch->messages)
+		{
+			batch_message *first_msg = batch->messages->data;
+			if (first_msg && first_msg->msgid)
+				batch_oldest_msgid = first_msg->msgid;  /* Don't copy, just reference */
+		}
+		batch->messages = g_slist_reverse (batch->messages);
+		sess->history_prepend_mode = TRUE;
+	}
+	/* IRCv3 modernization: For AFTER requests, use insert_sorted mode (Phase 3)
+	 * Catch-up messages need to be inserted at their correct timestamp position,
+	 * between scrollback (older) and the join banner (current time).
+	 */
+	else if (sess->history_request_is_after)
+	{
+		sess->history_insert_sorted_mode = TRUE;
+	}
+
+	/* Process messages */
 	for (iter = batch->messages; iter; iter = iter->next)
 	{
 		batch_message *msg = iter->data;
 
 		/* Only count messages that were actually processed (not duplicates) */
-		if (process_batch_message (serv, sess, msg))
+		if (process_batch_message (serv, sess, msg, skip_own_join_msgid))
 			msg_count++;
 
 		/* Track oldest timestamp for age limit check */
@@ -624,7 +730,34 @@ chathistory_process_batch (server *serv, batch_info *batch)
 			{
 				oldest_timestamp = msg->timestamp;
 			}
+			/* Track newest for AFTER separator placement */
+			if (msg->timestamp > newest_timestamp)
+			{
+				newest_timestamp = msg->timestamp;
+			}
 		}
+	}
+
+	/* For initial join, add a visual separator (blank line) between
+	 * chathistory and the join banner. This applies to both:
+	 * - AFTER requests (catch-up when we have scrollback)
+	 * - LATEST requests (no scrollback, fresh join)
+	 * Use newest_timestamp + 1 so it sorts after the last history message. */
+	if (is_initial_join && msg_count > 0)
+	{
+		PrintTextTimeStamp (sess, "\n", newest_timestamp + 1);
+	}
+
+	/* Clear mode flags after processing */
+	sess->history_prepend_mode = FALSE;
+	sess->history_insert_sorted_mode = FALSE;
+
+	/* For BEFORE requests, update oldest_msgid to the actual oldest from the batch.
+	 * This enables continued scroll-to-load pagination. */
+	if (batch_oldest_msgid && msg_count > 0)
+	{
+		g_free (sess->oldest_msgid);
+		sess->oldest_msgid = g_strdup (batch_oldest_msgid);
 	}
 
 	/* Check if we hit the age limit (only for background fetching) */
@@ -651,7 +784,7 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	/* For initial join, emit the deferred join banner AFTER history */
 	if (is_initial_join)
 	{
-		emit_deferred_join (sess);
+		clear_initial_join_flag (sess);
 
 		/* Start background fetching to populate scrollback with older history */
 		chathistory_start_background_fetch (sess);
