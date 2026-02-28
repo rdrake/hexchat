@@ -19,6 +19,7 @@ libgmodule_dep = dependency('gmodule-2.0')
 libcanberra_dep = dependency('libcanberra', version: '>= 0.22',
                              required: get_option('libcanberra'))
 dbus_glib_dep = dependency('dbus-glib-1', required: get_option('dbus'))
+libsqlite3_dep = dependency('sqlite3', version: '>= 3.7.0')
 
 global_deps = []
 if cc.get_id() == 'msvc'
@@ -182,6 +183,7 @@ if meson.version().version_compare('>= 0.53.0')
     'Plugin Support': get_option('plugin'),
     'DBus Support': dbus_glib_dep.found(),
     'libcanberra': libcanberra_dep.found(),
+    'SQLite (scrollback)': libsqlite3_dep.found(),
     'GTK Version': 'GTK4',
   }, section: 'Features')
 

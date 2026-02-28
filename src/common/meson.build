@@ -17,6 +17,7 @@ common_sources = [
   'plugin-timer.c',
   'proto-irc.c',
   'scram.c',
+  'scrollback.c',
   'server.c',
   'servlist.c',
 	'text.c',
@@ -31,6 +32,7 @@ common_sysinfo_deps = []
 common_deps = [
   libgio_dep,
   libcanberra_dep,
+  libsqlite3_dep,
 ] + global_deps
 
 common_includes = [
