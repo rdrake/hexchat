@@ -43,6 +43,8 @@
 #include "hexchatc.h"
 #include "text.h"
 #include "typedef.h"
+#include "scrollback.h"
+#include "chathistory.h"
 #ifdef WIN32
 #include <windows.h>
 #endif
@@ -104,62 +106,30 @@ scrollback_get_filename (session *sess)
 void
 scrollback_close (session *sess)
 {
-	g_clear_object (&sess->scrollfile);
+	/* SQLite databases are cached and shared, nothing to close per-session */
+	(void)sess;
 }
 
-/* shrink the file to roughly prefs.hex_text_max_lines */
-
-static void
-scrollback_shrink (session *sess)
+/* Helper to get scrollback database for a session */
+static scrollback_db *
+get_scrollback_db (session *sess)
 {
-	char *buf, *p;
-	gsize len;
-	gint offset, lines = 0;
-	const gint max_lines = MIN(prefs.hex_text_max_lines, SCROLLBACK_MAX);
+	const char *network;
 
-	if (!g_file_load_contents (sess->scrollfile, NULL, &buf, &len, NULL, NULL))
-		return;
+	if (!sess->server)
+		return NULL;
 
-	/* count all lines */
-	p = buf;
-	while (p != buf + len)
-	{
-		if (*p == '\n')
-			lines++;
-		p++;
-	}
+	network = server_get_network (sess->server, FALSE);
+	if (!network)
+		return NULL;
 
-	offset = lines - max_lines;
-
-	/* now just go back to where we want to start the file */
-	p = buf;
-	lines = 0;
-	while (p != buf + len)
-	{
-		if (*p == '\n')
-		{
-			lines++;
-			if (lines == offset)
-			{
-				p++;
-				break;
-			}
-		}
-		p++;
-	}
-
-	if (g_file_replace_contents (sess->scrollfile, p, strlen(p), NULL, FALSE,
-							G_FILE_CREATE_PRIVATE, NULL, NULL, NULL))
-		sess->scrollwritten = lines;
-
-	g_free (buf);
+	return scrollback_open (network);
 }
 
 static void
-scrollback_save (session *sess, char *text, time_t stamp, const char *msgid)
+scrollback_save_msg (session *sess, char *text, time_t stamp, const char *msgid)
 {
-	GOutputStream *ostream;
-	char *buf;
+	scrollback_db *db;
 
 	if (sess->type == SESS_SERVER && prefs.hex_gui_tab_server == 1)
 		return;
@@ -175,73 +145,27 @@ scrollback_save (session *sess, char *text, time_t stamp, const char *msgid)
 			return;
 	}
 
-	if (!sess->scrollfile)
-	{
-		if ((buf = scrollback_get_filename (sess)) == NULL)
-			return;
+	if (!sess->channel || !sess->channel[0])
+		return;
 
-		sess->scrollfile = g_file_new_for_path (buf);
-		g_free (buf);
-	}
-	else
-	{
-		/* Users can delete the folder after it's created... */
-		GFile *parent = g_file_get_parent (sess->scrollfile);
-		g_file_make_directory_with_parents (parent, NULL, NULL);
-		g_object_unref (parent);
-	}
-
-	ostream = G_OUTPUT_STREAM(g_file_append_to (sess->scrollfile, G_FILE_CREATE_PRIVATE, NULL, NULL));
-	if (!ostream)
+	db = get_scrollback_db (sess);
+	if (!db)
 		return;
 
 	if (!stamp)
-		stamp = time(0);
+		stamp = time (0);
 
-	/* Format: T <timestamp> [M:<msgid>] <text>
-	 * The msgid is included when available for chathistory coordination.
-	 * Format is backward compatible - old readers will see M:xxx as part of text.
-	 */
-	if (msgid && *msgid)
-	{
-		if (sizeof (stamp) == 4)
-			buf = g_strdup_printf ("T %d M:%s ", (int) stamp, msgid);
-		else
-			buf = g_strdup_printf ("T %" G_GINT64_FORMAT " M:%s ", (gint64)stamp, msgid);
-	}
-	else
-	{
-		if (sizeof (stamp) == 4)
-			buf = g_strdup_printf ("T %d ", (int) stamp);
-		else
-			buf = g_strdup_printf ("T %" G_GINT64_FORMAT " ", (gint64)stamp);
-	}
-
-	g_output_stream_write (ostream, buf, strlen (buf), NULL, NULL);
-	g_output_stream_write (ostream, text, strlen (text), NULL, NULL);
-	if (!g_str_has_suffix (text, "\n"))
-		g_output_stream_write (ostream, "\n", 1, NULL, NULL);
-
-	g_free (buf);
-	g_object_unref (ostream);
-
-	sess->scrollwritten++;
-
-	if ((sess->scrollwritten > prefs.hex_text_max_lines && prefs.hex_text_max_lines > 0) ||
-       sess->scrollwritten > SCROLLBACK_MAX)
-		scrollback_shrink (sess);
+	scrollback_db_save (db, sess->channel, stamp, msgid, text);
 }
 
 void
 scrollback_load (session *sess)
 {
-	GInputStream *stream;
-	GDataInputStream *istream;
-	gchar *buf, *text;
+	scrollback_db *db;
+	GSList *messages, *iter;
+	const char *network;
 	gint lines = 0;
-	time_t stamp = 0;
-	char *oldest_msgid = NULL;
-	char *newest_msgid = NULL;
+	time_t newest_time = 0;
 
 	if (sess->text_scrollback == SET_DEFAULT)
 	{
@@ -254,160 +178,74 @@ scrollback_load (session *sess)
 			return;
 	}
 
-	if (!sess->scrollfile)
-	{
-		if ((buf = scrollback_get_filename (sess)) == NULL)
-			return;
-
-		sess->scrollfile = g_file_new_for_path (buf);
-		g_free (buf);
-	}
-
-	stream = G_INPUT_STREAM(g_file_read (sess->scrollfile, NULL, NULL));
-	if (!stream)
+	if (!sess->channel || !sess->channel[0])
 		return;
 
-	istream = g_data_input_stream_new (stream);
-	/*
-	 * This is to avoid any issues moving between windows/unix
-	 * but the docs mention an invalid \r without a following \n
-	 * can lock up the program... (Our write() always adds \n)
-	 */
-	g_data_input_stream_set_newline_type (istream, G_DATA_STREAM_NEWLINE_TYPE_ANY);
-	g_object_unref (stream);
+	network = server_get_network (sess->server, FALSE);
+	if (!network)
+		return;
 
-	while (1)
+	db = scrollback_open (network);
+	if (!db)
+		return;
+
+	/* Try migration from old text file format first */
+	scrollback_migrate (db, network, sess->channel);
+
+	/* Load messages from SQLite (returns in chronological order, oldest first) */
+	messages = scrollback_db_load (db, sess->channel, prefs.hex_text_max_lines);
+
+	for (iter = messages; iter; iter = iter->next)
 	{
-		GError *err = NULL;
-		gsize n_bytes;
+		scrollback_msg *msg = iter->data;
 
-		buf = g_data_input_stream_read_line_utf8 (istream, &n_bytes, NULL, &err);
-
-		if (!err && buf)
+		if (msg->text && msg->text[0])
 		{
-			/*
-			 * Scrollback format:
-			 *   T <timestamp> M:<msgid> <text>   (new format with msgid)
-			 *   T <timestamp> <text>             (old format without msgid)
-			 *   <text>                           (legacy format without timestamp)
-			 */
-			if (buf[0] == 'T' && buf[1] == ' ')
+			if (prefs.hex_text_stripcolor_replay)
 			{
-				char *msgid = NULL;
-
-				if (sizeof (time_t) == 4)
-					stamp = strtoul (buf + 2, NULL, 10);
-				else
-					stamp = g_ascii_strtoull (buf + 2, NULL, 10); /* in case time_t is 64 bits */
-
-				if (G_UNLIKELY(stamp == 0))
-				{
-					g_warning ("Invalid timestamp in scrollback file");
-					g_free (buf);
-					continue;
-				}
-
-				text = strchr (buf + 3, ' ');
-				if (text && text[1])
-				{
-					text++; /* Skip the space */
-
-					/* Check for msgid: M:<msgid> */
-					if (text[0] == 'M' && text[1] == ':')
-					{
-						char *msgid_end = strchr (text + 2, ' ');
-						if (msgid_end)
-						{
-							msgid = g_strndup (text + 2, msgid_end - (text + 2));
-							text = msgid_end + 1; /* Move past msgid to actual text */
-						}
-					}
-
-					/* Track oldest and newest msgid */
-					if (msgid)
-					{
-						if (!oldest_msgid)
-							oldest_msgid = g_strdup (msgid);
-						g_free (newest_msgid);
-						newest_msgid = g_strdup (msgid);
-						g_free (msgid);
-					}
-
-					if (*text)
-					{
-						if (prefs.hex_text_stripcolor_replay)
-						{
-							char *stripped = strip_color (text, -1, STRIP_COLOR);
-							fe_print_text (sess, stripped, stamp, TRUE);
-							g_free (stripped);
-						}
-						else
-						{
-							fe_print_text (sess, text, stamp, TRUE);
-						}
-					}
-					else
-					{
-						fe_print_text (sess, "  ", stamp, TRUE);
-					}
-				}
-				else
-				{
-					fe_print_text (sess, "  ", stamp, TRUE);
-				}
+				char *stripped = strip_color (msg->text, -1, STRIP_COLOR);
+				fe_print_text (sess, stripped, msg->timestamp, TRUE);
+				g_free (stripped);
 			}
 			else
 			{
-				if (strlen (buf))
-					fe_print_text (sess, buf, 0, TRUE);
-				else
-					fe_print_text (sess, "  ", 0, TRUE);
+				fe_print_text (sess, msg->text, msg->timestamp, TRUE);
 			}
-			lines++;
+		}
 
-			g_free (buf);
-		}
-		else if (err)
-		{
-			/* If its only an encoding error it may be specific to the line */
-			if (g_error_matches (err, G_CONVERT_ERROR, G_CONVERT_ERROR_ILLEGAL_SEQUENCE))
-			{
-				g_warning ("Invalid utf8 in scrollback file");
-				g_clear_error (&err);
-				continue;
-			}
+		/* Track msgid for deduplication with CHATHISTORY */
+		if (msg->msgid && msg->msgid[0])
+			chathistory_track_msgid (sess, msg->msgid, TRUE);
 
-			/* For general errors just give up */
-			g_clear_error (&err);
-			break;
-		}
-		else /* No new line */
-		{
-			break;
-		}
+		/* Track newest time for the "Loaded log from" message */
+		if (msg->timestamp > newest_time)
+			newest_time = msg->timestamp;
+
+		lines++;
 	}
 
-	g_object_unref (istream);
+	/* Get msgid tracking info from database */
+	sess->scrollback_newest_msgid = scrollback_get_newest_msgid (db, sess->channel);
+	sess->scrollback_oldest_msgid = scrollback_get_oldest_msgid (db, sess->channel);
+	sess->scrollback_newest_time = scrollback_get_newest_time (db, sess->channel);
 
-	sess->scrollwritten = lines;
+	/* Initialize oldest_msgid from scrollback for scroll-to-load support.
+	 * This allows CHATHISTORY BEFORE requests when user scrolls to top. */
+	if (sess->scrollback_oldest_msgid && !sess->oldest_msgid)
+	{
+		sess->oldest_msgid = g_strdup (sess->scrollback_oldest_msgid);
+	}
+
+	scrollback_msg_list_free (messages);
 
 	if (lines)
 	{
-		/* Save tracking info for chathistory coordination */
-		sess->scrollback_newest_time = stamp;
-		sess->scrollback_oldest_msgid = oldest_msgid;
-		sess->scrollback_newest_msgid = newest_msgid;
-
-		text = ctime (&stamp);
-		buf = g_strdup_printf ("\n*\t%s %s\n", _("Loaded log from"), text);
-		fe_print_text (sess, buf, 0, TRUE);
+		char *text = ctime (&newest_time);
+		char *buf = g_strdup_printf ("\n*\t%s %s\n", _("Loaded log from"), text);
+		/* Use newest_time as timestamp so CHATHISTORY AFTER messages
+		 * (which are newer) get inserted after this marker via insert_sorted */
+		fe_print_text (sess, buf, newest_time, TRUE);
 		g_free (buf);
-		/*EMIT_SIGNAL (XP_TE_GENMSG, sess, "*", buf, NULL, NULL, NULL, 0);*/
-	}
-	else
-	{
-		g_free (oldest_msgid);
-		g_free (newest_msgid);
 	}
 }
 
@@ -914,7 +752,10 @@ PrintTextTimeStamp (session *sess, char *text, time_t timestamp)
 	}
 
 	log_write (sess, text, timestamp);
-	scrollback_save (sess, text, timestamp, sess->current_msgid);
+	scrollback_save_msg (sess, text, timestamp, sess->current_msgid);
+	/* Clear current_msgid after use to prevent stale pointer access.
+	 * The pointer is borrowed from tags_data which may go out of scope. */
+	sess->current_msgid = NULL;
 	fe_print_text (sess, text, timestamp, FALSE);
 	g_free (text);
 }

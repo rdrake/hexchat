@@ -1,0 +1,620 @@
+/* HexChat
+ * Copyright (C) 2024 HexChat Contributors
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ *
+ * SQLite-based scrollback storage implementation
+ */
+
+#include "config.h"
+
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <glib.h>
+#include <gio/gio.h>
+#include <sqlite3.h>
+
+#include "hexchat.h"
+#include "hexchatc.h"
+#include "scrollback.h"
+#include "cfgfiles.h"
+#include "text.h"
+
+struct scrollback_db {
+	sqlite3 *db;
+	char *network;
+
+	/* Prepared statements for performance */
+	sqlite3_stmt *stmt_insert;
+	sqlite3_stmt *stmt_load;
+	sqlite3_stmt *stmt_newest_msgid;
+	sqlite3_stmt *stmt_oldest_msgid;
+	sqlite3_stmt *stmt_newest_time;
+	sqlite3_stmt *stmt_has_msgid;
+	sqlite3_stmt *stmt_clear;
+};
+
+/* Hash table of open databases: network -> scrollback_db */
+static GHashTable *open_dbs = NULL;
+
+static char *
+get_scrollback_dir (void)
+{
+	return g_build_filename (get_xdir (), "scrollback", NULL);
+}
+
+static char *
+get_db_path (const char *network)
+{
+	char *dir = get_scrollback_dir ();
+	char *safe_network = g_strdup (network);
+	char *path;
+
+	/* Sanitize network name for use as filename */
+	for (char *p = safe_network; *p; p++)
+	{
+		if (*p == '/' || *p == '\\' || *p == ':' || *p == '*' ||
+		    *p == '?' || *p == '"' || *p == '<' || *p == '>' || *p == '|')
+			*p = '_';
+	}
+
+	path = g_build_filename (dir, safe_network, NULL);
+	g_free (dir);
+
+	/* Add .db extension */
+	char *full_path = g_strdup_printf ("%s.db", path);
+	g_free (path);
+	g_free (safe_network);
+
+	return full_path;
+}
+
+static gboolean
+ensure_scrollback_dir (void)
+{
+	char *dir = get_scrollback_dir ();
+	gboolean result = TRUE;
+
+	if (!g_file_test (dir, G_FILE_TEST_IS_DIR))
+	{
+		if (g_mkdir_with_parents (dir, 0700) != 0)
+		{
+			g_warning ("Failed to create scrollback directory: %s", dir);
+			result = FALSE;
+		}
+	}
+
+	g_free (dir);
+	return result;
+}
+
+static gboolean
+init_database (scrollback_db *sdb)
+{
+	const char *schema =
+		"CREATE TABLE IF NOT EXISTS messages ("
+		"    id INTEGER PRIMARY KEY,"
+		"    channel TEXT NOT NULL,"
+		"    timestamp INTEGER NOT NULL,"
+		"    msgid TEXT,"
+		"    text TEXT NOT NULL"
+		");"
+		"CREATE INDEX IF NOT EXISTS idx_channel_time ON messages(channel, timestamp);"
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_msgid ON messages(msgid) WHERE msgid IS NOT NULL;";
+
+	char *errmsg = NULL;
+	int rc = sqlite3_exec (sdb->db, schema, NULL, NULL, &errmsg);
+
+	if (rc != SQLITE_OK)
+	{
+		g_warning ("Failed to initialize scrollback database: %s", errmsg);
+		sqlite3_free (errmsg);
+		return FALSE;
+	}
+
+	/* Enable WAL mode for better write performance */
+	rc = sqlite3_exec (sdb->db, "PRAGMA journal_mode=WAL;", NULL, NULL, &errmsg);
+	if (rc != SQLITE_OK)
+	{
+		g_warning ("Failed to enable WAL mode: %s", errmsg);
+		sqlite3_free (errmsg);
+		/* Not fatal, continue anyway */
+	}
+
+	return TRUE;
+}
+
+static gboolean
+prepare_statements (scrollback_db *sdb)
+{
+	int rc;
+
+	/* Insert statement */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"INSERT OR IGNORE INTO messages (channel, timestamp, msgid, text) VALUES (?, ?, ?, ?)",
+		-1, &sdb->stmt_insert, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Load statement - get newest N messages in chronological order */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT id, channel, timestamp, msgid, text FROM messages "
+		"WHERE channel = ? ORDER BY timestamp DESC LIMIT ?",
+		-1, &sdb->stmt_load, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Get newest msgid */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT msgid FROM messages WHERE channel = ? AND msgid IS NOT NULL "
+		"ORDER BY timestamp DESC LIMIT 1",
+		-1, &sdb->stmt_newest_msgid, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Get oldest msgid */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT msgid FROM messages WHERE channel = ? AND msgid IS NOT NULL "
+		"ORDER BY timestamp ASC LIMIT 1",
+		-1, &sdb->stmt_oldest_msgid, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Get newest timestamp */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT MAX(timestamp) FROM messages WHERE channel = ?",
+		-1, &sdb->stmt_newest_time, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Check msgid exists */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT 1 FROM messages WHERE msgid = ? LIMIT 1",
+		-1, &sdb->stmt_has_msgid, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Clear channel */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"DELETE FROM messages WHERE channel = ?",
+		-1, &sdb->stmt_clear, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	return TRUE;
+
+fail:
+	g_warning ("Failed to prepare scrollback statement: %s", sqlite3_errmsg (sdb->db));
+	return FALSE;
+}
+
+static void
+finalize_statements (scrollback_db *sdb)
+{
+	if (sdb->stmt_insert) sqlite3_finalize (sdb->stmt_insert);
+	if (sdb->stmt_load) sqlite3_finalize (sdb->stmt_load);
+	if (sdb->stmt_newest_msgid) sqlite3_finalize (sdb->stmt_newest_msgid);
+	if (sdb->stmt_oldest_msgid) sqlite3_finalize (sdb->stmt_oldest_msgid);
+	if (sdb->stmt_newest_time) sqlite3_finalize (sdb->stmt_newest_time);
+	if (sdb->stmt_has_msgid) sqlite3_finalize (sdb->stmt_has_msgid);
+	if (sdb->stmt_clear) sqlite3_finalize (sdb->stmt_clear);
+}
+
+scrollback_db *
+scrollback_open (const char *network)
+{
+	scrollback_db *sdb;
+	char *path;
+	int rc;
+
+	if (!network || !network[0])
+		return NULL;
+
+	/* Check if already open */
+	if (open_dbs)
+	{
+		sdb = g_hash_table_lookup (open_dbs, network);
+		if (sdb)
+			return sdb;
+	}
+
+	if (!ensure_scrollback_dir ())
+		return NULL;
+
+	sdb = g_new0 (scrollback_db, 1);
+	sdb->network = g_strdup (network);
+
+	path = get_db_path (network);
+	rc = sqlite3_open (path, &sdb->db);
+
+	if (rc != SQLITE_OK)
+	{
+		g_warning ("Failed to open scrollback database %s: %s", path, sqlite3_errmsg (sdb->db));
+		g_free (path);
+		g_free (sdb->network);
+		g_free (sdb);
+		return NULL;
+	}
+
+	g_free (path);
+
+	if (!init_database (sdb))
+	{
+		sqlite3_close (sdb->db);
+		g_free (sdb->network);
+		g_free (sdb);
+		return NULL;
+	}
+
+	if (!prepare_statements (sdb))
+	{
+		sqlite3_close (sdb->db);
+		g_free (sdb->network);
+		g_free (sdb);
+		return NULL;
+	}
+
+	/* Add to open databases */
+	if (!open_dbs)
+		open_dbs = g_hash_table_new (g_str_hash, g_str_equal);
+	g_hash_table_insert (open_dbs, sdb->network, sdb);
+
+	return sdb;
+}
+
+void
+scrollback_db_close (scrollback_db *db)
+{
+	if (!db)
+		return;
+
+	if (open_dbs)
+		g_hash_table_remove (open_dbs, db->network);
+
+	finalize_statements (db);
+	sqlite3_close (db->db);
+	g_free (db->network);
+	g_free (db);
+}
+
+gboolean
+scrollback_db_save (scrollback_db *db, const char *channel,
+                 time_t timestamp, const char *msgid, const char *text)
+{
+	int rc;
+
+	if (!db || !channel || !text)
+		return FALSE;
+
+	sqlite3_reset (db->stmt_insert);
+	sqlite3_bind_text (db->stmt_insert, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64 (db->stmt_insert, 2, (sqlite3_int64)timestamp);
+
+	if (msgid && msgid[0])
+		sqlite3_bind_text (db->stmt_insert, 3, msgid, -1, SQLITE_TRANSIENT);
+	else
+		sqlite3_bind_null (db->stmt_insert, 3);
+
+	sqlite3_bind_text (db->stmt_insert, 4, text, -1, SQLITE_TRANSIENT);
+
+	rc = sqlite3_step (db->stmt_insert);
+
+	if (rc != SQLITE_DONE)
+	{
+		/* SQLITE_CONSTRAINT is expected for duplicate msgid - not an error */
+		if (rc != SQLITE_CONSTRAINT)
+			g_warning ("scrollback_db_save failed: %s", sqlite3_errmsg (db->db));
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+GSList *
+scrollback_db_load (scrollback_db *db, const char *channel, int limit)
+{
+	GSList *list = NULL;
+	int rc;
+
+	if (!db || !channel)
+		return NULL;
+
+	if (limit <= 0)
+		limit = 500; /* Default */
+
+	sqlite3_reset (db->stmt_load);
+	sqlite3_bind_text (db->stmt_load, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int (db->stmt_load, 2, limit);
+
+	while ((rc = sqlite3_step (db->stmt_load)) == SQLITE_ROW)
+	{
+		scrollback_msg *msg = g_new0 (scrollback_msg, 1);
+
+		msg->id = sqlite3_column_int64 (db->stmt_load, 0);
+		msg->channel = g_strdup ((const char *)sqlite3_column_text (db->stmt_load, 1));
+		msg->timestamp = (time_t)sqlite3_column_int64 (db->stmt_load, 2);
+
+		const char *msgid_text = (const char *)sqlite3_column_text (db->stmt_load, 3);
+		msg->msgid = msgid_text ? g_strdup (msgid_text) : NULL;
+
+		msg->text = g_strdup ((const char *)sqlite3_column_text (db->stmt_load, 4));
+
+		/* Prepend to get correct order (query returns DESC, we want ASC) */
+		list = g_slist_prepend (list, msg);
+	}
+
+	if (rc != SQLITE_DONE)
+		g_warning ("Error loading scrollback: %s", sqlite3_errmsg (db->db));
+
+	return list;
+}
+
+char *
+scrollback_get_newest_msgid (scrollback_db *db, const char *channel)
+{
+	char *msgid = NULL;
+	int rc;
+
+	if (!db || !channel)
+		return NULL;
+
+	sqlite3_reset (db->stmt_newest_msgid);
+	sqlite3_bind_text (db->stmt_newest_msgid, 1, channel, -1, SQLITE_TRANSIENT);
+
+	rc = sqlite3_step (db->stmt_newest_msgid);
+	if (rc == SQLITE_ROW)
+	{
+		const char *text = (const char *)sqlite3_column_text (db->stmt_newest_msgid, 0);
+		if (text)
+			msgid = g_strdup (text);
+	}
+
+	return msgid;
+}
+
+char *
+scrollback_get_oldest_msgid (scrollback_db *db, const char *channel)
+{
+	char *msgid = NULL;
+	int rc;
+
+	if (!db || !channel)
+		return NULL;
+
+	sqlite3_reset (db->stmt_oldest_msgid);
+	sqlite3_bind_text (db->stmt_oldest_msgid, 1, channel, -1, SQLITE_TRANSIENT);
+
+	rc = sqlite3_step (db->stmt_oldest_msgid);
+	if (rc == SQLITE_ROW)
+	{
+		const char *text = (const char *)sqlite3_column_text (db->stmt_oldest_msgid, 0);
+		if (text)
+			msgid = g_strdup (text);
+	}
+
+	return msgid;
+}
+
+time_t
+scrollback_get_newest_time (scrollback_db *db, const char *channel)
+{
+	time_t timestamp = 0;
+	int rc;
+
+	if (!db || !channel)
+		return 0;
+
+	sqlite3_reset (db->stmt_newest_time);
+	sqlite3_bind_text (db->stmt_newest_time, 1, channel, -1, SQLITE_TRANSIENT);
+
+	rc = sqlite3_step (db->stmt_newest_time);
+	if (rc == SQLITE_ROW)
+		timestamp = (time_t)sqlite3_column_int64 (db->stmt_newest_time, 0);
+
+	return timestamp;
+}
+
+gboolean
+scrollback_has_msgid (scrollback_db *db, const char *msgid)
+{
+	int rc;
+
+	if (!db || !msgid || !msgid[0])
+		return FALSE;
+
+	sqlite3_reset (db->stmt_has_msgid);
+	sqlite3_bind_text (db->stmt_has_msgid, 1, msgid, -1, SQLITE_TRANSIENT);
+
+	rc = sqlite3_step (db->stmt_has_msgid);
+	return (rc == SQLITE_ROW);
+}
+
+void
+scrollback_clear (scrollback_db *db, const char *channel)
+{
+	if (!db || !channel)
+		return;
+
+	sqlite3_reset (db->stmt_clear);
+	sqlite3_bind_text (db->stmt_clear, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_step (db->stmt_clear);
+}
+
+void
+scrollback_msg_free (scrollback_msg *msg)
+{
+	if (!msg)
+		return;
+
+	g_free (msg->channel);
+	g_free (msg->msgid);
+	g_free (msg->text);
+	g_free (msg);
+}
+
+void
+scrollback_msg_list_free (GSList *list)
+{
+	g_slist_free_full (list, (GDestroyNotify)scrollback_msg_free);
+}
+
+/* Migration from old text-based scrollback */
+
+static char *
+get_old_scrollback_path (const char *network, const char *channel)
+{
+	char *dir = get_scrollback_dir ();
+	char *safe_channel = g_strdup (channel);
+	char *path;
+
+	/* Sanitize channel name for filename */
+	for (char *p = safe_channel; *p; p++)
+	{
+		if (*p == '/' || *p == '\\' || *p == ':' || *p == '*' ||
+		    *p == '?' || *p == '"' || *p == '<' || *p == '>' || *p == '|')
+			*p = '_';
+	}
+
+	path = g_build_filename (dir, network, safe_channel, NULL);
+	g_free (dir);
+
+	char *full_path = g_strdup_printf ("%s.txt", path);
+	g_free (path);
+	g_free (safe_channel);
+
+	return full_path;
+}
+
+int
+scrollback_migrate (scrollback_db *db, const char *network, const char *channel)
+{
+	char *old_path;
+	GFile *file;
+	GInputStream *stream;
+	GDataInputStream *istream;
+	char *line;
+	int count = 0;
+	char *errmsg = NULL;
+
+	if (!db || !network || !channel)
+		return -1;
+
+	old_path = get_old_scrollback_path (network, channel);
+
+	if (!g_file_test (old_path, G_FILE_TEST_EXISTS))
+	{
+		g_free (old_path);
+		return 0; /* No old file to migrate */
+	}
+
+	file = g_file_new_for_path (old_path);
+	stream = G_INPUT_STREAM (g_file_read (file, NULL, NULL));
+
+	if (!stream)
+	{
+		g_object_unref (file);
+		g_free (old_path);
+		return -1;
+	}
+
+	istream = g_data_input_stream_new (stream);
+	g_data_input_stream_set_newline_type (istream, G_DATA_STREAM_NEWLINE_TYPE_ANY);
+	g_object_unref (stream);
+
+	/* Begin transaction for batch insert */
+	sqlite3_exec (db->db, "BEGIN TRANSACTION", NULL, NULL, &errmsg);
+	if (errmsg)
+	{
+		g_warning ("Migration transaction begin failed: %s", errmsg);
+		sqlite3_free (errmsg);
+	}
+
+	while ((line = g_data_input_stream_read_line_utf8 (istream, NULL, NULL, NULL)) != NULL)
+	{
+		time_t timestamp = 0;
+		const char *text = line;
+
+		/* Parse old format: T <timestamp> <text> */
+		if (line[0] == 'T' && line[1] == ' ')
+		{
+			if (sizeof (time_t) == 4)
+				timestamp = strtoul (line + 2, NULL, 10);
+			else
+				timestamp = g_ascii_strtoull (line + 2, NULL, 10);
+
+			text = strchr (line + 3, ' ');
+			if (text)
+				text++; /* Skip the space */
+			else
+				text = "";
+		}
+
+		if (timestamp > 0 && text && text[0])
+		{
+			/* Insert without msgid (old format doesn't have them) */
+			if (scrollback_db_save (db, channel, timestamp, NULL, text))
+				count++;
+		}
+
+		g_free (line);
+	}
+
+	/* Commit transaction */
+	sqlite3_exec (db->db, "COMMIT", NULL, NULL, &errmsg);
+	if (errmsg)
+	{
+		g_warning ("Migration transaction commit failed: %s", errmsg);
+		sqlite3_free (errmsg);
+	}
+
+	g_object_unref (istream);
+	g_object_unref (file);
+
+	/* Rename old file to .migrated */
+	if (count > 0)
+	{
+		char *migrated_path = g_strdup_printf ("%s.migrated", old_path);
+		g_rename (old_path, migrated_path);
+		g_free (migrated_path);
+	}
+
+	g_free (old_path);
+
+	return count;
+}
+
+void
+scrollback_init (void)
+{
+	/* SQLite is initialized automatically on first use */
+	if (!open_dbs)
+		open_dbs = g_hash_table_new (g_str_hash, g_str_equal);
+}
+
+static void
+close_db_callback (gpointer key, gpointer value, gpointer user_data)
+{
+	scrollback_db *db = value;
+	finalize_statements (db);
+	sqlite3_close (db->db);
+	g_free (db->network);
+	g_free (db);
+}
+
+void
+scrollback_shutdown (void)
+{
+	if (open_dbs)
+	{
+		g_hash_table_foreach (open_dbs, close_db_callback, NULL);
+		g_hash_table_destroy (open_dbs);
+		open_dbs = NULL;
+	}
+}

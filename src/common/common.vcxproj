@@ -53,6 +53,7 @@
     <ClInclude Include="oauth.h" />
     <ClInclude Include="secure-storage.h" />
     <ClInclude Include="chathistory.h" />
+    <ClInclude Include="scrollback.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="cfgfiles.c" />
@@ -86,6 +87,7 @@
     <ClCompile Include="oauth.c" />
     <ClCompile Include="secure-storage.c" />
     <ClCompile Include="chathistory.c" />
+    <ClCompile Include="scrollback.c" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\win32\config.h.tt" />
