@@ -434,22 +434,33 @@ Implementation:
 
 ---
 
-### Phase 3: Insertion Modes
+### Phase 3: Insertion Modes ✅ DONE
 
 **Goal:** Support prepend and sorted insert
 
-**Changes:**
-1. Add `GSequence *entries_by_time` for sorted access
-2. Implement `gtk_xtext_prepend()`
-3. Implement `gtk_xtext_insert_sorted()`
-4. Update line number calculation to handle non-tail insertion
-5. Implement batch insert for efficiency
+**Status:** Core implementation complete. GSequence optimization deferred (not needed for chathistory).
 
-**Risk:** High - significant logic changes, extensive testing needed
+**Completed:**
+1. ✅ Implement `gtk_xtext_prepend()` / `gtk_xtext_prepend_indent()` - O(1) head insertion
+2. ✅ Implement `gtk_xtext_insert_sorted()` / `gtk_xtext_insert_sorted_indent()` - O(n) sorted insert
+3. ✅ Update line number calculation for non-tail insertion
+4. ✅ Adjust scroll position to preserve user's view when prepending/inserting
+
+**Deferred (optional optimization):**
+- GSequence for O(log n) timestamp lookup - not needed since:
+  - prepend is O(1) for CHATHISTORY BEFORE
+  - append is O(1) for CHATHISTORY AFTER
+  - insert_sorted O(n) is acceptable for rare gap-filling operations
+
+**Key design decisions:**
+- Prepend adjusts pagetop_line/old_value/adjustment to keep view stable
+- Prepend prunes from BOTTOM if exceeding max_lines (opposite of append)
+- Insert_sorted walks list to find position (simple, correct, sufficient)
+- Historical entries don't update marker_pos (only live messages do)
 
 **Files:**
 - `xtext.h` - new function declarations
-- `xtext.c` - insertion logic, line numbering
+- `xtext.c` - gtk_xtext_prepend_entry(), gtk_xtext_insert_sorted_entry()
 
 ---
 
@@ -1231,7 +1242,7 @@ void handle_reply_click(session *sess, const char *reply_to_msgid) {
 | Phase 1: Entry ID | 2-3 days | Low | None | All lookups | ✅ DONE |
 | Phase 1.5: Multiline | 2-3 days | Medium | Phase 1 | Proper message identity | ✅ DONE |
 | Phase 2: Scroll Anchor | 3-4 days | Medium | Phase 1 | Insertion modes | ✅ DONE |
-| Phase 3: Insertion Modes | 5-7 days | High | Phase 1, 2 | Chathistory prepend | ⬜ |
+| Phase 3: Insertion Modes | 5-7 days | High | Phase 1, 2 | Chathistory prepend | ✅ DONE |
 | Phase 4: Entry Modification | 3-4 days | Medium | Phase 1, 1.5 | Redaction, echo | ⬜ |
 | Phase 5: Inline Rendering | 4-5 days | Medium | None | Reactions | ⬜ |
 | Phase 6: Rich Content | 4-5 days | Medium | Phase 1, 4, 5 | Full modern UX | ⬜ |
@@ -1687,3 +1698,43 @@ struct textentry {
 
 /* New size: ~70 bytes per entry (acceptable overhead) */
 ```
+
+---
+
+## 10. Future Considerations
+
+### Status/Indicator Area
+
+**Problem:** Transient status messages (like "No more history available", "Loading history...", typing indicators) currently get printed into the chat buffer, which:
+- Clutters actual chat content
+- Gets lost when scrolling (can't see them)
+- Isn't the right place for ephemeral status information
+
+**Proposed Solution:** A dedicated status region separate from the chat buffer:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ [12:30] <alice> Last message in buffer                          │
+│ [12:31] <bob> Some other message                                │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│ [Status] alice, bob are typing... | No more history available   │  ← Status area
+├─────────────────────────────────────────────────────────────────┤
+│ [Input box]                                                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Status types to support:**
+- Typing indicators ("+typing" TAGMSG)
+- History loading status ("Loading history...", "No more history")
+- Connection status (lag, disconnected)
+- Echo-message pending count ("3 messages pending...")
+
+**Design considerations:**
+- Should be a separate widget, not part of xtext buffer
+- Transient messages auto-clear after timeout or state change
+- Multiple status items can coexist (typing + loading)
+- Minimal height, doesn't steal space from chat
+- Could reuse infrastructure for channel topic display
+
+**Priority:** Low - nice to have, not blocking core functionality
