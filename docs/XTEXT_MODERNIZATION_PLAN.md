@@ -1256,6 +1256,46 @@ void handle_reply_click(session *sess, const char *reply_to_msgid) {
 **Parallel track:** Phase 5 → Phase 6 (modern rich content)
 **Polish:** Phase 7, 8 (can be done last)
 
+### Toast/Notification Overlay
+
+**Need:** Chathistory loading indicators (e.g., "50 messages loaded") currently use
+`PrintText()` which appends to the buffer bottom, but history is *prepended* at the
+top. The user never sees the banners until scrolling back down — just noise.
+
+**Solution:** Add a lightweight toast/overlay widget to the xtext area that can show
+transient notifications (message count, loading state, errors) without polluting the
+buffer. This is independent of the phase pipeline and can be implemented alongside
+any phase. The chathistory banners in `chathistory.c` are currently disabled pending
+this work (see TODO comments there).
+
+### Date Separators
+
+**Need:** When scrolling through history — especially in quiet channels with only a
+few messages per day — there is no visual indication of where one day ends and
+another begins. Timestamps show time-of-day but not the date, so it's easy to lose
+track of which day a message was sent on.
+
+**Solution:** Insert date separator entries (e.g., `--- Monday, January 15, 2026 ---`)
+into the buffer when consecutive messages span different calendar days. These would
+be special `textentry` records with no nick/indent (`left_len = -1`), centered or
+left-aligned with a distinct style.
+
+**Insertion points:**
+- **Chathistory batch processing:** When iterating messages in `chathistory_process_batch()`,
+  compare each message's date to the previous one and insert a separator entry when the
+  day changes. Works for both prepend (BEFORE) and append (AFTER) modes.
+- **Real-time message flow:** When a new message arrives and the date differs from the
+  last entry in the buffer, insert a separator before the new message. Handles the
+  midnight rollover case during live chat.
+- **Scrollback load:** When loading SQLite scrollback on join, date separators can be
+  inserted between messages from different days.
+
+**Considerations:**
+- Use locale-aware date formatting (`strftime` or GLib `g_date_time_format()`)
+- Separator entries should not be saved to scrollback DB (they're purely visual)
+- Should respect the xtext theme colors (use a muted/separator color)
+- Deduplication: avoid inserting duplicate separators at batch boundaries
+
 ---
 
 ## 9. Alternatives Considered
