@@ -294,6 +294,13 @@ _SSL_recv (SSL * ssl, char *buf, int len)
 }
 
 
+int
+_SSL_pending (SSL * ssl)
+{
+	return SSL_pending (ssl);
+}
+
+
 SSL *
 _SSL_socket (SSL_CTX *ctx, int sd)
 {

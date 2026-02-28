@@ -61,6 +61,7 @@ struct chiper_info *_SSL_get_cipher_info (SSL * ssl);
 
 int _SSL_send (SSL * ssl, char *buf, int len);
 int _SSL_recv (SSL * ssl, char *buf, int len);
+int _SSL_pending (SSL * ssl);
 
 /* misc */
 /*void broke_oneline (char *oneline, char *parray[]);*/

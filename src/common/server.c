@@ -374,7 +374,19 @@ server_read (GIOChannel *source, GIOCondition condition, server *serv)
 			if (len < 0)
 			{
 				if (would_block ())
+				{
+#ifdef USE_OPENSSL
+					/* OpenSSL may have decrypted multiple messages from a
+					 * single TLS record into its internal buffer. The kernel
+					 * socket can be empty (would_block) while SSL still has
+					 * data ready. If we return here, those messages stall
+					 * until new network data arrives and triggers the event
+					 * loop again. Drain the SSL buffer before returning. */
+					if (serv->ssl && _SSL_pending (serv->ssl) > 0)
+						continue;
+#endif
 					return TRUE;
+				}
 				error = sock_error ();
 			}
 			if (!serv->end_of_motd)
