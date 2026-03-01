@@ -643,36 +643,42 @@ inbound_ujoin (server *serv, char *chan, char *nick, char *ip,
 								  tags_data->timestamp);
 
 	/* Request chathistory on join.
-	 * - If we have scrollback: request AFTER (catch-up) with APPEND mode
-	 * - If no scrollback: request LATEST with PREPEND mode */
+	 * - If we have a join msgid + scrollback: BEFORE our join (catch-up gap)
+	 * - If we have scrollback but no join msgid: AFTER scrollback (fallback)
+	 * - If no scrollback: LATEST with PREPEND mode */
 	if (prefs.hex_irc_chathistory_auto && serv->have_chathistory &&
 	    !sess->history_loading)
 	{
 		/* Mark as initial join history (used by batch handler for behavior decisions) */
 		sess->join_deferred = TRUE;
 
-		if (sess->scrollback_newest_msgid && sess->scrollback_newest_msgid[0])
+		if (tags_data->msgid && tags_data->msgid[0] &&
+		    (sess->scrollback_newest_msgid || sess->scrollback_newest_time > 0))
 		{
-			/* Catch-up: get messages since last known msgid.
-			 * These are NEWER than scrollback, so APPEND (don't prepend). */
+			/* Catch-up: get messages BEFORE our join.  This naturally excludes
+			 * our own JOIN event (the "Now talking on" banner covers it) while
+			 * keeping it on the server for future history requests. */
+			chathistory_request_before_msgid (sess, tags_data->msgid,
+			                                  prefs.hex_irc_chathistory_lines);
+			sess->history_request_is_before = TRUE;
+		}
+		else if (sess->scrollback_newest_msgid && sess->scrollback_newest_msgid[0])
+		{
+			/* No join msgid available - fall back to AFTER scrollback */
 			chathistory_request_after_msgid (sess, sess->scrollback_newest_msgid,
 			                                 prefs.hex_irc_chathistory_lines);
-			/* AFTER uses append mode (default) - messages go after join banner */
 		}
 		else if (sess->scrollback_newest_time > 0)
 		{
-			/* Catch-up: get messages since last known timestamp.
-			 * These are NEWER than scrollback, so APPEND (don't prepend). */
+			/* Catch-up by timestamp */
 			chathistory_request_after_timestamp (sess, sess->scrollback_newest_time,
 			                                     prefs.hex_irc_chathistory_lines);
-			/* AFTER uses append mode (default) - messages go after join banner */
 		}
 		else
 		{
 			/* No scrollback - fetch most recent context.
 			 * These should appear BEFORE the join banner, so PREPEND. */
 			chathistory_request_latest (sess, prefs.hex_irc_chathistory_lines);
-			/* Force prepend mode - history appears before "You have joined" */
 			sess->history_request_is_before = TRUE;
 		}
 	}

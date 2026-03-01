@@ -1296,6 +1296,37 @@ left-aligned with a distinct style.
 - Should respect the xtext theme colors (use a muted/separator color)
 - Deduplication: avoid inserting duplicate separators at batch boundaries
 
+### Scrollback Database Compression
+
+**Need:** The local SQLite scrollback DB stores pre-formatted display text which is
+significantly larger than the raw IRC messages (observed ~12x larger than the server's
+chathistory database). IRC text with repetitive color codes (`\003XX`) and common
+patterns compresses extremely well.
+
+**Options:**
+
+1. **sqlite_zstd_vfs** ([github.com/mlin/sqlite_zstd_vfs](https://github.com/mlin/sqlite_zstd_vfs))
+   - Transparent whole-file compression at the VFS layer
+   - Zero changes to queries or schema — just specify the VFS when opening
+   - Compresses everything (indexes, metadata, data) uniformly
+   - Simple integration: single C file, links against libzstd
+   - Good for a quick win with minimal code changes
+
+2. **sqlite-zstd** ([github.com/phiresky/sqlite-zstd](https://github.com/phiresky/sqlite-zstd))
+   - Column-level compression via SQLite extension
+   - Can target just the `text` column (where the bulk lives) while leaving
+     `msgid`/`timestamp` uncompressed for fast index lookups
+   - Supports dictionary training on similar rows — would crush repetitive
+     IRC formatting patterns
+   - Better compression ratios for our use case but more integration work
+
+**Notes:**
+- Nefarious IRCd uses zstd for its chathistory storage, so this aligns with
+  the server-side approach
+- libzstd is widely packaged on Linux and available via vcpkg/gvsbuild on Windows
+- Either option adds a libzstd dependency (optional, with graceful fallback to
+  uncompressed if not available)
+
 ---
 
 ## 9. Alternatives Considered

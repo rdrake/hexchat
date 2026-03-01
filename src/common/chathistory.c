@@ -273,6 +273,7 @@ chathistory_request_before_msgid (session *sess, const char *msgid, int limit)
 	/* Format msgid reference per IRCv3 spec */
 	ref = g_strdup_printf ("msgid=%s", msgid);
 
+	sess->history_request_used_msgid = TRUE;
 	chathistory_request_before (sess, ref, limit);
 
 	g_free (ref);
@@ -324,11 +325,9 @@ find_session_for_target (server *serv, const char *target)
 }
 
 /* Process a single message from the batch.
- * Returns TRUE if message was processed, FALSE if it was a duplicate.
- * skip_own_join_msgid: if set, skip displaying our own JOIN with this msgid */
+ * Returns TRUE if message was processed, FALSE if it was a duplicate. */
 static gboolean
-process_batch_message (server *serv, session *sess, batch_message *msg,
-                       const char *skip_own_join_msgid)
+process_batch_message (server *serv, session *sess, batch_message *msg)
 {
 	message_tags_data tags_data;
 	char *nick = NULL;
@@ -421,17 +420,6 @@ process_batch_message (server *serv, session *sess, batch_message *msg,
 	/* event-playback: Handle JOIN, PART, QUIT, KICK, MODE, TOPIC, NICK */
 	else if (g_ascii_strcasecmp (msg->command, "JOIN") == 0)
 	{
-		/* Skip only the LATEST own JOIN from AFTER requests (catch-up after rejoin).
-		 * The "Now talking on" banner already covers that specific join, but earlier
-		 * JOINs of ourselves (join/part/rejoin while away) should still be shown. */
-		if (skip_own_join_msgid && msg->msgid &&
-		    strcmp (msg->msgid, skip_own_join_msgid) == 0)
-		{
-			g_free (nick);
-			g_free (host);
-			return TRUE;  /* Counted as processed but not displayed */
-		}
-
 		/* Historical JOIN - display only, don't modify nicklist.
 		 * The current channel membership comes from NAMES, not replayed history. */
 		char *account = NULL;
@@ -598,7 +586,6 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	time_t max_age_cutoff = 0;
 	gboolean hit_age_limit = FALSE;
 	char *batch_oldest_msgid = NULL;  /* Track oldest msgid for BEFORE requests */
-	const char *skip_own_join_msgid = NULL;  /* Latest own JOIN to skip for AFTER */
 
 	if (!batch || !batch->type)
 		return;
@@ -662,36 +649,6 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	 * Currently banners get appended at the bottom while history is prepended
 	 * at the top, so the user never sees them until scrolling back down. */
 
-	/* For initial join requests, pre-scan to find the LATEST own JOIN msgid to skip.
-	 * Messages are in chronological order, so scan forward to find the last one.
-	 * We skip only the latest own JOIN since "Now talking on" covers it,
-	 * but earlier own JOINs (join/part/rejoin cycles) should be shown.
-	 * This applies to both AFTER (catch-up) and LATEST (no scrollback) requests. */
-	if (is_initial_join)
-	{
-		for (iter = batch->messages; iter; iter = iter->next)
-		{
-			batch_message *msg = iter->data;
-			if (msg && msg->command && msg->msgid &&
-			    g_ascii_strcasecmp (msg->command, "JOIN") == 0)
-			{
-				/* Extract nick from prefix to check if it's our own */
-				if (msg->prefix)
-				{
-					char *bang = strchr (msg->prefix, '!');
-					char *check_nick = bang ? g_strndup (msg->prefix, bang - msg->prefix)
-					                        : g_strdup (msg->prefix);
-					if (!serv->p_cmp (check_nick, serv->nick))
-					{
-						/* This is our JOIN - keep updating to get the latest one */
-						skip_own_join_msgid = msg->msgid;
-					}
-					g_free (check_nick);
-				}
-			}
-		}
-	}
-
 	/* IRCv3 modernization: For BEFORE requests, use prepend mode (Phase 3)
 	 * Messages come oldest→newest, but we want oldest at top of buffer.
 	 * Reverse the list and prepend each message to achieve correct order:
@@ -727,7 +684,7 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		batch_message *msg = iter->data;
 
 		/* Only count messages that were actually processed (not duplicates) */
-		if (process_batch_message (serv, sess, msg, skip_own_join_msgid))
+		if (process_batch_message (serv, sess, msg))
 			msg_count++;
 
 		/* Track oldest timestamp for age limit check */
@@ -745,18 +702,19 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		}
 	}
 
+	/* Clear prepend mode before separator so it doesn't get prepended to top */
+	sess->history_prepend_mode = FALSE;
+
 	/* For initial join, add a visual separator (blank line) between
-	 * chathistory and the join banner. This applies to both:
-	 * - AFTER requests (catch-up when we have scrollback)
-	 * - LATEST requests (no scrollback, fresh join)
-	 * Use newest_timestamp + 1 so it sorts after the last history message. */
+	 * chathistory and the join banner.  Use insert_sorted so it lands
+	 * at the correct chronological position regardless of request type. */
 	if (is_initial_join && msg_count > 0)
 	{
+		sess->history_insert_sorted_mode = TRUE;
 		PrintTextTimeStamp (sess, "\n", newest_timestamp + 1);
 	}
 
-	/* Clear mode flags after processing */
-	sess->history_prepend_mode = FALSE;
+	/* Clear remaining mode flags */
 	sess->history_insert_sorted_mode = FALSE;
 
 	/* For BEFORE requests, update oldest_msgid to the actual oldest from the batch.
