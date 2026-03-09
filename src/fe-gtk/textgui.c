@@ -820,12 +820,6 @@ pevent_dialog_show ()
 											 TRUE, FALSE, pevent_dialog_close, NULL,
 											 600, 455, &vbox, 0);
 
-	/* Add margin around the dialog content */
-	gtk_widget_set_margin_start (vbox, 4);
-	gtk_widget_set_margin_end (vbox, 4);
-	gtk_widget_set_margin_top (vbox, 4);
-	gtk_widget_set_margin_bottom (vbox, 4);
-
 	/* Outer pane: lists on top, preview on bottom (resizable) */
 	pane = gtk_paned_new (GTK_ORIENTATION_VERTICAL);
 	hc_box_pack_start (vbox, pane, TRUE, TRUE, 0);

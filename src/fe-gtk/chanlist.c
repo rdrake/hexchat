@@ -1151,8 +1151,6 @@ chanlist_opengui (server *serv, int do_refresh)
 								serv, 640, 480, &vbox, serv);
 	gtkutil_destroy_on_esc (serv->gui->chanlist_window);
 
-	gtk_box_set_spacing (GTK_BOX (vbox), 12);
-
 	/* make a label to store the user/channel info */
 	wid = gtk_label_new (NULL);
 	hc_box_pack_start (vbox, wid, FALSE, FALSE, 0);
@@ -1189,6 +1187,7 @@ chanlist_opengui (server *serv, int do_refresh)
 	table = gtk_grid_new ();
 	gtk_grid_set_column_spacing (GTK_GRID (table), 12);
 	gtk_grid_set_row_spacing (GTK_GRID (table), 3);
+	gtk_widget_set_margin_top (table, 6);
 	hc_box_pack_start (vbox, table, FALSE, TRUE, 0);
 	gtk_widget_show (table);
 

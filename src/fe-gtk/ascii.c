@@ -125,7 +125,6 @@ ascii_open (void)
 
 	win = mg_create_generic_tab ("charmap", _("Character Chart"), TRUE, TRUE,
 										  NULL, NULL, 0, 0, &vbox, NULL);
-	hc_container_set_border_width (win, 5);
 	gtkutil_destroy_on_esc (win);
 
 	label = gtk_label_new (NULL);

@@ -4446,6 +4446,7 @@ mg_create_generic_tab (char *name, char *title, int force_toplevel,
 	{
 		win = gtkutil_window_new (title, name, width, height, 2);
 		vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+		hc_container_set_border_width (vbox, 4);
 		*vbox_ret = vbox;
 		hc_window_set_child (win, vbox);
 		gtk_widget_show (vbox);
@@ -4458,7 +4459,7 @@ mg_create_generic_tab (char *name, char *title, int force_toplevel,
 	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
 	g_object_set_data (G_OBJECT (vbox), "w", GINT_TO_POINTER (width));
 	g_object_set_data (G_OBJECT (vbox), "h", GINT_TO_POINTER (height));
-	hc_container_set_border_width (vbox, 3);
+	hc_container_set_border_width (vbox, 4);
 	*vbox_ret = vbox;
 
 	if (close_callback)

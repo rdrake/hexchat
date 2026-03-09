@@ -1349,13 +1349,11 @@ servlist_delete_cb (GtkWidget *win, gpointer userdata)
 static void
 servlist_close_cb (GtkWidget *button, gpointer userdata)
 {
-	servlist_savegui ();
+	(void)button; (void)userdata;
+	/* Just close the window — servlist_delete_cb handles savegui, cleanup,
+	 * and hexchat_exit() if no sessions exist. Doing it here too would
+	 * double-call hexchat_exit() since fe_exit() doesn't terminate immediately. */
 	hc_window_destroy (serverlist_win);
-	serverlist_win = NULL;
-	selected_net = NULL;
-
-	if (sess_list == NULL)
-		hexchat_exit ();
 }
 
 /* convert "host:port" format to "host/port" */

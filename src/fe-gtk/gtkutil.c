@@ -666,6 +666,12 @@ gtkutil_window_new (char *title, char *role, int width, int height, int flags)
 		gtk_window_set_type_hint (GTK_WINDOW (win), GDK_WINDOW_TYPE_HINT_DIALOG);
 		gtk_window_set_transient_for (GTK_WINDOW (win), GTK_WINDOW (parent_window));
 		gtk_window_set_destroy_with_parent (GTK_WINDOW (win), TRUE);
+
+		/* GTK4: restore focus to parent when this dialog closes.
+		 * g_signal_connect_object auto-disconnects if parent is destroyed first. */
+		g_signal_connect_object (win, "destroy",
+		                         G_CALLBACK (gtk_window_present),
+		                         parent_window, G_CONNECT_SWAPPED);
 	}
 
 	return win;

@@ -120,7 +120,7 @@ open_rawlog (struct server *serv)
 	scrolledwindow = hc_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolledwindow), GTK_POLICY_NEVER, GTK_POLICY_ALWAYS);
 	gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolledwindow), GTK_SHADOW_IN);
-	hc_box_add (vbox, scrolledwindow);
+	hc_box_pack_start (vbox, scrolledwindow, TRUE, TRUE, 0);
 
 	serv->gui->rawlog_textlist = gtk_xtext_new (colors, 0);
 	hc_scrolled_window_set_child (scrolledwindow, serv->gui->rawlog_textlist);
@@ -129,7 +129,8 @@ open_rawlog (struct server *serv)
 
 	bbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
 	hc_button_box_set_layout (bbox, GTK_BUTTONBOX_SPREAD);
-	hc_box_pack_end (vbox, bbox, 0, 0, 4);
+	gtk_widget_set_margin_top (bbox, 6);
+	hc_box_pack_start (vbox, bbox, FALSE, FALSE, 0);
 
 	gtkutil_button (bbox, "edit-clear", NULL, rawlog_clearbutton,
 						 serv, _("Clear Raw Log"));

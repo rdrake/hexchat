@@ -570,8 +570,8 @@ ignore_gui_open ()
 
 	box = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
 	hc_button_box_set_layout (box, GTK_BUTTONBOX_SPREAD);
-	hc_box_pack_start (vbox, box, FALSE, FALSE, 2);
-	hc_container_set_border_width (box, 5);
+	gtk_widget_set_margin_top (box, 6);
+	hc_box_pack_start (vbox, box, FALSE, FALSE, 0);
 	gtk_widget_show (box);
 
 	gtkutil_button (box, "document-new", 0, ignore_new_entry_clicked, 0,

@@ -1314,7 +1314,8 @@ fe_dcc_open_recv_win (int passive)
 
 	bbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
 	hc_button_box_set_layout (bbox, GTK_BUTTONBOX_SPREAD);
-	hc_box_pack_end (vbox, bbox, FALSE, FALSE, 2);
+	gtk_widget_set_margin_top (bbox, 6);
+	hc_box_pack_start (vbox, bbox, FALSE, FALSE, 0);
 
 	dccfwin.abort_button = gtkutil_button (bbox, "process-stop", 0, abort_clicked, 0, _("Abort"));
 	dccfwin.accept_button = gtkutil_button (bbox, "emblem-default", 0, accept_clicked, 0, _("Accept"));
@@ -1663,7 +1664,8 @@ fe_dcc_open_chat_win (int passive)
 
 	bbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
 	hc_button_box_set_layout (bbox, GTK_BUTTONBOX_SPREAD);
-	hc_box_pack_end (vbox, bbox, FALSE, FALSE, 2);
+	gtk_widget_set_margin_top (bbox, 6);
+	hc_box_pack_start (vbox, bbox, FALSE, FALSE, 0);
 
 	dcccwin.abort_button = gtkutil_button (bbox, "process-stop", 0, abort_chat_clicked, 0, _("Abort"));
 	dcccwin.accept_button = gtkutil_button (bbox, "emblem-default", 0, accept_chat_clicked, 0, _("Accept"));

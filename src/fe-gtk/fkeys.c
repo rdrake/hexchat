@@ -836,7 +836,8 @@ key_dialog_show ()
 
 	box = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
 	hc_button_box_set_layout (box, GTK_BUTTONBOX_SPREAD);
-	hc_box_pack_start (vbox, box, FALSE, FALSE, 2);
+	gtk_widget_set_margin_top (box, 6);
+	hc_box_pack_start (vbox, box, FALSE, FALSE, 0);
 
 	gtkutil_button (box, "document-new", NULL, key_dialog_add,
 					NULL, _("Add"));

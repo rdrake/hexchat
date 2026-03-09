@@ -551,8 +551,8 @@ notify_opengui (void)
   
 	bbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
 	hc_button_box_set_layout (bbox, GTK_BUTTONBOX_SPREAD);
-	hc_container_set_border_width (bbox, 5);
-	hc_box_pack_end (vbox, bbox, 0, 0, 0);
+	gtk_widget_set_margin_top (bbox, 6);
+	hc_box_pack_start (vbox, bbox, FALSE, FALSE, 0);
 	gtk_widget_show (bbox);
 
 	gtkutil_button (bbox, "document-new", 0, notify_add_clicked, 0,

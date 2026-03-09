@@ -870,8 +870,10 @@ servlist_cleanup (void)
 	{
 		net = list->data;
 		free_and_clear (net->pass);
+		net->pass = NULL;
 		/* Clear OAuth secrets */
 		free_and_clear (net->oauth_client_secret);
+		net->oauth_client_secret = NULL;
 	}
 
 	/* Save and cleanup STS policies */
