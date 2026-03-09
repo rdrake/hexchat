@@ -93,6 +93,7 @@ struct _SexySpellEntryPriv
 	gint                 *word_ends;
 	gboolean              checked;
 	gboolean              parseattr;
+	gboolean              spell_actions_installed;
 };
 
 static void sexy_spell_entry_class_init(SexySpellEntryClass *klass);
@@ -101,7 +102,6 @@ static void sexy_spell_entry_init(SexySpellEntry *entry);
 static void sexy_spell_entry_finalize(GObject *obj);
 static void sexy_spell_entry_destroy(GObject *obj);
 static void sexy_spell_entry_snapshot(GtkWidget *widget, GtkSnapshot *snapshot);
-static void sexy_spell_entry_button_press(GtkGestureClick *gesture, int n_press, double x, double y, SexySpellEntry *entry);
 
 /* GtkEditable handlers */
 static void sexy_spell_entry_changed(GtkEditable *editable, gpointer data);
@@ -109,8 +109,6 @@ static void sexy_spell_entry_changed(GtkEditable *editable, gpointer data);
 /* Other handlers */
 
 /* Internal utility functions */
-static gint       gtk_entry_find_position                     (GtkEntry             *entry,
-                                                               gint                  x);
 static gboolean   word_misspelled                             (SexySpellEntry       *entry,
                                                                int                   start,
                                                                int                   end);
@@ -125,6 +123,11 @@ static void       entry_strsplit_utf8                         (GtkEntry         
                                                                gchar              ***set,
                                                                gint                **starts,
                                                                gint                **ends);
+static void       sexy_spell_entry_text_button_press          (GtkGestureClick      *gesture,
+                                                               int                   n_press,
+                                                               double                x,
+                                                               double                y,
+                                                               SexySpellEntry       *entry);
 
 static GtkEntryClass *parent_class = NULL;
 
@@ -142,6 +145,15 @@ enum
 static guint signals[LAST_SIGNAL] = {0};
 
 static PangoAttrList *empty_attrs_list = NULL;
+
+/* Spell menu context — shared between the CAPTURE gesture handler
+ * and the action callbacks.  Only one context menu can be open at a
+ * time, so static state is safe. */
+static SexySpellEntry *spell_menu_entry = NULL;
+static gchar *spell_menu_word = NULL;
+static struct EnchantDict *spell_menu_dict = NULL;
+static gchar **spell_menu_suggestions = NULL;
+static size_t spell_menu_n_suggestions = 0;
 
 /*
  * GTK4: GtkEntry no longer exposes its PangoLayout via gtk_entry_get_layout().
@@ -275,7 +287,6 @@ sexy_spell_entry_class_init(SexySpellEntryClass *klass)
 	object_class->dispose = sexy_spell_entry_destroy;
 
 	widget_class->snapshot = sexy_spell_entry_snapshot;
-	/* button_press is handled via GtkGestureClick in sexy_spell_entry_init() */
 
 	/**
 	 * SexySpellEntry::word-check:
@@ -310,76 +321,41 @@ sexy_spell_entry_editable_init (GtkEditableInterface *iface)
 {
 }
 
-/* Helper to get preedit length by comparing entry text with layout text */
+/*
+ * Convert an x coordinate (in GtkText widget-local space) to a character
+ * position within the entry text.  Uses the GtkText widget's PangoContext
+ * and scroll-offset property to accurately map coordinates.
+ */
 static gint
-sexy_spell_entry_get_preedit_length (GtkEntry *entry)
-{
-	const gchar *text = hc_entry_get_text (GTK_WIDGET(entry));
-	PangoLayout *layout = gtk_entry_get_layout (entry);
-	const gchar *layout_text;
-	gint text_len, layout_len;
-
-	/* GTK4: gtk_entry_get_layout returns NULL - no preedit support */
-	if (layout == NULL)
-		return 0;
-
-	layout_text = pango_layout_get_text (layout);
-	if (layout_text == NULL)
-		return 0;
-
-	text_len = strlen (text);
-	layout_len = strlen (layout_text);
-
-	/* Preedit text is included in layout but not in entry text */
-	return (layout_len > text_len) ? (layout_len - text_len) : 0;
-}
-
-static gint
-gtk_entry_find_position (GtkEntry *entry, gint x)
+spell_find_position_from_x (GtkText *text_widget, gint x)
 {
 	PangoLayout *layout;
 	PangoLayoutLine *line;
 	const gchar *text;
-	gint cursor_index;
+	gint scroll_offset = 0;
 	gint index;
 	gint pos;
-	gint current_pos;
-	gint preedit_length;
-	gint layout_x;
 	gboolean trailing;
 
-	/* Get layout offset to convert x coordinate */
-	gtk_entry_get_layout_offsets (entry, &layout_x, NULL);
-	x = x - layout_x;
+	text = gtk_editable_get_text (GTK_EDITABLE (text_widget));
+	if (text == NULL || text[0] == '\0')
+		return 0;
 
-	layout = gtk_entry_get_layout(entry);
-	/* GTK4: gtk_entry_get_layout returns NULL - spell checking disabled */
+	g_object_get (text_widget, "scroll-offset", &scroll_offset, NULL);
+
+	layout = gtk_widget_create_pango_layout (GTK_WIDGET (text_widget), text);
 	if (layout == NULL)
-		return gtk_editable_get_position (GTK_EDITABLE (entry));
-	text = pango_layout_get_text(layout);
+		return 0;
 
-	/* Get cursor position using accessor function */
-	current_pos = gtk_editable_get_position (GTK_EDITABLE (entry));
-	cursor_index = g_utf8_offset_to_pointer(text, current_pos) - text;
-
-	line = pango_layout_get_lines(layout)->data;
-	pango_layout_line_x_to_index(line, x * PANGO_SCALE, &index, &trailing);
-
-	/* Get preedit length */
-	preedit_length = sexy_spell_entry_get_preedit_length (entry);
-
-	if (index >= cursor_index && preedit_length) {
-		if (index >= cursor_index + preedit_length) {
-			index -= preedit_length;
-		} else {
-			index = cursor_index;
-			trailing = FALSE;
-		}
-	}
+	line = pango_layout_get_lines_readonly (layout)->data;
+	pango_layout_line_x_to_index (line,
+	                               (x + scroll_offset) * PANGO_SCALE,
+	                               &index, &trailing);
 
 	pos = g_utf8_pointer_to_offset (text, text + index);
 	pos += trailing;
 
+	g_object_unref (layout);
 	return pos;
 }
 
@@ -563,9 +539,24 @@ sexy_spell_entry_init(SexySpellEntry *entry)
 
 	g_signal_connect(G_OBJECT(entry), "changed", G_CALLBACK(sexy_spell_entry_changed), NULL);
 
-	/* In GTK4, button_press_event is replaced by GtkGestureClick.
-	 * Right-click shows spell check context menu via sexy_spell_entry_show_popup() */
-	hc_add_click_gesture(GTK_WIDGET(entry), G_CALLBACK(sexy_spell_entry_button_press), NULL, entry);
+	/* CAPTURE-phase right-click gesture on the GtkText child.
+	 * Fires before GTK4's built-in BUBBLE-phase gesture so we can
+	 * update the extra-menu before the context menu popover is built. */
+	{
+		GtkText *text_widget = sexy_spell_entry_get_text_widget (entry);
+		if (text_widget != NULL)
+		{
+			GtkGesture *gesture = gtk_gesture_click_new ();
+			gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), 3);
+			gtk_event_controller_set_propagation_phase (
+				GTK_EVENT_CONTROLLER (gesture), GTK_PHASE_CAPTURE);
+			g_signal_connect (gesture, "pressed",
+			                  G_CALLBACK (sexy_spell_entry_text_button_press),
+			                  entry);
+			gtk_widget_add_controller (GTK_WIDGET (text_widget),
+			                           GTK_EVENT_CONTROLLER (gesture));
+		}
+	}
 }
 
 static void
@@ -577,6 +568,28 @@ sexy_spell_entry_finalize(GObject *obj)
 	g_return_if_fail(SEXY_IS_SPELL_ENTRY(obj));
 
 	entry = SEXY_SPELL_ENTRY(obj);
+
+	/* Clean up spell menu state if this is the active entry */
+	if (spell_menu_entry == entry)
+	{
+		if (spell_menu_suggestions && spell_menu_dict)
+		{
+			enchant_dict_free_suggestions (spell_menu_dict, spell_menu_suggestions);
+			spell_menu_suggestions = NULL;
+		}
+		spell_menu_n_suggestions = 0;
+		g_free (spell_menu_word);
+		spell_menu_word = NULL;
+		spell_menu_dict = NULL;
+		spell_menu_entry = NULL;
+	}
+
+	/* Clear extra menu on the GtkText child */
+	{
+		GtkText *text_widget = sexy_spell_entry_get_text_widget (entry);
+		if (text_widget != NULL)
+			gtk_text_set_extra_menu (text_widget, NULL);
+	}
 
 	if (entry->priv->attr_list)
 		pango_attr_list_unref(entry->priv->attr_list);
@@ -912,12 +925,6 @@ sexy_spell_entry_snapshot(GtkWidget *widget, GtkSnapshot *snapshot)
 	GTK_WIDGET_CLASS(parent_class)->snapshot (widget, snapshot);
 }
 
-/* GTK4 spell check context menu support */
-static SexySpellEntry *spell_menu_entry = NULL;
-static gchar *spell_menu_word = NULL;
-static struct EnchantDict *spell_menu_dict = NULL;
-static gchar **spell_menu_suggestions = NULL;
-static size_t spell_menu_n_suggestions = 0;
 
 static void
 spell_action_add_to_dict (GSimpleAction *action, GVariant *parameter, gpointer user_data)
@@ -996,131 +1003,168 @@ spell_action_replace (GSimpleAction *action, GVariant *parameter, gpointer user_
 		enchant_dict_store_replacement(spell_menu_dict, spell_menu_word, -1, newword, -1);
 }
 
+/*
+ * Build a GMenu with spell suggestions for the word under the click position
+ * and set it as the extra-menu on the GtkText widget.  Called from a
+ * CAPTURE-phase gesture so the menu is ready before GTK4's built-in
+ * context menu popover is created.
+ */
 static void
-spell_menu_popover_closed_cb (GtkPopover *popover, gpointer user_data)
-{
-	GSimpleActionGroup *action_group = G_SIMPLE_ACTION_GROUP (user_data);
-	(void)popover;
-	if (action_group)
-		g_object_unref(action_group);
-
-	/* Clean up suggestion list */
-	if (spell_menu_suggestions && spell_menu_dict) {
-		enchant_dict_free_suggestions(spell_menu_dict, spell_menu_suggestions);
-		spell_menu_suggestions = NULL;
-	}
-	spell_menu_n_suggestions = 0;
-	g_free(spell_menu_word);
-	spell_menu_word = NULL;
-}
-
-static void
-sexy_spell_entry_show_popup (SexySpellEntry *entry, double x, double y)
+sexy_spell_entry_update_extra_menu (SexySpellEntry *entry, GtkText *text_widget)
 {
 	GMenu *gmenu;
-	GtkWidget *popover;
-	GSimpleActionGroup *action_group;
 	gint start, end;
 	size_t i;
 	gchar *label;
 
-	if (!have_enchant || !entry->priv->checked)
+	/* Clean up previous suggestion state */
+	if (spell_menu_suggestions && spell_menu_dict)
+	{
+		enchant_dict_free_suggestions (spell_menu_dict, spell_menu_suggestions);
+		spell_menu_suggestions = NULL;
+	}
+	spell_menu_n_suggestions = 0;
+	g_free (spell_menu_word);
+	spell_menu_word = NULL;
+	spell_menu_dict = NULL;
+	spell_menu_entry = NULL;
+
+	/* No spell items when checking is disabled or unavailable */
+	if (!have_enchant || !entry->priv->checked
+	    || g_slist_length (entry->priv->dict_list) == 0)
+	{
+		gtk_text_set_extra_menu (text_widget, NULL);
 		return;
-
-	if (g_slist_length(entry->priv->dict_list) == 0)
-		return;
-
-	get_word_extents_from_position(entry, &start, &end, entry->priv->mark_character);
-	if (start == end)
-		return;
-	if (!word_misspelled(entry, start, end))
-		return;
-
-	/* Store context for actions */
-	spell_menu_entry = entry;
-	g_free(spell_menu_word);
-	spell_menu_word = gtk_editable_get_chars(GTK_EDITABLE(entry), start, end);
-
-	/* Get first dictionary for suggestions (simplified - uses first dict only) */
-	spell_menu_dict = (struct EnchantDict *)entry->priv->dict_list->data;
-	spell_menu_suggestions = enchant_dict_suggest(spell_menu_dict, spell_menu_word, -1, &spell_menu_n_suggestions);
-
-	/* Create action group */
-	action_group = g_simple_action_group_new();
-
-	/* Add simple actions */
-	GSimpleAction *add_action = g_simple_action_new("add", NULL);
-	g_signal_connect(add_action, "activate", G_CALLBACK(spell_action_add_to_dict), NULL);
-	g_action_map_add_action(G_ACTION_MAP(action_group), G_ACTION(add_action));
-	g_object_unref(add_action);
-
-	GSimpleAction *ignore_action = g_simple_action_new("ignore", NULL);
-	g_signal_connect(ignore_action, "activate", G_CALLBACK(spell_action_ignore_all), NULL);
-	g_action_map_add_action(G_ACTION_MAP(action_group), G_ACTION(ignore_action));
-	g_object_unref(ignore_action);
-
-	/* Add replace action with parameter for suggestion index */
-	GSimpleAction *replace_action = g_simple_action_new("replace", G_VARIANT_TYPE_INT32);
-	g_signal_connect(replace_action, "activate", G_CALLBACK(spell_action_replace), NULL);
-	g_action_map_add_action(G_ACTION_MAP(action_group), G_ACTION(replace_action));
-	g_object_unref(replace_action);
-
-	/* Build menu */
-	gmenu = g_menu_new();
-
-	/* Suggestions */
-	if (spell_menu_suggestions && spell_menu_n_suggestions > 0) {
-		GMenu *suggestions_section = g_menu_new();
-		for (i = 0; i < spell_menu_n_suggestions && i < 10; i++) {
-			gchar *action_str = g_strdup_printf("spell.replace(%d)", (int)i);
-			g_menu_append(suggestions_section, spell_menu_suggestions[i], action_str);
-			g_free(action_str);
-		}
-		g_menu_append_section(gmenu, NULL, G_MENU_MODEL(suggestions_section));
-		g_object_unref(suggestions_section);
-	} else {
-		g_menu_append(gmenu, _("(no suggestions)"), NULL);
 	}
 
-	/* Actions section */
-	GMenu *actions_section = g_menu_new();
-	label = g_strdup_printf(_("Add \"%s\" to Dictionary"), spell_menu_word);
-	g_menu_append(actions_section, label, "spell.add");
-	g_free(label);
-	g_menu_append(actions_section, _("Ignore All"), "spell.ignore");
-	g_menu_append_section(gmenu, NULL, G_MENU_MODEL(actions_section));
-	g_object_unref(actions_section);
+	get_word_extents_from_position (entry, &start, &end,
+	                                entry->priv->mark_character);
+	if (start == end || !word_misspelled (entry, start, end))
+	{
+		/* Not on a misspelled word — clear extra menu */
+		gtk_text_set_extra_menu (text_widget, NULL);
+		return;
+	}
 
-	/* Create popover */
-	popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(gmenu));
-	gtk_widget_insert_action_group(popover, "spell", G_ACTION_GROUP(action_group));
-	gtk_widget_set_parent(popover, GTK_WIDGET(entry));
-	gtk_popover_set_pointing_to(GTK_POPOVER(popover),
-								&(GdkRectangle){ (int)x, (int)y, 1, 1 });
-	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
+	/* Store context for action callbacks */
+	spell_menu_entry = entry;
+	spell_menu_word = gtk_editable_get_chars (GTK_EDITABLE (entry),
+	                                          start, end);
+	spell_menu_dict = (struct EnchantDict *) entry->priv->dict_list->data;
+	spell_menu_suggestions = enchant_dict_suggest (spell_menu_dict,
+	                                               spell_menu_word, -1,
+	                                               &spell_menu_n_suggestions);
 
-	g_signal_connect(popover, "closed", G_CALLBACK(spell_menu_popover_closed_cb), action_group);
+	/* Build the spell menu */
+	gmenu = g_menu_new ();
 
-	gtk_popover_popup(GTK_POPOVER(popover));
-	g_object_unref(gmenu);
+	/* Suggestions section */
+	if (spell_menu_suggestions && spell_menu_n_suggestions > 0)
+	{
+		GMenu *suggestions_section = g_menu_new ();
+		for (i = 0; i < spell_menu_n_suggestions && i < 10; i++)
+		{
+			gchar *action_str = g_strdup_printf ("spell.replace(%d)", (int) i);
+			g_menu_append (suggestions_section,
+			               spell_menu_suggestions[i], action_str);
+			g_free (action_str);
+		}
+		g_menu_append_section (gmenu, NULL,
+		                       G_MENU_MODEL (suggestions_section));
+		g_object_unref (suggestions_section);
+	}
+	else
+	{
+		GMenu *no_sugg_section = g_menu_new ();
+		g_menu_append (no_sugg_section, _("(no suggestions)"), NULL);
+		g_menu_append_section (gmenu, NULL,
+		                       G_MENU_MODEL (no_sugg_section));
+		g_object_unref (no_sugg_section);
+	}
+
+	/* Dictionary actions section */
+	{
+		GMenu *actions_section = g_menu_new ();
+		label = g_strdup_printf (_("Add \"%s\" to Dictionary"),
+		                        spell_menu_word);
+		g_menu_append (actions_section, label, "spell.add");
+		g_free (label);
+		g_menu_append (actions_section, _("Ignore All"), "spell.ignore");
+		g_menu_append_section (gmenu, NULL,
+		                       G_MENU_MODEL (actions_section));
+		g_object_unref (actions_section);
+	}
+
+	gtk_text_set_extra_menu (text_widget, G_MENU_MODEL (gmenu));
+	g_object_unref (gmenu);
 }
 
+/*
+ * CAPTURE-phase right-click handler on the GtkText child.
+ * Fires before GTK4's built-in BUBBLE-phase gesture, so we can
+ * update the extra-menu before the context menu popover is built.
+ */
 static void
-sexy_spell_entry_button_press(GtkGestureClick *gesture, int n_press, double x, double y, SexySpellEntry *entry)
+sexy_spell_entry_text_button_press (GtkGestureClick *gesture,
+                                    int              n_press,
+                                    double           x,
+                                    double           y,
+                                    SexySpellEntry  *entry)
 {
-	GtkEntry *gtk_entry = GTK_ENTRY(entry);
+	GtkText *text_widget;
 	gint pos;
-	guint button;
 
-	pos = gtk_entry_find_position(gtk_entry, (gint)x);
+	(void) gesture;
+	(void) n_press;
+	(void) y;
+
+	text_widget = sexy_spell_entry_get_text_widget (entry);
+	if (text_widget == NULL)
+		return;
+
+	/* Map click x-coordinate to character position */
+	pos = spell_find_position_from_x (text_widget, (gint) x);
 	entry->priv->mark_character = pos;
 
-	button = gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture));
+	/* Install spell action group on the GtkText widget (once) */
+	if (!entry->priv->spell_actions_installed)
+	{
+		GSimpleActionGroup *action_group = g_simple_action_group_new ();
+		GSimpleAction *add_action, *ignore_action, *replace_action;
 
-	/* Right-click shows spell check context menu */
-	if (button == 3) {
-		sexy_spell_entry_show_popup(entry, x, y);
+		add_action = g_simple_action_new ("add", NULL);
+		g_signal_connect (add_action, "activate",
+		                  G_CALLBACK (spell_action_add_to_dict), NULL);
+		g_action_map_add_action (G_ACTION_MAP (action_group),
+		                         G_ACTION (add_action));
+		g_object_unref (add_action);
+
+		ignore_action = g_simple_action_new ("ignore", NULL);
+		g_signal_connect (ignore_action, "activate",
+		                  G_CALLBACK (spell_action_ignore_all), NULL);
+		g_action_map_add_action (G_ACTION_MAP (action_group),
+		                         G_ACTION (ignore_action));
+		g_object_unref (ignore_action);
+
+		replace_action = g_simple_action_new ("replace", G_VARIANT_TYPE_INT32);
+		g_signal_connect (replace_action, "activate",
+		                  G_CALLBACK (spell_action_replace), NULL);
+		g_action_map_add_action (G_ACTION_MAP (action_group),
+		                         G_ACTION (replace_action));
+		g_object_unref (replace_action);
+
+		gtk_widget_insert_action_group (GTK_WIDGET (text_widget),
+		                                "spell",
+		                                G_ACTION_GROUP (action_group));
+		g_object_unref (action_group);
+		entry->priv->spell_actions_installed = TRUE;
 	}
+
+	/* Build/update extra menu for the word under the click */
+	sexy_spell_entry_update_extra_menu (entry, text_widget);
+
+	/* Do NOT claim the event — let GTK4's built-in BUBBLE-phase
+	 * gesture show the context menu (now including our extra items). */
 }
 
 static void
