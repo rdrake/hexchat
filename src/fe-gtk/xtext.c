@@ -408,6 +408,22 @@ xtext_draw_layout_line (GtkXText         *xtext,
 	pango_cairo_show_layout_line (xtext->cr, line);
 }
 
+/* Set cairo source from palette, applying render_alpha for pending-state dimming */
+static void
+xtext_set_source_color (GtkXText *xtext, int color_index)
+{
+	if (xtext->render_alpha >= 1.0)
+	{
+		gdk_cairo_set_source_rgba (xtext->cr, &xtext->palette[color_index]);
+	}
+	else
+	{
+		GdkRGBA c = xtext->palette[color_index];
+		c.alpha *= xtext->render_alpha;
+		gdk_cairo_set_source_rgba (xtext->cr, &c);
+	}
+}
+
 static void
 backend_draw_text_emph (GtkXText *xtext, int dofill, int x, int y,
 						 char *str, int len, int str_width, int emphasis)
@@ -420,13 +436,13 @@ backend_draw_text_emph (GtkXText *xtext, int dofill, int x, int y,
 	if (dofill)
 	{
 		/* Draw background using the current background color */
-		gdk_cairo_set_source_rgba (xtext->cr, &xtext->palette[xtext->col_back]);
+		xtext_set_source_color (xtext, xtext->col_back);
 		cairo_rectangle (xtext->cr, x, y - xtext->font->ascent, str_width, xtext->fontsize);
 		cairo_fill (xtext->cr);
 	}
 
 	/* Set foreground color for text */
-	gdk_cairo_set_source_rgba (xtext->cr, &xtext->palette[xtext->col_fore]);
+	xtext_set_source_color (xtext, xtext->col_fore);
 
 	line = pango_layout_get_lines (xtext->layout)->data;
 
@@ -458,6 +474,7 @@ gtk_xtext_init (GtkXText * xtext)
 	xtext->max_lines = 0;
 	xtext->col_back = XTEXT_BG;
 	xtext->col_fore = XTEXT_FG;
+	xtext->render_alpha = 1.0;
 	xtext->nc = 0;
 	xtext->pixel_offset = 0;
 	xtext->underline = FALSE;
@@ -2785,7 +2802,7 @@ gtk_xtext_render_flush (GtkXText * xtext, int x, int y, unsigned char *str,
 	{
 		/* pango_attr_strikethrough_new does not render in the custom widget so we need to reinvent the wheel */
 		int strike_y = dest_y + (xtext->fontsize / 2);
-		gdk_cairo_set_source_rgba (xtext->cr, &xtext->palette[xtext->col_fore]);
+		xtext_set_source_color (xtext, xtext->col_fore);
 		cairo_move_to (xtext->cr, dest_x, strike_y + 0.5);
 		cairo_line_to (xtext->cr, dest_x + str_width - 1, strike_y + 0.5);
 		cairo_stroke (xtext->cr);
@@ -2796,7 +2813,7 @@ gtk_xtext_render_flush (GtkXText * xtext, int x, int y, unsigned char *str,
 dounder:
 		{
 			int under_y = y + 1;
-			gdk_cairo_set_source_rgba (xtext->cr, &xtext->palette[xtext->col_fore]);
+			xtext_set_source_color (xtext, xtext->col_fore);
 			cairo_move_to (xtext->cr, dest_x, under_y + 0.5);
 			cairo_line_to (xtext->cr, dest_x + str_width - 1, under_y + 0.5);
 			cairo_stroke (xtext->cr);
@@ -3957,13 +3974,14 @@ gtk_xtext_render_ents (GtkXText * xtext, textentry * enta, textentry * entb)
 		if (drawing || ent == entb || ent == enta)
 		{
 			gtk_xtext_reset (xtext, FALSE, TRUE);
-			/* Phase 4: state-based color override */
-			if (ent->state == XTEXT_STATE_PENDING)
-				xtext->col_fore = XTEXT_PENDING_FG;
-			else if (ent->state == XTEXT_STATE_REDACTED)
+			/* Phase 4: state-based rendering */
+			if (ent->state == XTEXT_STATE_REDACTED)
 				xtext->col_fore = XTEXT_REDACTED_FG;
+			if (ent->state == XTEXT_STATE_PENDING)
+				xtext->render_alpha = 0.5;
 			line += gtk_xtext_render_line (xtext, ent, line, lines_max,
 													 subline, width);
+			xtext->render_alpha = 1.0;
 			subline = 0;
 			xtext->jump_in_offset = 0;	/* jump_in_offset only for the 1st */
 		} else
@@ -4059,13 +4077,14 @@ gtk_xtext_render_page (GtkXText * xtext)
 	while (ent)
 	{
 		gtk_xtext_reset (xtext, FALSE, TRUE);
-		/* Phase 4: state-based color override */
-		if (ent->state == XTEXT_STATE_PENDING)
-			xtext->col_fore = XTEXT_PENDING_FG;
-		else if (ent->state == XTEXT_STATE_REDACTED)
+		/* Phase 4: state-based rendering */
+		if (ent->state == XTEXT_STATE_REDACTED)
 			xtext->col_fore = XTEXT_REDACTED_FG;
+		if (ent->state == XTEXT_STATE_PENDING)
+			xtext->render_alpha = 0.5;
 		line += gtk_xtext_render_line (xtext, ent, line, lines_max,
 												 subline, width);
+		xtext->render_alpha = 1.0;
 		subline = 0;
 
 		if (line >= lines_max)

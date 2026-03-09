@@ -493,6 +493,7 @@ typedef struct {
 	                      * with is_session() before dereferencing, as the tab
 	                      * may have been closed while a label was pending */
 	time_t sent_time;    /* When we sent it */
+	guint64 entry_id;    /* xtext entry ID for pending state confirmation (0 = none) */
 } pending_label_info;
 
 /* A single message collected within a batch */
@@ -697,6 +698,7 @@ typedef struct server
 	GHashTable *active_batches;	/* batch_id (string) -> batch_info* */
 	guint32 label_counter;		/* Counter for generating unique labels */
 	GHashTable *pending_labels;	/* label (string) -> pending command info */
+	char *last_sent_label;		/* Borrowed pointer — valid only within synchronous outbound call */
 	int stale_sweep_timer;		/* periodic timer for cleaning stale labels/batches */
 } server;
 

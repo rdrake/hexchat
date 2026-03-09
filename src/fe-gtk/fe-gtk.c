@@ -1007,6 +1007,43 @@ fe_redact_message (session *sess, const char *msgid,
 	gtk_xtext_entry_set_state (buf, ent, XTEXT_STATE_REDACTED);
 }
 
+guint64
+fe_get_last_entry_id (session *sess)
+{
+	textentry *ent = gtk_xtext_buffer_get_last (sess->res->buffer);
+	return ent ? gtk_xtext_get_entry_id (ent) : 0;
+}
+
+void
+fe_set_entry_pending (session *sess, guint64 entry_id)
+{
+	textentry *ent = gtk_xtext_find_by_id (sess->res->buffer, entry_id);
+	if (ent)
+		gtk_xtext_entry_set_state (sess->res->buffer, ent, XTEXT_STATE_PENDING);
+}
+
+void
+fe_confirm_entry (session *sess, guint64 entry_id)
+{
+	textentry *ent = gtk_xtext_find_by_id (sess->res->buffer, entry_id);
+	if (ent && gtk_xtext_entry_get_state (ent) == XTEXT_STATE_PENDING)
+		gtk_xtext_entry_set_state (sess->res->buffer, ent, XTEXT_STATE_NORMAL);
+}
+
+void
+fe_clear_all_pending (session *sess)
+{
+	xtext_buffer *buf = sess->res->buffer;
+	textentry *ent;
+
+	for (ent = gtk_xtext_buffer_get_first (buf); ent;
+	     ent = gtk_xtext_entry_get_next (ent))
+	{
+		if (gtk_xtext_entry_get_state (ent) == XTEXT_STATE_PENDING)
+			gtk_xtext_entry_set_state (buf, ent, XTEXT_STATE_NORMAL);
+	}
+}
+
 void
 fe_beep (session *sess)
 {

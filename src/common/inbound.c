@@ -2097,7 +2097,14 @@ inbound_batch_end (server *serv, const char *batch_id,
 	 * The label tag appears on BATCH START (captured in batch->label),
 	 * not on individual messages inside the batch. */
 	if (batch->label && serv->pending_labels)
+	{
+		pending_label_info *info = g_hash_table_lookup (serv->pending_labels,
+		                                                batch->label);
+		if (info && info->entry_id && info->sess && is_session (info->sess))
+			fe_confirm_entry (info->sess, info->entry_id);
+
 		g_hash_table_remove (serv->pending_labels, batch->label);
+	}
 
 	/* Remove the batch from active batches (this also frees it) */
 	g_hash_table_remove (serv->active_batches, batch_id);

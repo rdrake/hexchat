@@ -63,6 +63,34 @@ static void help (session *sess, char *tbuf, char *helpcmd, int quiet);
 static int cmd_server (session *sess, char *tbuf, char *word[], char *word_eol[]);
 static void handle_say (session *sess, char *text, int check_spch);
 
+/* Tier 2 echo-message: after displaying a message and sending it (which sets
+ * serv->last_sent_label via tcp_sendf_labeled_tracked), mark the just-created
+ * xtext entry as PENDING and record its entry_id in the pending_label_info
+ * so we can confirm it when the labeled echo arrives.
+ * Must be called in the same synchronous call stack as the send+display. */
+static void
+mark_pending_echo (session *sess, server *serv)
+{
+	pending_label_info *info;
+	guint64 eid;
+
+	if (!serv->last_sent_label || !serv->pending_labels)
+		return;
+
+	info = g_hash_table_lookup (serv->pending_labels, serv->last_sent_label);
+	if (!info)
+		return;
+
+	eid = fe_get_last_entry_id (sess);
+	if (eid == 0)
+		return;
+
+	info->entry_id = eid;
+	info->sess = sess;
+
+	fe_set_entry_pending (sess, eid);
+	serv->last_sent_label = NULL;
+}
 
 static void
 notj_msg (struct session *sess)
@@ -705,8 +733,15 @@ cmd_ctcp (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 
 			sess->server->p_ctcp (sess->server, to, msg);
 
-			if (!sess->server->have_echo_message)
+			if (sess->server->have_echo_message && sess->server->have_labeled_response)
+			{
 				EMIT_SIGNAL (XP_TE_CTCPSEND, sess, to, msg, NULL, NULL, 0);
+				mark_pending_echo (sess, sess->server);
+			}
+			else if (!sess->server->have_echo_message)
+			{
+				EMIT_SIGNAL (XP_TE_CTCPSEND, sess, to, msg, NULL, NULL, 0);
+			}
 
 			return TRUE;
 		}
@@ -2935,11 +2970,17 @@ cmd_me (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			while ((split_text = split_up_text (sess, act + offset, cmd_length, split_text)))
 			{
 				sess->server->p_action (sess->server, sess->channel, split_text);
-				/* With echo-message, server echoes our messages back - don't display locally */
-				if (!sess->server->have_echo_message)
+				if (sess->server->have_echo_message && sess->server->have_labeled_response)
+				{
 					inbound_action (sess, sess->channel, sess->server->nick, "",
-										 split_text, TRUE, FALSE,
-										 &no_tags);
+										 split_text, TRUE, FALSE, &no_tags);
+					mark_pending_echo (sess, sess->server);
+				}
+				else if (!sess->server->have_echo_message)
+				{
+					inbound_action (sess, sess->channel, sess->server->nick, "",
+										 split_text, TRUE, FALSE, &no_tags);
+				}
 
 				if (*split_text)
 					offset += strlen(split_text);
@@ -2948,10 +2989,17 @@ cmd_me (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			}
 
 			sess->server->p_action (sess->server, sess->channel, act + offset);
-			/* With echo-message, server echoes our messages back - don't display locally */
-			if (!sess->server->have_echo_message)
+			if (sess->server->have_echo_message && sess->server->have_labeled_response)
+			{
 				inbound_action (sess, sess->channel, sess->server->nick, "",
 									 act + offset, TRUE, FALSE, &no_tags);
+				mark_pending_echo (sess, sess->server);
+			}
+			else if (!sess->server->have_echo_message)
+			{
+				inbound_action (sess, sess->channel, sess->server->nick, "",
+									 act + offset, TRUE, FALSE, &no_tags);
+			}
 		} else
 		{
 			notc_msg (sess);
@@ -3180,24 +3228,78 @@ cmd_msg (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 					return TRUE;
 				}
 
-				while ((split_text = split_up_text (sess, msg + offset, cmd_length, split_text)))
+				if (sess->server->have_echo_message && sess->server->have_labeled_response)
 				{
-					sess->server->p_message (sess->server, nick, split_text);
+					/* Tier 2: interleave send+display+mark for correct label association */
+					message_tags_data no_tags = MESSAGE_TAGS_DATA_INIT;
+					session *target_sess = find_dialog (sess->server, nick);
+					if (!target_sess)
+						target_sess = find_channel (sess->server, nick);
 
-					if (*split_text)
-						offset += strlen(split_text);
+					while ((split_text = split_up_text (sess, msg + offset, cmd_length, split_text)))
+					{
+						sess->server->p_message (sess->server, nick, split_text);
+						if (target_sess)
+						{
+							inbound_chanmsg (target_sess->server, NULL, target_sess->channel,
+							                 target_sess->server->nick, split_text, TRUE, FALSE,
+							                 &no_tags);
+							mark_pending_echo (target_sess, sess->server);
+						}
+						else
+						{
+							EMIT_SIGNAL (XP_TE_MSGSEND, sess, nick, split_text, NULL, NULL, 0);
+							mark_pending_echo (sess, sess->server);
+						}
 
-					g_free (split_text);
+						if (*split_text)
+							offset += strlen(split_text);
+
+						g_free (split_text);
+					}
+					sess->server->p_message (sess->server, nick, msg + offset);
+					if (target_sess)
+					{
+						inbound_chanmsg (target_sess->server, NULL, target_sess->channel,
+						                 target_sess->server->nick, msg + offset, TRUE, FALSE,
+						                 &no_tags);
+						mark_pending_echo (target_sess, sess->server);
+					}
+					else
+					{
+						char *dm = msg + offset;
+						if (g_ascii_strcasecmp (nick, "nickserv") == 0)
+						{
+							if (g_ascii_strncasecmp (dm, "identify ", 9) == 0)
+								dm = "identify ****";
+							else if (g_ascii_strncasecmp (dm, "ghost ", 6) == 0)
+								dm = "ghost ****";
+						}
+						EMIT_SIGNAL (XP_TE_MSGSEND, sess, nick, dm, NULL, NULL, 0);
+						mark_pending_echo (sess, sess->server);
+					}
 				}
-				sess->server->p_message (sess->server, nick, msg + offset);
-				offset = 0;
+				else
+				{
+					while ((split_text = split_up_text (sess, msg + offset, cmd_length, split_text)))
+					{
+						sess->server->p_message (sess->server, nick, split_text);
+
+						if (*split_text)
+							offset += strlen(split_text);
+
+						g_free (split_text);
+					}
+					sess->server->p_message (sess->server, nick, msg + offset);
+					offset = 0;
+				}
 			}
-			newsess = find_dialog (sess->server, nick);
-			if (!newsess)
-				newsess = find_channel (sess->server, nick);
-			/* With echo-message, server echoes our messages back - don't display locally */
 			if (!sess->server->have_echo_message)
 			{
+				newsess = find_dialog (sess->server, nick);
+				if (!newsess)
+					newsess = find_channel (sess->server, nick);
+
 				if (newsess)
 				{
 					message_tags_data no_tags = MESSAGE_TAGS_DATA_INIT;
@@ -3231,7 +3333,6 @@ cmd_msg (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 					EMIT_SIGNAL (XP_TE_MSGSEND, sess, nick, msg, NULL, NULL, 0);
 				}
 			}
-			/* else: echo-message active, server echo handles display */
 
 			return TRUE;
 		}
@@ -3307,8 +3408,15 @@ cmd_notice (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 		while ((split_text = split_up_text (sess, text + offset, cmd_length, split_text)))
 		{
 			sess->server->p_notice (sess->server, word[2], split_text);
-			if (!sess->server->have_echo_message)
+			if (sess->server->have_echo_message && sess->server->have_labeled_response)
+			{
 				EMIT_SIGNAL (XP_TE_NOTICESEND, sess, word[2], split_text, NULL, NULL, 0);
+				mark_pending_echo (sess, sess->server);
+			}
+			else if (!sess->server->have_echo_message)
+			{
+				EMIT_SIGNAL (XP_TE_NOTICESEND, sess, word[2], split_text, NULL, NULL, 0);
+			}
 
 			if (*split_text)
 				offset += strlen(split_text);
@@ -3317,8 +3425,15 @@ cmd_notice (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 		}
 
 		sess->server->p_notice (sess->server, word[2], text + offset);
-		if (!sess->server->have_echo_message)
+		if (sess->server->have_echo_message && sess->server->have_labeled_response)
+		{
 			EMIT_SIGNAL (XP_TE_NOTICESEND, sess, word[2], text + offset, NULL, NULL, 0);
+			mark_pending_echo (sess, sess->server);
+		}
+		else if (!sess->server->have_echo_message)
+		{
+			EMIT_SIGNAL (XP_TE_NOTICESEND, sess, word[2], text + offset, NULL, NULL, 0);
+		}
 
 		return TRUE;
 	}
@@ -3466,10 +3581,19 @@ cmd_query (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			while ((split_text = split_up_text (sess, msg + offset, cmd_length, split_text)))
 			{
 				sess->server->p_message (sess->server, nick, split_text);
-				if (!sess->server->have_echo_message)
+				if (sess->server->have_echo_message && sess->server->have_labeled_response)
+				{
 					inbound_chanmsg (nick_sess->server, nick_sess, nick_sess->channel,
 									 nick_sess->server->nick, split_text, TRUE, FALSE,
 									 &no_tags);
+					mark_pending_echo (nick_sess, sess->server);
+				}
+				else if (!sess->server->have_echo_message)
+				{
+					inbound_chanmsg (nick_sess->server, nick_sess, nick_sess->channel,
+									 nick_sess->server->nick, split_text, TRUE, FALSE,
+									 &no_tags);
+				}
 
 				if (*split_text)
 					offset += strlen(split_text);
@@ -3477,10 +3601,19 @@ cmd_query (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 				g_free (split_text);
 			}
 			sess->server->p_message (sess->server, nick, msg + offset);
-			if (!sess->server->have_echo_message)
+			if (sess->server->have_echo_message && sess->server->have_labeled_response)
+			{
 				inbound_chanmsg (nick_sess->server, nick_sess, nick_sess->channel,
 								 nick_sess->server->nick, msg + offset, TRUE, FALSE,
 								 &no_tags);
+				mark_pending_echo (nick_sess, sess->server);
+			}
+			else if (!sess->server->have_echo_message)
+			{
+				inbound_chanmsg (nick_sess->server, nick_sess, nick_sess->channel,
+								 nick_sess->server->nick, msg + offset, TRUE, FALSE,
+								 &no_tags);
+			}
 		}
 
 		return TRUE;
@@ -5116,11 +5249,25 @@ handle_say (session *sess, char *text, int check_spch)
 
 		while ((split_text = split_up_text (sess, text + offset, cmd_length, split_text)))
 		{
-			/* With echo-message, server echoes our messages back - don't display locally */
-			if (!sess->server->have_echo_message)
+			if (sess->server->have_echo_message && sess->server->have_labeled_response)
+			{
+				/* Tier 2: send, display as pending, record entry */
+				sess->server->p_message (sess->server, sess->channel, split_text);
 				inbound_chanmsg (sess->server, sess, sess->channel, sess->server->nick,
 									  split_text, TRUE, FALSE, &no_tags);
-			sess->server->p_message (sess->server, sess->channel, split_text);
+				mark_pending_echo (sess, sess->server);
+			}
+			else if (!sess->server->have_echo_message)
+			{
+				inbound_chanmsg (sess->server, sess, sess->channel, sess->server->nick,
+									  split_text, TRUE, FALSE, &no_tags);
+				sess->server->p_message (sess->server, sess->channel, split_text);
+			}
+			else
+			{
+				/* Tier 1: suppress display, server echo handles it */
+				sess->server->p_message (sess->server, sess->channel, split_text);
+			}
 
 			if (*split_text)
 				offset += strlen(split_text);
@@ -5128,11 +5275,23 @@ handle_say (session *sess, char *text, int check_spch)
 			g_free (split_text);
 		}
 
-		/* With echo-message, server echoes our messages back - don't display locally */
-		if (!sess->server->have_echo_message)
+		if (sess->server->have_echo_message && sess->server->have_labeled_response)
+		{
+			sess->server->p_message (sess->server, sess->channel, text + offset);
 			inbound_chanmsg (sess->server, sess, sess->channel, sess->server->nick,
 								  text + offset, TRUE, FALSE, &no_tags);
-		sess->server->p_message (sess->server, sess->channel, text + offset);
+			mark_pending_echo (sess, sess->server);
+		}
+		else if (!sess->server->have_echo_message)
+		{
+			inbound_chanmsg (sess->server, sess, sess->channel, sess->server->nick,
+								  text + offset, TRUE, FALSE, &no_tags);
+			sess->server->p_message (sess->server, sess->channel, text + offset);
+		}
+		else
+		{
+			sess->server->p_message (sess->server, sess->channel, text + offset);
+		}
 	} else
 	{
 		notc_msg (sess);

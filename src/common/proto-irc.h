@@ -32,6 +32,7 @@
 		NULL, /* msgid */				\
 		NULL, /* label */				\
 		NULL, /* all_tags hash table */	\
+		FALSE, /* echo_confirmed */		\
 	}
 
 #define STRIP_COLON(word, word_eol, idx) (word)[(idx)][0] == ':' ? (word_eol)[(idx)]+1 : (word)[(idx)]
@@ -49,6 +50,7 @@ typedef struct
 	char *msgid;          /* msgid tag - unique message identifier */
 	char *label;          /* label tag - for labeled-response correlation */
 	GHashTable *all_tags; /* Full tag storage for plugins and extensions */
+	gboolean echo_confirmed; /* Tier 2: pending entry confirmed, suppress echo display */
 } message_tags_data;
 
 void message_tags_data_free (message_tags_data *tags_data);

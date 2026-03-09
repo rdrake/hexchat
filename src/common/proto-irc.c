@@ -1410,6 +1410,10 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 				}
 #endif
 
+				/* Tier 2: already displayed as pending, now confirmed */
+				if (tags_data->echo_confirmed)
+					return;
+
 				if (!ignore_check (word[1], IG_NOTI))
 					inbound_notice (serv, word[3], nick, text, ip, tags_data->identified, tags_data);
 			}
@@ -1449,6 +1453,8 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 						 * Don't process via ctcp_handle — would auto-reply to ourselves. */
 						if (serv->have_echo_message && !serv->p_cmp (nick, serv->nick))
 						{
+							if (tags_data->echo_confirmed)
+								return;
 							if (!g_ascii_strncasecmp (text, "ACTION ", 7))
 							{
 								/* ACTION echo */
@@ -1514,6 +1520,9 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 					{
 						if (is_channel (serv, to))
 						{
+							/* Tier 2: already displayed as pending, now confirmed */
+							if (tags_data->echo_confirmed)
+								return;
 							if (ignore_check (word[1], IG_CHAN))
 								return;
 							inbound_chanmsg (serv, NULL, to, nick, text, FALSE, tags_data->identified,
@@ -1528,6 +1537,9 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 							 * (the person we sent to), not with ourselves. */
 							if (!serv->p_cmp (nick, serv->nick))
 							{
+								/* Tier 2: already displayed as pending, now confirmed */
+								if (tags_data->echo_confirmed)
+									return;
 								session *sess;
 
 								/* Self-to-self dedup: /msg MyNick sends TWO copies
@@ -2168,7 +2180,14 @@ irc_inline (server *serv, char *buf, int len)
 		pending_label_info *info = g_hash_table_lookup (serv->pending_labels,
 		                                                tags_data.label);
 		if (info)
+		{
+			/* Tier 2 echo-message: confirm pending entry to normal state */
+			if (info->entry_id && info->sess && is_session (info->sess))
+				fe_confirm_entry (info->sess, info->entry_id);
+
+			tags_data.echo_confirmed = TRUE;
 			g_hash_table_remove (serv->pending_labels, tags_data.label);
+		}
 	}
 
 	url_check_line (buf);

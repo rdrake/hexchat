@@ -103,6 +103,11 @@ void fe_print_text_prepend (struct session *sess, char *text, time_t stamp);
 void fe_redact_message (struct session *sess, const char *msgid,
                         const char *redacted_by, const char *reason,
                         time_t redact_time);
+/* IRCv3 echo-message: pending state management (Phase 5) */
+guint64 fe_get_last_entry_id (struct session *sess);
+void fe_set_entry_pending (struct session *sess, guint64 entry_id);
+void fe_confirm_entry (struct session *sess, guint64 entry_id);
+void fe_clear_all_pending (struct session *sess);
 void fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel);
 int fe_userlist_remove (struct session *sess, struct User *user);
 void fe_userlist_rehash (struct session *sess, struct User *user);

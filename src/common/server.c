@@ -447,6 +447,7 @@ tcp_sendf_labeled_tracked (server *serv, const char *command,
 				(GDestroyNotify) pending_label_info_free);
 
 		g_hash_table_insert (serv->pending_labels, label, info);
+		serv->last_sent_label = label;  /* Borrowed pointer into hash table key */
 		server_ensure_stale_sweep_timer (serv);
 	}
 	return label;
@@ -1188,6 +1189,19 @@ server_cleanup (server * serv)
 		/* Clear active batches — incomplete batches will never complete */
 		if (serv->active_batches)
 			g_hash_table_remove_all (serv->active_batches);
+
+		/* Clear pending visual states — messages were sent, just not confirmed.
+		 * Transition PENDING → NORMAL so they don't stay dimmed forever. */
+		{
+			GSList *slist = sess_list;
+			while (slist)
+			{
+				session *s = slist->data;
+				if (s->server == serv)
+					fe_clear_all_pending (s);
+				slist = slist->next;
+			}
+		}
 
 		return 2;
 	}

@@ -196,6 +196,7 @@ struct _GtkXText
 
 	int col_fore;
 	int col_back;
+	double render_alpha;			  /* 1.0 = normal, <1.0 = dimmed (pending state) */
 
 	int depth;						  /* gdk window depth */
 
