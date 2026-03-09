@@ -705,7 +705,8 @@ cmd_ctcp (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 
 			sess->server->p_ctcp (sess->server, to, msg);
 
-			EMIT_SIGNAL (XP_TE_CTCPSEND, sess, to, msg, NULL, NULL, 0);
+			if (!sess->server->have_echo_message)
+				EMIT_SIGNAL (XP_TE_CTCPSEND, sess, to, msg, NULL, NULL, 0);
 
 			return TRUE;
 		}
@@ -2308,7 +2309,7 @@ cmd_history (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	{
 		if (sess->type == SESS_CHANNEL || sess->type == SESS_DIALOG)
 		{
-			chathistory_request_latest (sess, limit);
+			chathistory_request_latest (sess, NULL, limit);
 		}
 		else
 		{
@@ -2324,7 +2325,7 @@ cmd_history (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 
 		if (target_sess)
 		{
-			chathistory_request_latest (target_sess, limit);
+			chathistory_request_latest (target_sess, NULL, limit);
 		}
 		else
 		{
@@ -2386,12 +2387,14 @@ cmd_markread (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	/* Send MARKREAD command */
 	if (msgid && *msgid)
 	{
-		tcp_sendf (serv, "MARKREAD %s timestamp=%s\r\n", target, msgid);
+		tcp_sendf_labeled_tracked (serv, "MARKREAD", target,
+		                           "MARKREAD %s timestamp=%s\r\n", target, msgid);
 	}
 	else
 	{
 		/* Request current read marker position */
-		tcp_sendf (serv, "MARKREAD %s\r\n", target);
+		tcp_sendf_labeled_tracked (serv, "MARKREAD", target,
+		                           "MARKREAD %s\r\n", target);
 	}
 
 	return TRUE;
@@ -2433,11 +2436,13 @@ cmd_redact (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	/* Send REDACT command */
 	if (reason && *reason)
 	{
-		tcp_sendf (serv, "REDACT %s %s :%s\r\n", target, msgid, reason);
+		tcp_sendf_labeled_tracked (serv, "REDACT", target,
+		                           "REDACT %s %s :%s\r\n", target, msgid, reason);
 	}
 	else
 	{
-		tcp_sendf (serv, "REDACT %s %s\r\n", target, msgid);
+		tcp_sendf_labeled_tracked (serv, "REDACT", target,
+		                           "REDACT %s %s\r\n", target, msgid);
 	}
 
 	return TRUE;
@@ -2996,9 +3001,11 @@ cmd_metadata (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	{
 		/* Commands with optional/no extra args */
 		if (word[4][0])
-			tcp_sendf (serv, "METADATA %s %s %s\r\n", target, subcmd, word_eol[4]);
+			tcp_sendf_labeled_tracked (serv, "METADATA", target,
+			                           "METADATA %s %s %s\r\n", target, subcmd, word_eol[4]);
 		else
-			tcp_sendf (serv, "METADATA %s %s\r\n", target, subcmd);
+			tcp_sendf_labeled_tracked (serv, "METADATA", target,
+			                           "METADATA %s %s\r\n", target, subcmd);
 	}
 	else if (!g_ascii_strcasecmp (subcmd, "SET"))
 	{
@@ -3011,9 +3018,11 @@ cmd_metadata (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			return TRUE;
 		}
 		if (*value)
-			tcp_sendf (serv, "METADATA %s SET %s :%s\r\n", target, key, value);
+			tcp_sendf_labeled_tracked (serv, "METADATA", target,
+			                           "METADATA %s SET %s :%s\r\n", target, key, value);
 		else
-			tcp_sendf (serv, "METADATA %s SET %s\r\n", target, key);
+			tcp_sendf_labeled_tracked (serv, "METADATA", target,
+			                           "METADATA %s SET %s\r\n", target, key);
 	}
 	else if (!g_ascii_strcasecmp (subcmd, "SUB") || !g_ascii_strcasecmp (subcmd, "UNSUB"))
 	{
@@ -3023,7 +3032,8 @@ cmd_metadata (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			PrintTextf (sess, "Usage: /METADATA * %s <key> [<key>...]\n", subcmd);
 			return TRUE;
 		}
-		tcp_sendf (serv, "METADATA %s %s %s\r\n", target, subcmd, word_eol[4]);
+		tcp_sendf_labeled_tracked (serv, "METADATA", target,
+		                           "METADATA %s %s %s\r\n", target, subcmd, word_eol[4]);
 	}
 	else
 	{
@@ -3113,14 +3123,16 @@ cmd_monitor (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	     subcmd[0] == 'L' || subcmd[0] == 'l' ||
 	     subcmd[0] == 'S' || subcmd[0] == 's') && subcmd[1] == '\0')
 	{
-		tcp_sendf (serv, "MONITOR %c\r\n", g_ascii_toupper (subcmd[0]));
+		tcp_sendf_labeled_tracked (serv, "MONITOR", NULL,
+		                           "MONITOR %c\r\n", g_ascii_toupper (subcmd[0]));
 		return TRUE;
 	}
 
 	/* +/-nick commands */
 	if (subcmd[0] == '+' || subcmd[0] == '-')
 	{
-		tcp_sendf (serv, "MONITOR %s\r\n", subcmd);
+		tcp_sendf_labeled_tracked (serv, "MONITOR", NULL,
+		                           "MONITOR %s\r\n", subcmd);
 		return TRUE;
 	}
 
@@ -3184,38 +3196,42 @@ cmd_msg (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			if (!newsess)
 				newsess = find_channel (sess->server, nick);
 			/* With echo-message, server echoes our messages back - don't display locally */
-			if (newsess && !sess->server->have_echo_message)
+			if (!sess->server->have_echo_message)
 			{
-				message_tags_data no_tags = MESSAGE_TAGS_DATA_INIT;
-
-				while ((split_text = split_up_text (sess, msg + offset, cmd_length, split_text)))
+				if (newsess)
 				{
+					message_tags_data no_tags = MESSAGE_TAGS_DATA_INIT;
+
+					while ((split_text = split_up_text (sess, msg + offset, cmd_length, split_text)))
+					{
+						inbound_chanmsg (newsess->server, NULL, newsess->channel,
+											  newsess->server->nick, split_text, TRUE, FALSE,
+											  &no_tags);
+
+						if (*split_text)
+							offset += strlen(split_text);
+
+						g_free (split_text);
+					}
 					inbound_chanmsg (newsess->server, NULL, newsess->channel,
-										  newsess->server->nick, split_text, TRUE, FALSE,
+										  newsess->server->nick, msg + offset, TRUE, FALSE,
 										  &no_tags);
-
-					if (*split_text)
-						offset += strlen(split_text);
-
-					g_free (split_text);
 				}
-				inbound_chanmsg (newsess->server, NULL, newsess->channel,
-									  newsess->server->nick, msg + offset, TRUE, FALSE,
-									  &no_tags);
-			}
-			else
-			{
-				/* mask out passwords */
-				if (g_ascii_strcasecmp (nick, "nickserv") == 0)
+				else
 				{
-					if (g_ascii_strncasecmp (msg, "identify ", 9) == 0)
-						msg = "identify ****";
-					else if (g_ascii_strncasecmp (msg, "ghost ", 6) == 0)
-						msg = "ghost ****";
-				}
+					/* mask out passwords */
+					if (g_ascii_strcasecmp (nick, "nickserv") == 0)
+					{
+						if (g_ascii_strncasecmp (msg, "identify ", 9) == 0)
+							msg = "identify ****";
+						else if (g_ascii_strncasecmp (msg, "ghost ", 6) == 0)
+							msg = "ghost ****";
+					}
 
-				EMIT_SIGNAL (XP_TE_MSGSEND, sess, nick, msg, NULL, NULL, 0);
+					EMIT_SIGNAL (XP_TE_MSGSEND, sess, nick, msg, NULL, NULL, 0);
+				}
 			}
+			/* else: echo-message active, server echo handles display */
 
 			return TRUE;
 		}
@@ -3291,16 +3307,18 @@ cmd_notice (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 		while ((split_text = split_up_text (sess, text + offset, cmd_length, split_text)))
 		{
 			sess->server->p_notice (sess->server, word[2], split_text);
-			EMIT_SIGNAL (XP_TE_NOTICESEND, sess, word[2], split_text, NULL, NULL, 0);
-			
+			if (!sess->server->have_echo_message)
+				EMIT_SIGNAL (XP_TE_NOTICESEND, sess, word[2], split_text, NULL, NULL, 0);
+
 			if (*split_text)
 				offset += strlen(split_text);
-			
+
 			g_free (split_text);
 		}
 
 		sess->server->p_notice (sess->server, word[2], text + offset);
-		EMIT_SIGNAL (XP_TE_NOTICESEND, sess, word[2], text + offset, NULL, NULL, 0);
+		if (!sess->server->have_echo_message)
+			EMIT_SIGNAL (XP_TE_NOTICESEND, sess, word[2], text + offset, NULL, NULL, 0);
 
 		return TRUE;
 	}
@@ -3448,9 +3466,10 @@ cmd_query (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			while ((split_text = split_up_text (sess, msg + offset, cmd_length, split_text)))
 			{
 				sess->server->p_message (sess->server, nick, split_text);
-				inbound_chanmsg (nick_sess->server, nick_sess, nick_sess->channel,
-								 nick_sess->server->nick, split_text, TRUE, FALSE,
-								 &no_tags);
+				if (!sess->server->have_echo_message)
+					inbound_chanmsg (nick_sess->server, nick_sess, nick_sess->channel,
+									 nick_sess->server->nick, split_text, TRUE, FALSE,
+									 &no_tags);
 
 				if (*split_text)
 					offset += strlen(split_text);
@@ -3458,9 +3477,10 @@ cmd_query (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 				g_free (split_text);
 			}
 			sess->server->p_message (sess->server, nick, msg + offset);
-			inbound_chanmsg (nick_sess->server, nick_sess, nick_sess->channel,
-							 nick_sess->server->nick, msg + offset, TRUE, FALSE,
-							 &no_tags);
+			if (!sess->server->have_echo_message)
+				inbound_chanmsg (nick_sess->server, nick_sess, nick_sess->channel,
+								 nick_sess->server->nick, msg + offset, TRUE, FALSE,
+								 &no_tags);
 		}
 
 		return TRUE;
@@ -3665,7 +3685,8 @@ cmd_register (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	}
 
 	/* Send REGISTER command */
-	tcp_sendf (serv, "REGISTER %s %s %s\r\n", account, email, password);
+	tcp_sendf_labeled_tracked (serv, "REGISTER", NULL,
+	                           "REGISTER %s %s %s\r\n", account, email, password);
 	PrintTextf (sess, "Registering account '%s'...\n",
 		strcmp (account, "*") == 0 ? serv->nick : account);
 
@@ -3693,7 +3714,8 @@ cmd_verify (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	}
 
 	/* Send VERIFY command */
-	tcp_sendf (serv, "VERIFY %s %s\r\n", account, code);
+	tcp_sendf_labeled_tracked (serv, "VERIFY", NULL,
+	                           "VERIFY %s %s\r\n", account, code);
 	PrintTextf (sess, "Verifying account '%s'...\n", account);
 
 	return TRUE;
@@ -4025,7 +4047,8 @@ cmd_tagmsg (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	/* Send TAGMSG with the specified tags
 	 * Format: @tags TAGMSG target
 	 */
-	tcp_sendf (serv, "@%s TAGMSG %s\r\n", tags, target);
+	tcp_sendf_labeled_tracked (serv, "TAGMSG", target,
+	                           "@%s TAGMSG %s\r\n", tags, target);
 
 	return TRUE;
 }

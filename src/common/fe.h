@@ -99,6 +99,10 @@ void fe_print_text (struct session *sess, char *text, time_t stamp,
 					gboolean no_activity);
 /* IRCv3 modernization: prepend for chathistory BEFORE requests (Phase 3) */
 void fe_print_text_prepend (struct session *sess, char *text, time_t stamp);
+/* IRCv3 modernization: entry modification (Phase 4) */
+void fe_redact_message (struct session *sess, const char *msgid,
+                        const char *redacted_by, const char *reason,
+                        time_t redact_time);
 void fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel);
 int fe_userlist_remove (struct session *sess, struct User *user);
 void fe_userlist_rehash (struct session *sess, struct User *user);

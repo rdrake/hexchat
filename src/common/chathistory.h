@@ -30,14 +30,18 @@
 /* Maximum messages to request in a single batch */
 #define CHATHISTORY_MAX_LIMIT 200
 
+/* Seconds of clock skew compensation for catch-up (spec recommends 1-10s) */
+#define CHATHISTORY_FUZZ_INTERVAL 5
+
 /**
  * Request the most recent messages for a target.
- * Uses CHATHISTORY LATEST <target> * <limit>
+ * Uses CHATHISTORY LATEST <target> <reference> <limit>
  *
  * @param sess Session/channel to request history for
+ * @param reference Lower bound reference (NULL for "*", or "msgid=X" / "timestamp=Y")
  * @param limit Maximum messages to request (0 = use default)
  */
-void chathistory_request_latest (session *sess, int limit);
+void chathistory_request_latest (session *sess, const char *reference, int limit);
 
 /**
  * Request messages before a reference point.
@@ -201,5 +205,38 @@ void chathistory_start_background_fetch (session *sess);
  * @param sess Session to stop background fetching for
  */
 void chathistory_stop_background_fetch (session *sess);
+
+/**
+ * Start catch-up for a session (join or TARGETS).
+ * Uses CHATHISTORY LATEST with scrollback refs as lower bound.
+ * Pages backward with BEFORE if the gap is larger than one batch.
+ *
+ * @param sess Session to catch up
+ */
+void chathistory_start_catchup (session *sess);
+
+/**
+ * Cancel an in-progress catch-up (disconnect/part/kick cleanup).
+ *
+ * @param sess Session to cancel catch-up for
+ */
+void chathistory_cancel_catchup (session *sess);
+
+/**
+ * Process a completed draft/chathistory-targets batch.
+ * Creates/finds query sessions for DM targets and starts catch-up.
+ *
+ * @param serv Server the batch came from
+ * @param batch The completed batch info
+ */
+void chathistory_process_targets_batch (server *serv, batch_info *batch);
+
+/**
+ * Send CHATHISTORY TARGETS on reconnect to discover missed DMs.
+ * Only fires if last_disconnect_time > 0 (not first connect).
+ *
+ * @param serv Server to request from
+ */
+void chathistory_request_targets_on_reconnect (server *serv);
 
 #endif /* HEXCHAT_CHATHISTORY_H */

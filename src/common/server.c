@@ -275,35 +275,29 @@ tcp_generate_label (server *serv)
 	return label;
 }
 
-/* Send IRC command with a label tag for labeled-response correlation
- * Returns the label string (caller must free) or NULL if labeled-response unavailable
+/* Core: takes a va_list instead of variadic args.
+ * Returns the label string (caller must free) or NULL if labeled-response unavailable.
  */
-char *
-tcp_sendf_labeled (server *serv, const char *fmt, ...)
+static char *
+tcp_vsendf_labeled (server *serv, const char *fmt, va_list args)
 {
-	va_list args;
 	static char cmd_buf[1540];
 	static char send_buf[1600];
 	char *label;
 	int cmd_len, len;
 
-	/* Generate the command first */
-	va_start (args, fmt);
 	cmd_len = g_vsnprintf (cmd_buf, sizeof (cmd_buf) - 1, fmt, args);
-	va_end (args);
 
 	cmd_buf[sizeof (cmd_buf) - 1] = '\0';
 	if (cmd_len < 0 || cmd_len > (int)(sizeof (cmd_buf) - 1))
 		cmd_len = strlen (cmd_buf);
 
-	/* If labeled-response is not available, send without label */
 	if (!serv->have_labeled_response)
 	{
 		tcp_send_len (serv, cmd_buf, cmd_len);
 		return NULL;
 	}
 
-	/* Generate label and prepend to command */
 	label = tcp_generate_label (serv);
 	len = g_snprintf (send_buf, sizeof (send_buf), "@label=%s %s", label, cmd_buf);
 
@@ -314,6 +308,156 @@ tcp_sendf_labeled (server *serv, const char *fmt, ...)
 	tcp_send_len (serv, send_buf, len);
 
 	return label;
+}
+
+/* Send IRC command with a label tag for labeled-response correlation
+ * Returns the label string (caller must free) or NULL if labeled-response unavailable
+ */
+char *
+tcp_sendf_labeled (server *serv, const char *fmt, ...)
+{
+	va_list args;
+	char *label;
+	va_start (args, fmt);
+	label = tcp_vsendf_labeled (serv, fmt, args);
+	va_end (args);
+	return label;
+}
+
+/* Stale label/batch sweep — per spec, servers may never respond to labeled
+ * commands (netsplit, async forwarding to unreachable remote, etc.) */
+#define STALE_LABEL_TIMEOUT   60   /* seconds before pending label is stale */
+#define STALE_BATCH_TIMEOUT   120  /* seconds before active batch is stale */
+#define STALE_SWEEP_INTERVAL  15   /* seconds between sweep timer fires */
+
+typedef struct {
+	GSList *stale_keys;
+	time_t now;
+} stale_sweep_data;
+
+static void
+check_stale_label (gpointer key, gpointer value, gpointer user_data)
+{
+	pending_label_info *info = value;
+	stale_sweep_data *data = user_data;
+
+	if (data->now - info->sent_time > STALE_LABEL_TIMEOUT)
+		data->stale_keys = g_slist_prepend (data->stale_keys, key);
+}
+
+static void
+check_stale_batch (gpointer key, gpointer value, gpointer user_data)
+{
+	batch_info *batch = value;
+	stale_sweep_data *data = user_data;
+
+	if (data->now - batch->started > STALE_BATCH_TIMEOUT)
+		data->stale_keys = g_slist_prepend (data->stale_keys, key);
+}
+
+static int
+stale_sweep_cb (server *serv)
+{
+	stale_sweep_data data;
+	GSList *iter;
+	gboolean have_entries = FALSE;
+
+	data.now = time (NULL);
+
+	/* Sweep stale pending labels */
+	if (serv->pending_labels && g_hash_table_size (serv->pending_labels) > 0)
+	{
+		data.stale_keys = NULL;
+		g_hash_table_foreach (serv->pending_labels, check_stale_label, &data);
+		for (iter = data.stale_keys; iter; iter = iter->next)
+			g_hash_table_remove (serv->pending_labels, iter->data);
+		g_slist_free (data.stale_keys);
+
+		if (g_hash_table_size (serv->pending_labels) > 0)
+			have_entries = TRUE;
+	}
+
+	/* Sweep stale active batches */
+	if (serv->active_batches && g_hash_table_size (serv->active_batches) > 0)
+	{
+		data.stale_keys = NULL;
+		g_hash_table_foreach (serv->active_batches, check_stale_batch, &data);
+
+		for (iter = data.stale_keys; iter; iter = iter->next)
+		{
+			batch_info *batch;
+			const char *batch_id = iter->data;
+
+			/* Clean up the batch's pending label too */
+			batch = g_hash_table_lookup (serv->active_batches, batch_id);
+			if (batch && batch->label && serv->pending_labels)
+				g_hash_table_remove (serv->pending_labels, batch->label);
+
+			g_hash_table_remove (serv->active_batches, batch_id);
+		}
+		g_slist_free (data.stale_keys);
+
+		if (g_hash_table_size (serv->active_batches) > 0)
+			have_entries = TRUE;
+	}
+
+	if (!have_entries)
+	{
+		serv->stale_sweep_timer = 0;
+		return 0; /* stop timer */
+	}
+
+	return 1; /* keep timer running */
+}
+
+static void
+pending_label_info_free (pending_label_info *info)
+{
+	g_free (info->command);
+	g_free (info->target);
+	/* info->sess is a borrowed pointer, not owned */
+	g_free (info);
+}
+
+/* Send labeled command and track the pending label.
+ * command/target are for debugging/correlation, not protocol.
+ */
+char *
+tcp_sendf_labeled_tracked (server *serv, const char *command,
+                           const char *target, const char *fmt, ...)
+{
+	va_list args;
+	char *label;
+
+	va_start (args, fmt);
+	label = tcp_vsendf_labeled (serv, fmt, args);
+	va_end (args);
+
+	if (label)
+	{
+		pending_label_info *info = g_new0 (pending_label_info, 1);
+		info->command = g_strdup (command);
+		info->target = target ? g_strdup (target) : NULL;
+		info->sent_time = time (NULL);
+
+		/* Lazy init */
+		if (!serv->pending_labels)
+			serv->pending_labels = g_hash_table_new_full (
+				g_str_hash, g_str_equal, g_free,
+				(GDestroyNotify) pending_label_info_free);
+
+		g_hash_table_insert (serv->pending_labels, label, info);
+		server_ensure_stale_sweep_timer (serv);
+	}
+	return label;
+}
+
+void
+server_ensure_stale_sweep_timer (server *serv)
+{
+	if (serv->stale_sweep_timer == 0)
+		serv->stale_sweep_timer = fe_timeout_add_seconds (
+			STALE_SWEEP_INTERVAL, stale_sweep_cb, serv);
 }
 
 static int
@@ -1029,6 +1173,22 @@ server_cleanup (server * serv)
 			close_socket (serv->proxy_sok);
 		serv->connected = FALSE;
 		serv->end_of_motd = FALSE;
+
+		/* Stop stale sweep timer */
+		if (serv->stale_sweep_timer)
+		{
+			fe_timeout_remove (serv->stale_sweep_timer);
+			serv->stale_sweep_timer = 0;
+		}
+
+		/* Clear pending labels — echoes from a dead connection will never arrive */
+		if (serv->pending_labels)
+			g_hash_table_remove_all (serv->pending_labels);
+
+		/* Clear active batches — incomplete batches will never complete */
+		if (serv->active_batches)
+			g_hash_table_remove_all (serv->active_batches);
+
 		return 2;
 	}
 
@@ -1050,6 +1210,10 @@ server_disconnect (session * sess, int sendquit, int err)
 	GSList *list;
 	char tbuf[64];
 	gboolean shutup = FALSE;
+
+	/* Record disconnect time for CHATHISTORY TARGETS on reconnect */
+	if (serv->connected)
+		serv->last_disconnect_time = time (NULL);
 
 	/* send our QUIT reason */
 	if (sendquit && serv->connected)
@@ -1880,6 +2044,21 @@ server_set_defaults (server *serv)
 	serv->have_except = FALSE;
 	serv->have_invite = FALSE;
 	serv->utf8only = FALSE;
+
+	/* Stop stale sweep timer on reconnect */
+	if (serv->stale_sweep_timer)
+	{
+		fe_timeout_remove (serv->stale_sweep_timer);
+		serv->stale_sweep_timer = 0;
+	}
+
+	/* Clear stale pending labels on reconnect */
+	if (serv->pending_labels)
+		g_hash_table_remove_all (serv->pending_labels);
+
+	/* Clear stale active batches on reconnect */
+	if (serv->active_batches)
+		g_hash_table_remove_all (serv->active_batches);
 }
 
 char *
@@ -2024,6 +2203,16 @@ server_free (server *serv)
 
         g_clear_pointer (&serv->scram_session, scram_session_free);
 #endif
+
+	if (serv->stale_sweep_timer)
+	{
+		fe_timeout_remove (serv->stale_sweep_timer);
+		serv->stale_sweep_timer = 0;
+	}
+	if (serv->pending_labels)
+		g_hash_table_destroy (serv->pending_labels);
+	if (serv->active_batches)
+		g_hash_table_destroy (serv->active_batches);
 
 	fe_server_callback (serv);
 

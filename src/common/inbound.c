@@ -29,8 +29,6 @@
 #include <unistd.h>
 #endif
 
-#define WANTARPA
-#define WANTDNS
 #include "inet.h"
 
 #include "hexchat.h"
@@ -75,6 +73,8 @@ clear_channel (session *sess)
 		fe_timeout_remove (sess->mode_timeout_tag);
 		sess->mode_timeout_tag = 0;
 	}
+
+	chathistory_cancel_catchup (sess);
 
 	fe_clear_channel (sess);
 	userlist_clear (sess);
@@ -638,49 +638,19 @@ inbound_ujoin (server *serv, char *chan, char *nick, char *ip,
 	/* sends a MODE */
 	serv->p_join_info (sess->server, chan);
 
-	/* Show join banner immediately - no deferral needed now that we have prepend */
+	/* Show join banner immediately */
 	EMIT_SIGNAL_TIMESTAMP (XP_TE_UJOIN, sess, nick, chan, ip, NULL, 0,
 								  tags_data->timestamp);
 
-	/* Request chathistory on join.
-	 * - If we have a join msgid + scrollback: BEFORE our join (catch-up gap)
-	 * - If we have scrollback but no join msgid: AFTER scrollback (fallback)
-	 * - If no scrollback: LATEST with PREPEND mode */
+	/* Track join msgid so our own JOIN isn't duplicated in chathistory */
+	if (tags_data->msgid)
+		chathistory_track_msgid (sess, tags_data->msgid, FALSE);
+
+	/* Catch up missed messages via CHATHISTORY LATEST */
 	if (prefs.hex_irc_chathistory_auto && serv->have_chathistory &&
 	    !sess->history_loading)
 	{
-		/* Mark as initial join history (used by batch handler for behavior decisions) */
-		sess->join_deferred = TRUE;
-
-		if (tags_data->msgid && tags_data->msgid[0] &&
-		    (sess->scrollback_newest_msgid || sess->scrollback_newest_time > 0))
-		{
-			/* Catch-up: get messages BEFORE our join.  This naturally excludes
-			 * our own JOIN event (the "Now talking on" banner covers it) while
-			 * keeping it on the server for future history requests. */
-			chathistory_request_before_msgid (sess, tags_data->msgid,
-			                                  prefs.hex_irc_chathistory_lines);
-			sess->history_request_is_before = TRUE;
-		}
-		else if (sess->scrollback_newest_msgid && sess->scrollback_newest_msgid[0])
-		{
-			/* No join msgid available - fall back to AFTER scrollback */
-			chathistory_request_after_msgid (sess, sess->scrollback_newest_msgid,
-			                                 prefs.hex_irc_chathistory_lines);
-		}
-		else if (sess->scrollback_newest_time > 0)
-		{
-			/* Catch-up by timestamp */
-			chathistory_request_after_timestamp (sess, sess->scrollback_newest_time,
-			                                     prefs.hex_irc_chathistory_lines);
-		}
-		else
-		{
-			/* No scrollback - fetch most recent context.
-			 * These should appear BEFORE the join banner, so PREPEND. */
-			chathistory_request_latest (sess, prefs.hex_irc_chathistory_lines);
-			sess->history_request_is_before = TRUE;
-		}
+		chathistory_start_catchup (sess);
 	}
 
 	if (prefs.hex_irc_who_join)
@@ -1092,6 +1062,14 @@ inbound_notice (server *serv, char *to, char *nick, char *msg, char *ip, int id,
 	if (tags_data->msgid)
 		chathistory_track_msgid (sess, tags_data->msgid, FALSE);
 
+	/* Self-echo of our own NOTICE (echo-message / bouncer) */
+	if (serv->have_echo_message && !serv->p_cmp (nick, serv->nick))
+	{
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_NOTICESEND, sess, to, msg, NULL, NULL, 0,
+		                       tags_data->timestamp);
+		return;
+	}
+
 	if (server_notice)
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVNOTICE, sess, msg, nick, NULL, NULL, 0,
 									  tags_data->timestamp);
@@ -1483,18 +1461,59 @@ inbound_uback (server *serv, const message_tags_data *tags_data)
 	inbound_set_all_away_status (serv, serv->nick, 0);
 }
 
+static void
+foundip_resolved_cb (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+	GResolver *resolver = G_RESOLVER (source);
+	server *serv = (server *) user_data;
+	GList *addrs;
+	GInetAddress *addr;
+
+	if (!is_server (serv))
+		return;
+
+	addrs = g_resolver_lookup_by_name_finish (resolver, result, NULL);
+	if (addrs)
+	{
+		addr = addrs->data;
+		if (g_inet_address_get_family (addr) == G_SOCKET_FAMILY_IPV4)
+		{
+			memcpy (&serv->dcc_ip, g_inet_address_to_bytes (addr), 4);
+
+			char *ip_str = g_inet_address_to_string (addr);
+			EMIT_SIGNAL (XP_TE_FOUNDIP, serv->server_session,
+						 ip_str, NULL, NULL, NULL, 0);
+			g_free (ip_str);
+		}
+		g_resolver_free_addresses (addrs);
+	}
+}
+
 void
 inbound_foundip (session *sess, char *ip, const message_tags_data *tags_data)
 {
-	struct hostent *HostAddr;
+	GInetAddress *addr;
 
-	HostAddr = gethostbyname (ip);
-	if (HostAddr)
+	/* Try parsing as a numeric IP first — no DNS needed */
+	addr = g_inet_address_new_from_string (ip);
+	if (addr)
 	{
-		sess->server->dcc_ip = ((struct in_addr *) HostAddr->h_addr)->s_addr;
-		EMIT_SIGNAL_TIMESTAMP (XP_TE_FOUNDIP, sess->server->server_session,
-									  inet_ntoa (*((struct in_addr *) HostAddr->h_addr)),
-									  NULL, NULL, NULL, 0, tags_data->timestamp);
+		if (g_inet_address_get_family (addr) == G_SOCKET_FAMILY_IPV4)
+		{
+			memcpy (&sess->server->dcc_ip, g_inet_address_to_bytes (addr), 4);
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_FOUNDIP, sess->server->server_session,
+								   ip, NULL, NULL, NULL, 0, tags_data->timestamp);
+		}
+		g_object_unref (addr);
+	}
+	else
+	{
+		/* Hostname — resolve asynchronously to avoid blocking the event loop.
+		 * gethostbyname() on an IRC virtual host like "user.Users.Network" can
+		 * stall for the full DNS timeout (~12 s on Windows), freezing the UI. */
+		GResolver *res = g_resolver_get_default ();
+		g_resolver_lookup_by_name_async (res, ip, NULL,
+										 foundip_resolved_cb, sess->server);
 	}
 }
 
@@ -1686,6 +1705,9 @@ inbound_login_end (session *sess, char *text, const message_tags_data *tags_data
 			notify_send_watches (serv);
 		}
 
+		/* Discover missed DMs via CHATHISTORY TARGETS on reconnect */
+		chathistory_request_targets_on_reconnect (serv);
+
 		serv->end_of_motd = TRUE;
 	}
 
@@ -1728,6 +1750,7 @@ batch_info_free (batch_info *batch)
 	g_free (batch->type);
 	g_strfreev (batch->params);
 	g_free (batch->outer_batch);
+	g_free (batch->label);
 	g_slist_free_full (batch->messages, (GDestroyNotify) batch_message_free);
 	g_free (batch);
 }
@@ -1747,6 +1770,10 @@ batch_info_new (const char *id, const char *type, char *word[],
 	/* Copy outer batch reference if this batch is nested */
 	if (tags_data->batch_id)
 		batch->outer_batch = g_strdup (tags_data->batch_id);
+
+	/* Capture label tag for labeled-response correlation */
+	if (tags_data->label)
+		batch->label = g_strdup (tags_data->label);
 
 	/* Count and copy parameters (starting from word[5]) */
 	param_count = 0;
@@ -1796,6 +1823,7 @@ inbound_batch_start (server *serv, const char *batch_id, const char *batch_type,
 	/* Create and store the new batch */
 	batch = batch_info_new (batch_id, batch_type, word, tags_data);
 	g_hash_table_insert (serv->active_batches, g_strdup (batch_id), batch);
+	server_ensure_stale_sweep_timer (serv);
 }
 
 /* Process a multiline batch: concatenate messages and display as single message */
@@ -2035,6 +2063,11 @@ inbound_batch_end (server *serv, const char *batch_id,
 			/* Process chat history batch */
 			chathistory_process_batch (serv, batch);
 		}
+		else if (g_ascii_strcasecmp (batch->type, "draft/chathistory-targets") == 0)
+		{
+			/* Process CHATHISTORY TARGETS response for missed DMs */
+			chathistory_process_targets_batch (serv, batch);
+		}
 		else if (g_ascii_strcasecmp (batch->type, "draft/multiline") == 0 ||
 		         g_ascii_strcasecmp (batch->type, "multiline") == 0)
 		{
@@ -2057,9 +2090,14 @@ inbound_batch_end (server *serv, const char *batch_id,
 		}
 		/* TODO: Handle other batch types:
 		 * - "netjoin"/"netsplit": Collapse join/quit messages
-		 * - "labeled-response": Correlate response with pending command
 		 */
 	}
+
+	/* Clean up pending label for any labeled batch response.
+	 * The label tag appears on BATCH START (captured in batch->label),
+	 * not on individual messages inside the batch. */
+	if (batch->label && serv->pending_labels)
+		g_hash_table_remove (serv->pending_labels, batch->label);
 
 	/* Remove the batch from active batches (this also frees it) */
 	g_hash_table_remove (serv->active_batches, batch_id);
@@ -2093,6 +2131,16 @@ inbound_batch_add_message (server *serv, const char *prefix, const char *command
 
 	batch = g_hash_table_lookup (serv->active_batches, tags_data->batch_id);
 	if (!batch)
+		return FALSE;
+
+	/* Only collect messages for batch types that need deferred processing.
+	 * Unknown types (including labeled-response) should let messages pass
+	 * through for immediate processing — otherwise they'd be silently dropped. */
+	if (!batch->type ||
+	    (g_ascii_strcasecmp (batch->type, "chathistory") != 0 &&
+	     g_ascii_strcasecmp (batch->type, "draft/chathistory-targets") != 0 &&
+	     g_ascii_strcasecmp (batch->type, "draft/multiline") != 0 &&
+	     g_ascii_strcasecmp (batch->type, "multiline") != 0))
 		return FALSE;
 
 	/* Create batch_message struct */

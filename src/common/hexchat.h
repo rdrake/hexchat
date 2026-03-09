@@ -443,9 +443,8 @@ typedef struct session
 	int history_insert_sorted_mode:1; /* currently processing AFTER batch with timestamp sort */
 	int history_exhausted:1; /* server has no more history for this target */
 	int history_request_used_msgid:1; /* current request used msgid reference (vs timestamp) */
-	int join_deferred:1;	/* waiting for chathistory before showing join banner */
+	int catchup_in_progress:1; /* catch-up loop active (join or TARGETS) */
 	int background_history_active:1; /* background history fetch enabled for this session */
-	guint deferred_join_timeout;	/* timeout tag for deferred join fallback */
 	guint background_history_timer;	/* timer for next background history fetch */
 	tab_state_flags tab_state;
 	tab_state_flags last_tab_state; /* before event is handled */
@@ -459,10 +458,7 @@ typedef struct session
 	char *scrollback_newest_msgid;	/* newest msgid from loaded scrollback (for AFTER) */
 	const char *current_msgid;	/* temporary: msgid of message being processed (not owned) */
 	GHashTable *known_msgids;	/* hash set of msgids already displayed (for deduplication) */
-	/* Deferred join info (for chathistory display before join banner) */
-	char *deferred_join_nick;	/* nick for deferred XP_TE_UJOIN */
-	char *deferred_join_ip;		/* ip/host for deferred XP_TE_UJOIN */
-	time_t deferred_join_time;	/* timestamp for deferred XP_TE_UJOIN */
+	time_t catchup_newest_time;	/* newest timestamp from first catch-up batch (for separator) */
 } session;
 
 /* SASL Mechanisms */
@@ -484,9 +480,20 @@ typedef struct batch_info
 	char **params;       /* Additional parameters after the type */
 	int param_count;     /* Number of parameters */
 	char *outer_batch;   /* For nested batches: reference to parent batch ID */
+	char *label;         /* labeled-response: label tag from BATCH START */
 	GSList *messages;    /* Collected messages (each element is batch_message) */
 	time_t started;      /* When the batch was opened */
 } batch_info;
+
+/* IRCv3 labeled-response: pending label tracking */
+typedef struct {
+	char *command;       /* "PRIVMSG", "NOTICE", "TAGMSG", "CHATHISTORY", etc. */
+	char *target;        /* Channel/nick target */
+	session *sess;       /* Session that initiated the command — MUST validate
+	                      * with is_session() before dereferencing, as the tab
+	                      * may have been closed while a label was pending */
+	time_t sent_time;    /* When we sent it */
+} pending_label_info;
 
 /* A single message collected within a batch */
 typedef struct batch_message
@@ -614,6 +621,7 @@ typedef struct server
 	unsigned long lag_sent;   /* we are still waiting for this ping response*/
 	time_t ping_recv;					/* when we last got a ping reply */
 	time_t away_time;					/* when we were marked away */
+	time_t last_disconnect_time;		/* when we last disconnected (for TARGETS lower bound) */
 
 	char *encoding;
 	GIConv read_converter;  /* iconv converter for converting from server encoding to UTF-8. */
@@ -689,6 +697,7 @@ typedef struct server
 	GHashTable *active_batches;	/* batch_id (string) -> batch_info* */
 	guint32 label_counter;		/* Counter for generating unique labels */
 	GHashTable *pending_labels;	/* label (string) -> pending command info */
+	int stale_sweep_timer;		/* periodic timer for cleaning stale labels/batches */
 } server;
 
 typedef int (*cmd_callback) (struct session * sess, char *tbuf, char *word[],

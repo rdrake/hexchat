@@ -1186,33 +1186,16 @@ servlist_connect_cb (GtkWidget *button, gpointer userdata)
  	if (!is_session (servlist_sess))
 		servlist_sess = NULL;	/* open a new one */
 
+	/* Prefer the tab the user was on when opening the dialog, if it's
+	 * disconnected.  Only fall back to searching for another disconnected
+	 * session when the current one is already connected. */
+	if (servlist_sess && !servlist_sess->server->connected)
 	{
-		GSList *list;
-		session *sess;
-		session *chosen = servlist_sess;
-
-		servlist_sess = NULL;	/* open a new one */
-
-		for (list = sess_list; list; list = list->next)
-		{
-			sess = list->data;
-			if (sess->server->network == selected_net)
-			{
-				servlist_sess = sess;
-				if (sess->server->connected)
-					servlist_sess = NULL;	/* open a new one */
-				break;
-			}
-		}
-
-		/* use the chosen one, if it's empty */
-		if (!servlist_sess &&
-			  chosen &&
-			 !chosen->server->connected &&
-			  chosen->server->server_session->channel[0] == 0)
-		{
-			servlist_sess = chosen;
-		}
+		/* Current tab is idle - reuse it */
+	}
+	else
+	{
+		servlist_sess = NULL;	/* will open a new tab */
 	}
 
 	servlist_connect (servlist_sess, selected_net, TRUE);

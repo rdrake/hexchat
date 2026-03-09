@@ -951,6 +951,63 @@ fe_print_text_prepend (struct session *sess, char *text, time_t stamp)
 }
 
 void
+fe_redact_message (session *sess, const char *msgid,
+                   const char *redacted_by, const char *reason,
+                   time_t redact_time)
+{
+	textentry *ent;
+	xtext_buffer *buf = sess->res->buffer;
+
+	ent = gtk_xtext_find_by_msgid (buf, msgid);
+	if (!ent || gtk_xtext_entry_get_state (ent) == XTEXT_STATE_REDACTED)
+		return;
+
+	/* Preserve original content for accountability */
+	gtk_xtext_entry_set_redaction_info (buf, ent,
+		(const char *)gtk_xtext_entry_get_str (ent),
+		gtk_xtext_entry_get_str_len (ent),
+		redacted_by, reason, redact_time);
+
+	/* Build replacement: preserve nick prefix, replace message body */
+	{
+		int left_len = gtk_xtext_entry_get_left_len (ent);
+		char *placeholder;
+		unsigned char *new_str;
+		int new_len;
+
+		if (reason && *reason)
+			placeholder = g_strdup_printf ("\017[Message deleted by %s: %s]",
+			                               redacted_by, reason);
+		else
+			placeholder = g_strdup_printf ("\017[Message deleted by %s]",
+			                               redacted_by);
+
+		if (left_len >= 0)
+		{
+			/* Indented: preserve left portion (nick + separator) */
+			const unsigned char *old_str = gtk_xtext_entry_get_str (ent);
+			int plen = strlen (placeholder);
+			new_len = left_len + 1 + plen;
+			new_str = g_malloc (new_len + 1);
+			memcpy (new_str, old_str, left_len + 1);
+			memcpy (new_str + left_len + 1, placeholder, plen);
+			new_str[new_len] = '\0';
+		}
+		else
+		{
+			new_str = (unsigned char *)g_strdup (placeholder);
+			new_len = strlen (placeholder);
+		}
+
+		g_free (placeholder);
+		gtk_xtext_entry_set_text (buf, ent, new_str, new_len);
+		g_free (new_str);
+	}
+
+	gtk_xtext_entry_set_state (buf, ent, XTEXT_STATE_REDACTED);
+}
+
+void
 fe_beep (session *sess)
 {
 #ifdef WIN32

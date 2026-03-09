@@ -73,6 +73,16 @@
 
 static GtkWidgetClass *parent_class = NULL;
 
+/* Phase 4: entry modification support */
+#define TEXTENTRY_FLAG_SEPARATE_STR  0x01
+
+typedef struct xtext_redaction_info {
+	char *original_content;		/* preserved text for audit/reveal */
+	char *redacted_by;			/* nick who issued REDACT */
+	char *redaction_reason;		/* optional reason */
+	time_t redaction_time;
+} xtext_redaction_info;
+
 struct textentry
 {
 	struct textentry *next;
@@ -88,13 +98,16 @@ struct textentry
 	GSList *slp;
 	GSList *sublines;
 	guchar tag;
-	guchar pad1;
-	guchar pad2;
+	guchar state;				/* xtext_entry_state (was pad1) */
+	guchar flags;				/* bit 0: TEXTENTRY_FLAG_SEPARATE_STR (was pad2) */
 	GList *marks;	/* List of found strings */
 
 	/* IRCv3 modernization: stable entry identification (Phase 1) */
 	char *msgid;		/* Server-assigned message ID (may be NULL) */
 	guint64 entry_id;	/* Local unique ID (always set, monotonic) */
+
+	/* Phase 4: redaction accountability (lazy-allocated, NULL for most entries) */
+	struct xtext_redaction_info *redaction;
 };
 
 enum
@@ -3620,6 +3633,10 @@ gtk_xtext_set_palette (GtkXText * xtext, GdkRGBA palette[])
 		xtext->palette[i] = palette[i];
 	}
 
+	/* Phase 4: state colors (xtext-internal, not from external palette) */
+	xtext->palette[XTEXT_PENDING_FG] = (GdkRGBA){0.6, 0.6, 0.6, 1.0};
+	xtext->palette[XTEXT_REDACTED_FG] = (GdkRGBA){0.5, 0.5, 0.5, 1.0};
+
 	if (gtk_widget_get_realized (GTK_WIDGET(xtext)))
 	{
 		xtext_set_fg (xtext, XTEXT_FG);
@@ -3940,6 +3957,11 @@ gtk_xtext_render_ents (GtkXText * xtext, textentry * enta, textentry * entb)
 		if (drawing || ent == entb || ent == enta)
 		{
 			gtk_xtext_reset (xtext, FALSE, TRUE);
+			/* Phase 4: state-based color override */
+			if (ent->state == XTEXT_STATE_PENDING)
+				xtext->col_fore = XTEXT_PENDING_FG;
+			else if (ent->state == XTEXT_STATE_REDACTED)
+				xtext->col_fore = XTEXT_REDACTED_FG;
 			line += gtk_xtext_render_line (xtext, ent, line, lines_max,
 													 subline, width);
 			subline = 0;
@@ -4037,6 +4059,11 @@ gtk_xtext_render_page (GtkXText * xtext)
 	while (ent)
 	{
 		gtk_xtext_reset (xtext, FALSE, TRUE);
+		/* Phase 4: state-based color override */
+		if (ent->state == XTEXT_STATE_PENDING)
+			xtext->col_fore = XTEXT_PENDING_FG;
+		else if (ent->state == XTEXT_STATE_REDACTED)
+			xtext->col_fore = XTEXT_REDACTED_FG;
 		line += gtk_xtext_render_line (xtext, ent, line, lines_max,
 												 subline, width);
 		subline = 0;
@@ -4109,6 +4136,17 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 	if (buffer->entries_by_id)
 		g_hash_table_remove (buffer->entries_by_id, GSIZE_TO_POINTER (ent->entry_id));
 	g_free (ent->msgid);
+
+	/* Phase 4: free separate str and redaction info */
+	if (ent->flags & TEXTENTRY_FLAG_SEPARATE_STR)
+		g_free (ent->str);
+	if (ent->redaction)
+	{
+		g_free (ent->redaction->original_content);
+		g_free (ent->redaction->redacted_by);
+		g_free (ent->redaction->redaction_reason);
+		g_free (ent->redaction);
+	}
 
 	g_slist_free_full (ent->slp, g_free);
 	g_slist_free (ent->sublines);
@@ -4775,6 +4813,11 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	ent->entry_id = buf->next_entry_id++;
 	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
 
+	/* Phase 4: entry modification support */
+	ent->state = XTEXT_STATE_NORMAL;
+	ent->flags = 0;
+	ent->redaction = NULL;
+
 	if (ent->indent < MARGIN)
 		ent->indent = MARGIN;	  /* 2 pixels is the left margin */
 
@@ -4876,6 +4919,11 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	ent->entry_id = buf->next_entry_id++;
 	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
 
+	/* Phase 4: entry modification support */
+	ent->state = XTEXT_STATE_NORMAL;
+	ent->flags = 0;
+	ent->redaction = NULL;
+
 	if (ent->indent < MARGIN)
 		ent->indent = MARGIN;	  /* 2 pixels is the left margin */
 
@@ -4976,6 +5024,11 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	ent->msgid = NULL;
 	ent->entry_id = buf->next_entry_id++;
 	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
+
+	/* Phase 4: entry modification support */
+	ent->state = XTEXT_STATE_NORMAL;
+	ent->flags = 0;
+	ent->redaction = NULL;
 
 	if (ent->indent < MARGIN)
 		ent->indent = MARGIN;
@@ -5764,6 +5817,16 @@ gtk_xtext_buffer_free (xtext_buffer *buf)
 	{
 		next = ent->next;
 		g_free (ent->msgid);	/* Free msgid if set (Phase 1) */
+		/* Phase 4: free separate str and redaction info */
+		if (ent->flags & TEXTENTRY_FLAG_SEPARATE_STR)
+			g_free (ent->str);
+		if (ent->redaction)
+		{
+			g_free (ent->redaction->original_content);
+			g_free (ent->redaction->redacted_by);
+			g_free (ent->redaction->redaction_reason);
+			g_free (ent->redaction);
+		}
 		g_free (ent);
 		ent = next;
 	}
@@ -5883,6 +5946,106 @@ textentry *
 gtk_xtext_entry_get_next (textentry *ent)
 {
 	return ent ? ent->next : NULL;
+}
+
+/* IRCv3 modernization: entry modification (Phase 4) */
+
+gboolean
+gtk_xtext_entry_set_text (xtext_buffer *buf, textentry *ent,
+                          const unsigned char *new_text, int new_len)
+{
+	int old_sublines, new_sublines;
+
+	if (!buf || !ent || !new_text)
+		return FALSE;
+
+	if (new_len == -1)
+		new_len = strlen ((const char *)new_text);
+
+	/* Free old separate-allocated str (not inline) */
+	if (ent->flags & TEXTENTRY_FLAG_SEPARATE_STR)
+		g_free (ent->str);
+
+	/* Allocate new separate buffer */
+	ent->str = g_malloc (new_len + 1);
+	memcpy (ent->str, new_text, new_len);
+	ent->str[new_len] = '\0';
+	ent->str_len = new_len;
+	ent->flags |= TEXTENTRY_FLAG_SEPARATE_STR;
+
+	/* Recalculate derived data */
+	ent->str_width = gtk_xtext_text_width_ent (buf->xtext, ent);
+	old_sublines = g_slist_length (ent->sublines);
+	new_sublines = gtk_xtext_lines_taken (buf, ent);
+	buf->num_lines += (new_sublines - old_sublines);
+
+	/* Invalidate search marks */
+	if (ent->marks)
+		gtk_xtext_search_textentry_del (buf, ent);
+
+	/* Update scrollbar and redraw if visible */
+	if (buf->xtext->buffer == buf)
+	{
+		gtk_xtext_adjustment_set (buf, TRUE);
+		if (gtk_xtext_check_ent_visibility (buf->xtext, ent, 0))
+			gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
+	}
+
+	return TRUE;
+}
+
+void
+gtk_xtext_entry_set_state (xtext_buffer *buf, textentry *ent,
+                           xtext_entry_state new_state)
+{
+	if (!buf || !ent || ent->state == (guchar)new_state)
+		return;
+
+	ent->state = (guchar)new_state;
+
+	if (buf->xtext->buffer == buf &&
+	    gtk_xtext_check_ent_visibility (buf->xtext, ent, 0))
+		gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
+}
+
+xtext_entry_state
+gtk_xtext_entry_get_state (textentry *ent)
+{
+	return ent ? (xtext_entry_state)ent->state : XTEXT_STATE_NORMAL;
+}
+
+const unsigned char *
+gtk_xtext_entry_get_str (textentry *ent)
+{
+	return ent ? ent->str : NULL;
+}
+
+int
+gtk_xtext_entry_get_str_len (textentry *ent)
+{
+	return ent ? ent->str_len : 0;
+}
+
+int
+gtk_xtext_entry_get_left_len (textentry *ent)
+{
+	return ent ? ent->left_len : -1;
+}
+
+void
+gtk_xtext_entry_set_redaction_info (xtext_buffer *buf, textentry *ent,
+                                    const char *original_str, int original_len,
+                                    const char *redacted_by, const char *reason,
+                                    time_t redact_time)
+{
+	if (!ent || ent->redaction)
+		return;  /* already has redaction info — don't overwrite */
+
+	ent->redaction = g_new0 (xtext_redaction_info, 1);
+	ent->redaction->original_content = g_strndup (original_str, original_len);
+	ent->redaction->redacted_by = g_strdup (redacted_by);
+	ent->redaction->redaction_reason = (reason && *reason) ? g_strdup (reason) : NULL;
+	ent->redaction->redaction_time = redact_time;
 }
 
 /* IRCv3 modernization: scroll anchor system (Phase 2)

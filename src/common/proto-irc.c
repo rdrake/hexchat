@@ -268,7 +268,8 @@ irc_set_away (server *serv, char *reason)
 static void
 irc_ctcp (server *serv, char *to, char *msg)
 {
-	tcp_sendf (serv, "PRIVMSG %s :\001%s\001\r\n", to, msg);
+	tcp_sendf_labeled_tracked (serv, "CTCP", to,
+	                           "PRIVMSG %s :\001%s\001\r\n", to, msg);
 }
 
 static void
@@ -360,19 +361,22 @@ irc_user_whois (server *serv, char *nicks)
 static void
 irc_message (server *serv, char *channel, char *text)
 {
-	tcp_sendf (serv, "PRIVMSG %s :%s\r\n", channel, text);
+	tcp_sendf_labeled_tracked (serv, "PRIVMSG", channel,
+	                           "PRIVMSG %s :%s\r\n", channel, text);
 }
 
 static void
 irc_action (server *serv, char *channel, char *act)
 {
-	tcp_sendf (serv, "PRIVMSG %s :\001ACTION %s\001\r\n", channel, act);
+	tcp_sendf_labeled_tracked (serv, "ACTION", channel,
+	                           "PRIVMSG %s :\001ACTION %s\001\r\n", channel, act);
 }
 
 static void
 irc_notice (server *serv, char *channel, char *text)
 {
-	tcp_sendf (serv, "NOTICE %s :%s\r\n", channel, text);
+	tcp_sendf_labeled_tracked (serv, "NOTICE", channel,
+	                           "NOTICE %s :%s\r\n", channel, text);
 }
 
 static void
@@ -1222,6 +1226,10 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 			return;
 
 		case WORDL('M','O','D','E'):
+			/* Check if this message belongs to a batch (e.g., chathistory event-playback) */
+			if (inbound_batch_add_message (serv, word[1], "MODE", word, word_eol, PDIWORDS, tags_data))
+				return; /* Message collected for batch processing */
+
 			handle_mode (serv, word, word_eol, nick, FALSE, tags_data);	/* modes.c */
 			return;
 
@@ -1436,6 +1444,45 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 							text[len - 1] = 0;
 						}
 						text++;
+
+						/* Self-echo of our own CTCP (echo-message / bouncer).
+						 * Don't process via ctcp_handle — would auto-reply to ourselves. */
+						if (serv->have_echo_message && !serv->p_cmp (nick, serv->nick))
+						{
+							if (!g_ascii_strncasecmp (text, "ACTION ", 7))
+							{
+								/* ACTION echo */
+								if (!is_channel (serv, to))
+								{
+									/* Private ACTION: route to dialog with TARGET */
+									session *target_sess = find_dialog (serv, to);
+									if (!target_sess)
+										target_sess = new_ircwindow (serv, to, SESS_DIALOG, 0);
+									if (target_sess)
+										inbound_action (target_sess, to, nick, ip,
+														text + 7, TRUE, tags_data->identified,
+														tags_data);
+								}
+								else
+								{
+									/* Channel ACTION: pass fromme=TRUE */
+									inbound_action (sess, to, nick, ip,
+													text + 7, TRUE, tags_data->identified,
+													tags_data);
+								}
+							}
+							else
+							{
+								/* Generic CTCP echo (VERSION, PING, etc.): display as sent */
+								char *po = strchr (text, '\001');
+								if (po)
+									*po = '\0';
+								EMIT_SIGNAL_TIMESTAMP (XP_TE_CTCPSEND, sess, to, text,
+													   NULL, NULL, 0, tags_data->timestamp);
+							}
+							return;
+						}
+
 						if (g_ascii_strncasecmp (text, "ACTION", 6) != 0)
 							flood_check (nick, ip, serv, sess, 0);
 						if (g_ascii_strncasecmp (text, "DCC ", 4) == 0)
@@ -1475,7 +1522,45 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 						{
 							if (ignore_check (word[1], IG_PRIV))
 								return;
-							inbound_privmsg (serv, nick, ip, text, tags_data->identified, tags_data);
+
+							/* Self-message: bouncer/echo-message echoing our own
+							 * PRIVMSG back.  Route to a dialog with the TARGET
+							 * (the person we sent to), not with ourselves. */
+							if (!serv->p_cmp (nick, serv->nick))
+							{
+								session *sess;
+
+								/* Self-to-self dedup: /msg MyNick sends TWO copies
+								 * with echo-message (labeled echo + unlabeled delivery).
+								 * Suppress the duplicate. */
+								if (!serv->p_cmp (to, serv->nick))
+								{
+									session *existing = find_dialog (serv, to);
+									if (existing)
+									{
+										if (tags_data->msgid && tags_data->msgid[0])
+										{
+											if (chathistory_is_duplicate_msgid (existing, tags_data->msgid))
+												return;
+										}
+										else if (serv->have_labeled_response && !tags_data->label)
+											return;
+									}
+								}
+
+								sess = find_dialog (serv, to);
+								if (!sess)
+									sess = new_ircwindow (serv, to, SESS_DIALOG, 0);
+								if (sess)
+								{
+									inbound_chanmsg (serv, sess, to, nick, text, TRUE,
+									                 tags_data->identified, tags_data);
+								}
+							}
+							else
+							{
+								inbound_privmsg (serv, nick, ip, text, tags_data->identified, tags_data);
+							}
 						}
 					}
 				}
@@ -1566,8 +1651,8 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 			return;
 
 		case WORDL('R','E','D','A'):
-			/* REDACT - message redaction
-			 * Format: :nick!user@host REDACT <target> <msgid> [reason]
+			/* REDACT - message redaction (Phase 4: visual redaction)
+			 * Format: :nick!user@host REDACT <target> <msgid> [:<reason>]
 			 */
 			if (len >= 6 && strncasecmp (type, "REDACT", 6) == 0)
 			{
@@ -1579,30 +1664,20 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 				if (!*target || !*msgid)
 					return;
 
-				/* Find session for target */
 				sess = find_channel (serv, target);
 				if (!sess)
 					sess = find_dialog (serv, target);
 
 				if (sess)
 				{
-					/* Display redaction message */
 					if (reason && *reason == ':')
 						reason++;
-					if (reason && *reason)
-					{
-						EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
-							g_strdup_printf ("Message %s was redacted by %s: %s",
-								msgid, nick, reason),
-							NULL, NULL, NULL, 0, tags_data->timestamp);
-					}
-					else
-					{
-						EMIT_SIGNAL_TIMESTAMP (XP_TE_SERVTEXT, sess,
-							g_strdup_printf ("Message %s was redacted by %s",
-								msgid, nick),
-							NULL, NULL, NULL, 0, tags_data->timestamp);
-					}
+					if (reason && !*reason)
+						reason = NULL;
+
+					fe_redact_message (sess, msgid, nick, reason,
+					                   tags_data->timestamp ? tags_data->timestamp
+					                                        : time (NULL));
 				}
 			}
 			return;
@@ -1721,6 +1796,12 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 		t = WORDL((guint8)type[0], (guint8)type[1], (guint8)type[2], (guint8)type[3]);
 		switch (t)
 		{
+			case WORDL('A','C','K','\0'):
+				/* labeled-response ACK: server confirms command was processed
+				 * with no visible response. Label cleanup already happened
+				 * in the label lookup above. Just consume silently. */
+				return;
+
 			case WORDL('C','A','P','\0'):
 				if (strncasecmp (word[4], "ACK", 3) == 0)
 				{
@@ -2077,6 +2158,17 @@ irc_inline (server *serv, char *buf, int len)
 		buf = sep + 1;
 
 		handle_message_tags(serv, tags, &tags_data);
+	}
+
+	/* labeled-response: clean up pending label tracking (non-batched path).
+	 * For batched responses, the label is on BATCH START and handled in
+	 * inbound_batch_end() via batch_info->label. */
+	if (tags_data.label && serv->pending_labels)
+	{
+		pending_label_info *info = g_hash_table_lookup (serv->pending_labels,
+		                                                tags_data.label);
+		if (info)
+			g_hash_table_remove (serv->pending_labels, tags_data.label);
 	}
 
 	url_check_line (buf);

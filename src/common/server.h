@@ -27,8 +27,11 @@ int tcp_send_len (server *serv, char *buf, int len);
 void tcp_sendf (server *serv, const char *fmt, ...) G_GNUC_PRINTF (2, 3);
 char *tcp_generate_label (server *serv);
 char *tcp_sendf_labeled (server *serv, const char *fmt, ...) G_GNUC_PRINTF (2, 3);
+char *tcp_sendf_labeled_tracked (server *serv, const char *command,
+                                 const char *target, const char *fmt, ...) G_GNUC_PRINTF (4, 5);
 int tcp_send_real (void *ssl, int sok, GIConv write_converter, char *buf, int len);
 
+void server_ensure_stale_sweep_timer (server *serv);
 server *server_new (void);
 int is_server (server *serv);
 void server_fill_her_up (server *serv);

@@ -690,10 +690,6 @@ session_free (session *killsess)
 	g_free (killsess->scrollback_newest_msgid);
 	if (killsess->known_msgids)
 		g_hash_table_destroy (killsess->known_msgids);
-	g_free (killsess->deferred_join_nick);
-	g_free (killsess->deferred_join_ip);
-	if (killsess->deferred_join_timeout > 0)
-		g_source_remove (killsess->deferred_join_timeout);
 	chathistory_stop_background_fetch (killsess);
 
 	fe_session_callback (killsess);

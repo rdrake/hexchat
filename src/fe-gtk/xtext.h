@@ -52,6 +52,17 @@
 #define XTEXT_MARKER 36		/* for marker line */
 #define XTEXT_MAX_COLOR 41
 
+/* State colors (xtext-internal, not from external palette[]) */
+#define XTEXT_PENDING_FG 37
+#define XTEXT_REDACTED_FG 38
+#define XTEXT_PALETTE_SIZE 39	/* total palette array size */
+
+typedef enum {
+	XTEXT_STATE_NORMAL   = 0,
+	XTEXT_STATE_PENDING  = 1,	/* Echo-message: awaiting server confirmation */
+	XTEXT_STATE_REDACTED = 2	/* Message-redaction: content replaced */
+} xtext_entry_state;
+
 typedef struct _GtkXText GtkXText;
 typedef struct _GtkXTextClass GtkXTextClass;
 typedef struct textentry textentry;
@@ -167,7 +178,7 @@ struct _GtkXText
 	int last_win_w;
 
 	/* GdkGC removed in GTK3 - we use Cairo for all drawing now */
-	GdkRGBA palette[XTEXT_COLS];
+	GdkRGBA palette[XTEXT_PALETTE_SIZE];
 
 	gint io_tag;					  /* for delayed refresh events */
 	gint add_io_tag;				  /* "" when adding new text */
@@ -350,6 +361,24 @@ const char *gtk_xtext_get_msgid (textentry *ent);
 textentry *gtk_xtext_buffer_get_last (xtext_buffer *buf);
 textentry *gtk_xtext_buffer_get_first (xtext_buffer *buf);
 textentry *gtk_xtext_entry_get_next (textentry *ent);
+
+/* IRCv3 modernization: entry modification (Phase 4) */
+gboolean gtk_xtext_entry_set_text (xtext_buffer *buf, textentry *ent,
+                                   const unsigned char *new_text, int new_len);
+void gtk_xtext_entry_set_state (xtext_buffer *buf, textentry *ent,
+                                xtext_entry_state new_state);
+xtext_entry_state gtk_xtext_entry_get_state (textentry *ent);
+
+/* Redaction accountability */
+void gtk_xtext_entry_set_redaction_info (xtext_buffer *buf, textentry *ent,
+                                         const char *original_str, int original_len,
+                                         const char *redacted_by, const char *reason,
+                                         time_t redact_time);
+
+/* Read accessors (textentry is opaque outside xtext.c) */
+const unsigned char *gtk_xtext_entry_get_str (textentry *ent);
+int gtk_xtext_entry_get_str_len (textentry *ent);
+int gtk_xtext_entry_get_left_len (textentry *ent);
 
 /* IRCv3 modernization: scroll anchor system (Phase 2)
  * Save/restore scroll position across buffer modifications.
