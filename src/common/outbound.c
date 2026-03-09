@@ -4699,8 +4699,6 @@ const struct commands xc_cmds[] = {
 	 N_("QUIT [<reason>], disconnects from the current server")},
 	{"QUOTE", cmd_quote, 1, 0, 1,
 	 N_("QUOTE <text>, sends the text in raw form to the server")},
-	{"REDACT", cmd_redact, 1, 0, 1,
-	 N_("REDACT <target> <msgid> [reason], redacts/deletes a message (IRCv3)")},
 #ifdef USE_OPENSSL
 	{"RECONNECT", cmd_reconnect, 0, 0, 1,
 	 N_("RECONNECT [-ssl|-ssl-noverify] [<host>] [<port>] [<password>], Can be called just as /RECONNECT to reconnect to the current server or with /RECONNECT ALL to reconnect to all the open servers")},
@@ -4708,6 +4706,8 @@ const struct commands xc_cmds[] = {
 	{"RECONNECT", cmd_reconnect, 0, 0, 1,
 	 N_("RECONNECT [<host>] [<port>] [<password>], Can be called just as /RECONNECT to reconnect to the current server or with /RECONNECT ALL to reconnect to all the open servers")},
 #endif
+	{"REDACT", cmd_redact, 1, 0, 1,
+	 N_("REDACT <target> <msgid> [reason], redacts/deletes a message (IRCv3)")},
 	{"RECV", cmd_recv, 1, 0, 1, N_("RECV <text>, send raw data to HexChat, as if it was received from the IRC server")},
 	{"REGISTER", cmd_register, 1, 0, 1, N_("REGISTER <account> [<email>|*] <password>, register a new account on the server (requires draft/account-registration)")},
 	{"RELOAD", cmd_reload, 0, 0, 1, N_("RELOAD <name>, reloads a plugin or script")},
