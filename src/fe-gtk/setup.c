@@ -45,6 +45,7 @@
 #include "sexy-spell-entry.h"
 
 InputStyle *create_input_style (InputStyle *);
+void apply_tree_css (void);
 
 #define LABEL_INDENT 12
 
@@ -2065,29 +2066,13 @@ setup_create_tree (GtkWidget *box, GtkWidget *book)
 }
 
 static void
-setup_apply_entry_style (GtkWidget *entry)
-{
-	gtk_widget_override_background_color (entry, GTK_STATE_FLAG_NORMAL, &colors[COL_BG]);
-	gtk_widget_override_color (entry, GTK_STATE_FLAG_NORMAL, &colors[COL_FG]);
-	gtk_widget_override_font (entry, input_style->font_desc);
-}
-
-static void
 setup_apply_to_sess (session_gui *gui)
 {
 	mg_update_xtext (gui->xtext);
 
-	if (prefs.hex_gui_ulist_style && input_style)
-		gtk_widget_override_font (gui->user_tree, input_style->font_desc);
-
-	if (prefs.hex_gui_input_style)
-	{
-		/* Cursor color is handled via CSS in create_input_style */
-		setup_apply_entry_style (gui->input_box);
-		setup_apply_entry_style (gui->limit_entry);
-		setup_apply_entry_style (gui->key_entry);
-		setup_apply_entry_style (gui->topic_entry);
-	}
+	/* Font and colors for input boxes, userlist, and tree are applied via
+	 * CSS providers (create_input_style / apply_tree_css) - no per-widget
+	 * override needed in GTK4. */
 
 	if (prefs.hex_gui_ulist_buttons)
 		gtk_widget_show (gui->button_box);
@@ -2139,6 +2124,7 @@ setup_apply_real (int new_pix, int do_ulist, int do_layout, int do_identd)
 	}
 
 	input_style = create_input_style (input_style);
+	apply_tree_css ();
 
 	list = sess_list;
 	while (list)

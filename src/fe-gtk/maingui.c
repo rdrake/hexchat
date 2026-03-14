@@ -2574,14 +2574,6 @@ mg_limit_entry_cb (GtkWidget * igad, gpointer userdata)
 }
 
 static void
-mg_apply_entry_style (GtkWidget *entry)
-{
-	gtk_widget_override_background_color (entry, GTK_STATE_FLAG_NORMAL, &colors[COL_BG]);
-	gtk_widget_override_color (entry, GTK_STATE_FLAG_NORMAL, &colors[COL_FG]);
-	gtk_widget_override_font (entry, input_style->font_desc);
-}
-
-static void
 mg_create_chanmodebuttons (session_gui *gui, GtkWidget *box)
 {
 	gui->flag_c = mg_create_flagbutton (_("Filter Colors"), box, "c");
@@ -2610,9 +2602,6 @@ mg_create_chanmodebuttons (session_gui *gui, GtkWidget *box)
 	}
 	gtk_widget_show (gui->key_entry);
 
-	if (prefs.hex_gui_input_style)
-		mg_apply_entry_style (gui->key_entry);
-
 	gui->flag_l = mg_create_flagbutton (_("User Limit"), box, "l");
 	gui->limit_entry = gtk_entry_new ();
 	gtk_widget_set_name (gui->limit_entry, "hexchat-inputbox");
@@ -2632,8 +2621,6 @@ mg_create_chanmodebuttons (session_gui *gui, GtkWidget *box)
 	}
 	gtk_widget_show (gui->limit_entry);
 
-	if (prefs.hex_gui_input_style)
-		mg_apply_entry_style (gui->limit_entry);
 }
 
 /*static void
@@ -2728,9 +2715,6 @@ mg_create_topicbar (session *sess, GtkWidget *box)
 								G_CALLBACK (mg_topic_key_press), NULL);
 		gtk_widget_add_controller (topic, key_controller);
 	}
-
-	if (prefs.hex_gui_input_style)
-		mg_apply_entry_style (topic);
 
 	gui->topicbutton_box = bbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	hc_box_pack_start (hbox, bbox, 0, 0, 0);
@@ -3051,12 +3035,6 @@ mg_create_userlist (session_gui *gui, GtkWidget *box)
 	hc_frame_set_child (frame, gui->namelistinfo);
 
 	gui->user_tree = ulist = userlist_create (vbox);
-
-	if (prefs.hex_gui_ulist_style)
-	{
-		gtk_widget_override_font (ulist, input_style->font_desc);
-		gtk_widget_override_background_color (ulist, GTK_STATE_FLAG_NORMAL, &colors[COL_BG]);
-	}
 
 	mg_create_meters (gui, vbox);
 
@@ -3841,9 +3819,6 @@ mg_create_entry (session *sess, GtkWidget *box)
 	g_signal_connect (G_OBJECT (entry), "word-check",
 							G_CALLBACK (mg_spellcheck_cb), NULL);
 	gtk_widget_grab_focus (entry);
-
-	if (prefs.hex_gui_input_style)
-		mg_apply_entry_style (entry);
 }
 
 static void

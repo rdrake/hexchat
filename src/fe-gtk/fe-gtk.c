@@ -113,7 +113,8 @@ create_msg_dialog (gchar *title, gchar *message)
 	GtkWidget *dialog;
 	gboolean done = FALSE;
 
-	dialog = gtk_message_dialog_new (NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE, "%s", message);
+	dialog = gtk_message_dialog_new (parent_window ? GTK_WINDOW (parent_window) : NULL,
+								GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE, "%s", message);
 	gtk_window_set_title (GTK_WINDOW (dialog), title);
 
 	g_signal_connect (G_OBJECT (dialog), "response",
@@ -270,8 +271,9 @@ InputStyle *
 create_input_style (InputStyle *style)
 {
 	char buf[256];
-	char css_buf[512];
-	static int done_css = FALSE;
+	char css_buf[1024];
+	const char *font_family;
+	int font_size;
 
 	if (style == NULL)
 	{
@@ -293,26 +295,28 @@ create_input_style (InputStyle *style)
 		style->font_desc = pango_font_description_from_string ("sans 11");
 	}
 
-	if (prefs.hex_gui_input_style && !done_css)
+	/* Create CSS provider once, reload CSS every time (font/colors may change) */
+	if (!input_css_provider)
 	{
-		done_css = TRUE;
+		input_css_provider = gtk_css_provider_new ();
+		gtk_style_context_add_provider_for_screen (
+			gdk_screen_get_default (),
+			GTK_STYLE_PROVIDER (input_css_provider),
+			GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+	}
 
-		/* Create CSS provider for input box styling */
-		if (!input_css_provider)
-		{
-			input_css_provider = gtk_css_provider_new ();
-			gtk_style_context_add_provider_for_screen (
-				gdk_screen_get_default (),
-				GTK_STYLE_PROVIDER (input_css_provider),
-				GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-		}
+	if (prefs.hex_gui_input_style)
+	{
+		font_family = pango_font_description_get_family (style->font_desc);
+		font_size = pango_font_description_get_size (style->font_desc) / PANGO_SCALE;
 
-		/* GdkRGBA uses 0.0-1.0 floats, convert to 0-255 for CSS */
 		g_snprintf (css_buf, sizeof (css_buf),
 			"#hexchat-inputbox { "
 			"  caret-color: rgb(%d, %d, %d); "
 			"  background-color: rgb(%d, %d, %d); "
 			"  color: rgb(%d, %d, %d); "
+			"  font-family: \"%s\"; "
+			"  font-size: %dpt; "
 			"}",
 			(int)(colors[COL_FG].red * 255),
 			(int)(colors[COL_FG].green * 255),
@@ -322,15 +326,21 @@ create_input_style (InputStyle *style)
 			(int)(colors[COL_BG].blue * 255),
 			(int)(colors[COL_FG].red * 255),
 			(int)(colors[COL_FG].green * 255),
-			(int)(colors[COL_FG].blue * 255));
-
-		gtk_css_provider_load_from_data (input_css_provider, css_buf, -1);
+			(int)(colors[COL_FG].blue * 255),
+			font_family ? font_family : "sans",
+			font_size > 0 ? font_size : 11);
 	}
+	else
+	{
+		css_buf[0] = '\0';
+	}
+
+	gtk_css_provider_load_from_data (input_css_provider, css_buf, -1);
 
 	return style;
 }
 
-static void
+void
 apply_tree_css (void)
 {
 	char css_buf[2048];
@@ -372,6 +382,8 @@ apply_tree_css (void)
 		"#hexchat-userlist { "
 		"  background-color: rgb(%d, %d, %d); "
 		"  color: rgb(%d, %d, %d); "
+		"  font-family: \"%s\"; "
+		"  font-size: %dpt; "
 		"} "
 		/* GTK4: Selection styling for columnview rows */
 		"#hexchat-userlist > row:selected { "
@@ -408,6 +420,9 @@ apply_tree_css (void)
 		(int)(colors[COL_FG].red * 255),
 		(int)(colors[COL_FG].green * 255),
 		(int)(colors[COL_FG].blue * 255),
+		/* #hexchat-userlist font */
+		font_family ? font_family : "sans",
+		font_size > 0 ? font_size : 11,
 		/* #hexchat-userlist > row:selected background (mark background) */
 		(int)(colors[COL_MARK_BG].red * 255),
 		(int)(colors[COL_MARK_BG].green * 255),
