@@ -475,12 +475,11 @@ fe_notify_ask (char *nick, char *networks)
 	char *msg = _("Enter nickname to add:");
 	char buf[256];
 
-	dialog = gtk_dialog_new_with_buttons (msg, NULL, 0,
+	dialog = gtk_dialog_new_with_buttons (msg,
+										parent_window ? GTK_WINDOW (parent_window) : NULL, 0,
 										"_Cancel", GTK_RESPONSE_REJECT,
 										"_OK", GTK_RESPONSE_ACCEPT,
 										NULL);
-	if (parent_window)
-		gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (parent_window));
 	hc_window_set_position (dialog, GTK_WIN_POS_MOUSE);
 
 	table = gtk_grid_new ();

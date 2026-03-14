@@ -480,9 +480,11 @@ ignore_clear_cb (GtkDialog *dialog, gint response)
 static void
 ignore_clear_entry_clicked (GtkWidget * wid)
 {
+	extern GtkWidget *parent_window;
 	GtkWidget *dialog;
 
-	dialog = gtk_message_dialog_new (NULL, 0,
+	dialog = gtk_message_dialog_new (
+								parent_window ? GTK_WINDOW (parent_window) : NULL, 0,
 								GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL,
 					_("Are you sure you want to remove all ignores?"));
 	g_signal_connect (G_OBJECT (dialog), "response",

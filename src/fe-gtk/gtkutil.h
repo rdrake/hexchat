@@ -37,6 +37,7 @@ GtkWidget *gtkutil_entry_new (int max, GtkWidget * box, void *callback,
 void show_and_unfocus (GtkWidget * wid);
 void gtkutil_set_icon (GtkWidget *win);
 GtkWidget *gtkutil_window_new (char *title, char *role, int width, int height, int flags);
+void gtkutil_restore_parent_focus (GtkWidget *parent);
 void gtkutil_copy_to_clipboard (GtkWidget *widget, gboolean primary_only,
                                 const gchar *str);
 GtkWidget *gtkutil_treeview_new (GtkWidget *box, GtkTreeModel *model,

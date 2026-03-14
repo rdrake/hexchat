@@ -635,7 +635,7 @@ banlist_clear (GtkWidget * wid, banlist_info *banl)
 {
 	GtkWidget *dialog;
 
-	dialog = gtk_message_dialog_new (NULL, 0,
+	dialog = gtk_message_dialog_new (GTK_WINDOW (banl->sess->gui->window), 0,
 								GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL,
 					_("Are you sure you want to remove all listed items in %s?"), banl->sess->channel);
 

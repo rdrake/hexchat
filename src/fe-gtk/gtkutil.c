@@ -646,6 +646,23 @@ gtkutil_set_icon (GtkWidget *win)
 
 extern GtkWidget *parent_window;	/* maingui.c */
 
+static gboolean
+present_window_idle (gpointer data)
+{
+	gtk_window_present (GTK_WINDOW (data));
+	return G_SOURCE_REMOVE;
+}
+
+/* Schedule a deferred gtk_window_present for the given window.
+ * Deferring via g_idle_add lets GTK finish its own destroy/focus
+ * processing first, preventing the visible focus-flash that happens
+ * with a synchronous present during a destroy handler. */
+void
+gtkutil_restore_parent_focus (GtkWidget *parent)
+{
+	g_idle_add (present_window_idle, parent);
+}
+
 GtkWidget *
 gtkutil_window_new (char *title, char *role, int width, int height, int flags)
 {
@@ -667,10 +684,12 @@ gtkutil_window_new (char *title, char *role, int width, int height, int flags)
 		gtk_window_set_transient_for (GTK_WINDOW (win), GTK_WINDOW (parent_window));
 		gtk_window_set_destroy_with_parent (GTK_WINDOW (win), TRUE);
 
-		/* GTK4: restore focus to parent when this dialog closes.
-		 * g_signal_connect_object auto-disconnects if parent is destroyed first. */
+		/* Deferred focus restore: fires after GTK finishes its own destroy
+		 * processing, avoiding the flicker of a synchronous present.
+		 * g_signal_connect_object ensures the idle is cancelled if the
+		 * parent is destroyed first. */
 		g_signal_connect_object (win, "destroy",
-		                         G_CALLBACK (gtk_window_present),
+		                         G_CALLBACK (gtkutil_restore_parent_focus),
 		                         parent_window, G_CONNECT_SWAPPED);
 	}
 
