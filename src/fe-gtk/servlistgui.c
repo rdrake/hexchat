@@ -92,7 +92,6 @@ static GtkWidget *edit_trees[N_TREES];
 
 #ifdef USE_LIBWEBSOCKETS
 /* OAuth configuration widgets */
-static GtkWidget *edit_label_oauth_section;
 static GtkWidget *edit_entry_oauth_authurl;
 static GtkWidget *edit_label_oauth_authurl;
 static GtkWidget *edit_entry_oauth_tokenurl;
@@ -727,6 +726,13 @@ servlist_edit_update (ircnet *net)
 	servlist_update_from_entry (&net->user, edit_entry_user);
 	servlist_update_from_entry (&net->real, edit_entry_real);
 	servlist_update_from_entry (&net->pass, edit_entry_pass);
+#ifdef USE_LIBWEBSOCKETS
+	servlist_update_from_entry (&net->oauth_client_id, edit_entry_oauth_clientid);
+	servlist_update_from_entry (&net->oauth_client_secret, edit_entry_oauth_clientsecret);
+	servlist_update_from_entry (&net->oauth_scopes, edit_entry_oauth_scopes);
+	servlist_update_from_entry (&net->oauth_authorization_url, edit_entry_oauth_authurl);
+	servlist_update_from_entry (&net->oauth_token_url, edit_entry_oauth_tokenurl);
+#endif
 }
 
 static void
@@ -740,7 +746,7 @@ servlist_edit_close_cb (GtkWidget *button, gpointer userdata)
 
 	/* Ensure focus returns to the server list window */
 	if (serverlist_win)
-		gtk_window_present (GTK_WINDOW (serverlist_win));
+		gtkutil_restore_parent_focus (serverlist_win);
 }
 
 static gboolean
@@ -1699,36 +1705,29 @@ servlist_logintypecombo_cb (GtkComboBox *cb, gpointer *userdata)
 	
 	/* EXTERNAL uses a cert, not a pass */
 	if (login_types_conf[index] == LOGIN_SASLEXTERNAL)
+	{
 		gtk_widget_set_sensitive (edit_entry_pass, FALSE);
+		gtk_entry_set_placeholder_text (GTK_ENTRY (edit_entry_pass), NULL);
+	}
 #ifdef USE_LIBWEBSOCKETS
-	/* OAUTHBEARER uses tokens, not passwords - password field shows OAuth config hint */
+	/* OAUTHBEARER uses tokens, not passwords */
 	else if (login_types_conf[index] == LOGIN_SASL_OAUTHBEARER)
 	{
 		gtk_widget_set_sensitive (edit_entry_pass, FALSE);
 		gtk_entry_set_placeholder_text (GTK_ENTRY (edit_entry_pass),
-			_("Configure OAuth below"));
+			_("Token managed by OAuth2 tab"));
 	}
 #endif
 	else
+	{
 		gtk_widget_set_sensitive (edit_entry_pass, TRUE);
+		gtk_entry_set_placeholder_text (GTK_ENTRY (edit_entry_pass), NULL);
+	}
 
 #ifdef USE_LIBWEBSOCKETS
-	/* Show/hide OAuth configuration fields based on login type */
-	{
-		gboolean show_oauth = (login_types_conf[index] == LOGIN_SASL_OAUTHBEARER);
-		gtk_widget_set_visible (edit_label_oauth_section, show_oauth);
-		gtk_widget_set_visible (edit_entry_oauth_clientid, show_oauth);
-		gtk_widget_set_visible (edit_label_oauth_clientid, show_oauth);
-		gtk_widget_set_visible (edit_entry_oauth_clientsecret, show_oauth);
-		gtk_widget_set_visible (edit_label_oauth_clientsecret, show_oauth);
-		gtk_widget_set_visible (edit_entry_oauth_scopes, show_oauth);
-		gtk_widget_set_visible (edit_label_oauth_scopes, show_oauth);
-		gtk_widget_set_visible (edit_entry_oauth_authurl, show_oauth);
-		gtk_widget_set_visible (edit_label_oauth_authurl, show_oauth);
-		gtk_widget_set_visible (edit_entry_oauth_tokenurl, show_oauth);
-		gtk_widget_set_visible (edit_label_oauth_tokenurl, show_oauth);
-		gtk_widget_set_visible (edit_button_oauth_authorize, show_oauth);
-	}
+	/* Enable/disable OAuth authorize button based on login type */
+	gtk_widget_set_sensitive (edit_button_oauth_authorize,
+		login_types_conf[index] == LOGIN_SASL_OAUTHBEARER);
 #endif
 }
 
@@ -1920,6 +1919,57 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	gtk_notebook_append_page (GTK_NOTEBOOK (notebook), scrolledwindow2, gtk_label_new (_("Servers")));
 	gtk_notebook_append_page (GTK_NOTEBOOK (notebook), scrolledwindow4, gtk_label_new (_("Autojoin channels")));
 	gtk_notebook_append_page (GTK_NOTEBOOK (notebook), scrolledwindow5, gtk_label_new (_("Connect commands")));
+
+#ifdef USE_LIBWEBSOCKETS
+	/* OAuth2 configuration tab */
+	{
+		GtkWidget *oauth_grid = gtk_grid_new ();
+		gtk_grid_set_row_spacing (GTK_GRID (oauth_grid), 2);
+		gtk_grid_set_column_spacing (GTK_GRID (oauth_grid), 8);
+		hc_container_set_border_width (oauth_grid, 4);
+
+		edit_entry_oauth_clientid = servlist_create_entry (oauth_grid, _("Client ID:"), 0,
+			net->oauth_client_id, &edit_label_oauth_clientid,
+			_("OAuth2 Client ID from your provider"));
+
+		edit_entry_oauth_clientsecret = servlist_create_entry (oauth_grid, _("Client Secret:"), 1,
+			net->oauth_client_secret, &edit_label_oauth_clientsecret,
+			_("OAuth2 Client Secret (optional for public clients)"));
+		gtk_entry_set_visibility (GTK_ENTRY (edit_entry_oauth_clientsecret), FALSE);
+
+		edit_entry_oauth_scopes = servlist_create_entry (oauth_grid, _("Scopes:"), 2,
+			net->oauth_scopes ? net->oauth_scopes : "openid",
+			&edit_label_oauth_scopes,
+			_("OAuth2 scopes to request (e.g., openid)"));
+
+		edit_entry_oauth_authurl = servlist_create_entry (oauth_grid, _("Authorization URL:"), 3,
+			net->oauth_authorization_url, &edit_label_oauth_authurl,
+			_("OAuth2 authorization endpoint URL"));
+
+		edit_entry_oauth_tokenurl = servlist_create_entry (oauth_grid, _("Token URL:"), 4,
+			net->oauth_token_url, &edit_label_oauth_tokenurl,
+			_("OAuth2 token endpoint URL"));
+
+		/* Authorize button */
+		edit_button_oauth_authorize = gtk_button_new_with_mnemonic (_("_Authorize..."));
+		gtk_widget_set_margin_start (edit_button_oauth_authorize, 4);
+		gtk_widget_set_margin_top (edit_button_oauth_authorize, 8);
+		gtk_widget_set_margin_bottom (edit_button_oauth_authorize, 4);
+		gtk_widget_set_tooltip_text (edit_button_oauth_authorize,
+			_("Open browser to authorize with OAuth2 provider. "
+			  "Requires SASL OAUTHBEARER login method."));
+		gtk_grid_attach (GTK_GRID (oauth_grid), edit_button_oauth_authorize, 1, 5, 1, 1);
+		g_signal_connect (G_OBJECT (edit_button_oauth_authorize), "clicked",
+			G_CALLBACK (servlist_oauth_authorize_cb), NULL);
+
+		/* Disable authorize button unless OAUTHBEARER is selected */
+		if (!selected_net || selected_net->logintype != LOGIN_SASL_OAUTHBEARER)
+			gtk_widget_set_sensitive (edit_button_oauth_authorize, FALSE);
+
+		gtk_notebook_append_page (GTK_NOTEBOOK (notebook), oauth_grid, gtk_label_new (_("OAuth2")));
+	}
+#endif
+
 	gtk_notebook_set_tab_pos (GTK_NOTEBOOK (notebook), GTK_POS_BOTTOM);
 	hc_box_pack_start (hbox1, notebook, TRUE, TRUE, SERVLIST_X_PADDING);
 
@@ -2087,64 +2137,12 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	gtk_entry_set_visibility (GTK_ENTRY (edit_entry_pass), FALSE);
 	if (selected_net && selected_net->logintype == LOGIN_SASLEXTERNAL)
 		gtk_widget_set_sensitive (edit_entry_pass, FALSE);
-
 #ifdef USE_LIBWEBSOCKETS
-	/* OAuth configuration section - visible only when OAUTHBEARER is selected */
-	edit_label_oauth_section = gtk_label_new (NULL);
-	gtk_label_set_markup (GTK_LABEL (edit_label_oauth_section), _("<b>OAuth2 Configuration</b>"));
-	gtk_widget_set_halign (edit_label_oauth_section, GTK_ALIGN_START);
-	gtk_widget_set_margin_start (edit_label_oauth_section, SERVLIST_X_PADDING);
-	gtk_widget_set_margin_top (edit_label_oauth_section, 8);
-	gtk_grid_attach (GTK_GRID (table3), edit_label_oauth_section, 0, 12, 2, 1);
-
-	edit_entry_oauth_clientid = servlist_create_entry (table3, _("Client ID:"), 13,
-		net->oauth_client_id, &edit_label_oauth_clientid,
-		_("OAuth2 Client ID from your provider"));
-
-	edit_entry_oauth_clientsecret = servlist_create_entry (table3, _("Client Secret:"), 14,
-		net->oauth_client_secret, &edit_label_oauth_clientsecret,
-		_("OAuth2 Client Secret (optional for public clients)"));
-	gtk_entry_set_visibility (GTK_ENTRY (edit_entry_oauth_clientsecret), FALSE);
-
-	edit_entry_oauth_scopes = servlist_create_entry (table3, _("Scopes:"), 15,
-		net->oauth_scopes ? net->oauth_scopes : "openid",
-		&edit_label_oauth_scopes,
-		_("OAuth2 scopes to request (e.g., openid)"));
-
-	edit_entry_oauth_authurl = servlist_create_entry (table3, _("Authorization URL:"), 16,
-		net->oauth_authorization_url, &edit_label_oauth_authurl,
-		_("OAuth2 authorization endpoint URL"));
-
-	edit_entry_oauth_tokenurl = servlist_create_entry (table3, _("Token URL:"), 17,
-		net->oauth_token_url, &edit_label_oauth_tokenurl,
-		_("OAuth2 token endpoint URL"));
-
-	/* Authorize button */
-	edit_button_oauth_authorize = gtk_button_new_with_mnemonic (_("_Authorize..."));
-	gtk_widget_set_margin_start (edit_button_oauth_authorize, 4);
-	gtk_widget_set_margin_top (edit_button_oauth_authorize, 4);
-	gtk_widget_set_margin_bottom (edit_button_oauth_authorize, 4);
-	gtk_widget_set_tooltip_text (edit_button_oauth_authorize,
-		_("Open browser to authorize with OAuth2 provider"));
-	gtk_grid_attach (GTK_GRID (table3), edit_button_oauth_authorize, 1, 18, 1, 1);
-	g_signal_connect (G_OBJECT (edit_button_oauth_authorize), "clicked",
-		G_CALLBACK (servlist_oauth_authorize_cb), NULL);
-
-	/* Initially hide OAuth fields - will be shown when OAUTHBEARER is selected */
-	if (!selected_net || selected_net->logintype != LOGIN_SASL_OAUTHBEARER)
+	if (selected_net && selected_net->logintype == LOGIN_SASL_OAUTHBEARER)
 	{
-		gtk_widget_set_visible (edit_label_oauth_section, FALSE);
-		gtk_widget_set_visible (edit_entry_oauth_clientid, FALSE);
-		gtk_widget_set_visible (edit_label_oauth_clientid, FALSE);
-		gtk_widget_set_visible (edit_entry_oauth_clientsecret, FALSE);
-		gtk_widget_set_visible (edit_label_oauth_clientsecret, FALSE);
-		gtk_widget_set_visible (edit_entry_oauth_scopes, FALSE);
-		gtk_widget_set_visible (edit_label_oauth_scopes, FALSE);
-		gtk_widget_set_visible (edit_entry_oauth_authurl, FALSE);
-		gtk_widget_set_visible (edit_label_oauth_authurl, FALSE);
-		gtk_widget_set_visible (edit_entry_oauth_tokenurl, FALSE);
-		gtk_widget_set_visible (edit_label_oauth_tokenurl, FALSE);
-		gtk_widget_set_visible (edit_button_oauth_authorize, FALSE);
+		gtk_widget_set_sensitive (edit_entry_pass, FALSE);
+		gtk_entry_set_placeholder_text (GTK_ENTRY (edit_entry_pass),
+			_("Token managed by OAuth2 tab"));
 	}
 #endif
 
@@ -2155,13 +2153,13 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	gtk_widget_set_margin_end (label34, SERVLIST_X_PADDING);
 	gtk_widget_set_margin_top (label34, SERVLIST_Y_PADDING);
 	gtk_widget_set_margin_bottom (label34, SERVLIST_Y_PADDING);
-	gtk_grid_attach (GTK_GRID (table3), label34, 0, 19, 1, 1);
+	gtk_grid_attach (GTK_GRID (table3), label34, 0, 12, 1, 1);
 	comboboxentry_charset = servlist_create_charsetcombo ();
 	gtk_widget_set_margin_start (comboboxentry_charset, 4);
 	gtk_widget_set_margin_end (comboboxentry_charset, 4);
 	gtk_widget_set_margin_top (comboboxentry_charset, 2);
 	gtk_widget_set_margin_bottom (comboboxentry_charset, 2);
-	gtk_grid_attach (GTK_GRID (table3), comboboxentry_charset, 1, 19, 1, 1);
+	gtk_grid_attach (GTK_GRID (table3), comboboxentry_charset, 1, 12, 1, 1);
 
 
 	/* Rule and Close button */
@@ -2224,6 +2222,7 @@ servlist_open_networks (void)
 	GtkWidget *button_add;
 	GtkWidget *button_remove;
 	GtkWidget *button_edit;
+	extern GtkWidget *parent_window;
 	GtkWidget *button_sort;
 	GtkWidget *hseparator1;
 	GtkWidget *hbuttonbox1;
@@ -2242,7 +2241,19 @@ servlist_open_networks (void)
 	gtk_window_set_role (GTK_WINDOW (servlist), "servlist");
 	gtk_window_set_type_hint (GTK_WINDOW (servlist), GDK_WINDOW_TYPE_HINT_DIALOG);
 	if (current_sess)
+	{
 		gtk_window_set_transient_for (GTK_WINDOW (servlist), GTK_WINDOW (current_sess->gui->window));
+		g_signal_connect_object (servlist, "destroy",
+		                         G_CALLBACK (gtkutil_restore_parent_focus),
+		                         current_sess->gui->window, G_CONNECT_SWAPPED);
+	}
+	else if (parent_window)
+	{
+		gtk_window_set_transient_for (GTK_WINDOW (servlist), GTK_WINDOW (parent_window));
+		g_signal_connect_object (servlist, "destroy",
+		                         G_CALLBACK (gtkutil_restore_parent_focus),
+		                         parent_window, G_CONNECT_SWAPPED);
+	}
 
 	vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_show (vbox1);
