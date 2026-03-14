@@ -75,7 +75,7 @@ static gboolean oauth_http_callback(HcServer *server,
                                     char **response_out,
                                     const char **content_type_out,
                                     int *status_out);
-static void oauth_exchange_code(oauth_session *session, const char *code);
+static gboolean oauth_exchange_code_idle(gpointer user_data);
 static gboolean oauth_timeout_callback(gpointer user_data);
 
 /*
@@ -389,7 +389,7 @@ oauth_generate_state(void)
 
 /*
  * OAUTHBEARER encoding (RFC 7628)
- * Format: n,,\x01auth=Bearer <token>\x01host=<host>\x01port=<port>\x01\x01
+ * Format: n,,\001auth=Bearer <token>\001host=<host>\001port=<port>\001\001
  */
 char *
 oauth_encode_sasl_oauthbearer(const char *token, const char *host, int port)
@@ -403,12 +403,12 @@ oauth_encode_sasl_oauthbearer(const char *token, const char *host, int port)
 	/* Build GS2 header + key-value pairs */
 	if (host && port > 0)
 	{
-		raw = g_strdup_printf("n,,\x01auth=Bearer %s\x01host=%s\x01port=%d\x01\x01",
+		raw = g_strdup_printf("n,,\001auth=Bearer %s\001host=%s\001port=%d\001\001",
 		                      token, host, port);
 	}
 	else
 	{
-		raw = g_strdup_printf("n,,\x01auth=Bearer %s\x01\x01", token);
+		raw = g_strdup_printf("n,,\001auth=Bearer %s\001\001", token);
 	}
 
 	encoded = g_base64_encode((guchar *)raw, strlen(raw));
@@ -584,10 +584,12 @@ oauth_complete_session(oauth_session *session, oauth_token *token, const char *e
 	/* Remove from active sessions */
 	oauth_remove_session(session);
 
-	/* Call completion callback */
+	/* Call completion callback.
+	 * irc_server may be NULL when authorizing from the network list UI;
+	 * user_data carries the context (e.g. ircnet pointer). */
 	if (session->completion_callback)
 	{
-		session->completion_callback(session->irc_server, token, error);
+		session->completion_callback(session->user_data, token, error);
 	}
 
 	/* Free the token (callback should have copied it if needed) */
@@ -595,6 +597,20 @@ oauth_complete_session(oauth_session *session, oauth_token *token, const char *e
 
 	/* Free session */
 	oauth_session_free(session);
+}
+
+/*
+ * Complete the OAuth session with an error, from a deferred callback.
+ * Uses session->error_message as the error string.
+ * Deferred via g_timeout_add to give the LWS thread time to flush the
+ * HTTP response body before we destroy the callback server.
+ */
+static gboolean
+oauth_complete_session_error_idle(gpointer user_data)
+{
+	oauth_session *session = (oauth_session *)user_data;
+	oauth_complete_session(session, NULL, session->error_message);
+	return G_SOURCE_REMOVE;
 }
 
 /*
@@ -644,8 +660,8 @@ oauth_http_callback(HcServer *server,
 		g_free(error);
 
 		/* Complete with error on idle */
-		g_idle_add((GSourceFunc)oauth_complete_session, session);
 		session->error_message = g_strdup("Invalid state parameter");
+		g_timeout_add(500, oauth_complete_session_error_idle, session);
 
 		return TRUE;
 	}
@@ -671,7 +687,7 @@ oauth_http_callback(HcServer *server,
 
 		/* Schedule completion on idle */
 		session->state = OAUTH_STATE_ERROR;
-		g_idle_add((GSourceFunc)oauth_complete_session, session);
+		g_timeout_add(500, oauth_complete_session_error_idle, session);
 
 		return TRUE;
 	}
@@ -689,7 +705,7 @@ oauth_http_callback(HcServer *server,
 		session->state = OAUTH_STATE_ERROR;
 
 		g_free(state);
-		g_idle_add((GSourceFunc)oauth_complete_session, session);
+		g_timeout_add(500, oauth_complete_session_error_idle, session);
 
 		return TRUE;
 	}
@@ -704,13 +720,13 @@ oauth_http_callback(HcServer *server,
 	/* Schedule token exchange on idle */
 	session->state = OAUTH_STATE_EXCHANGING_TOKEN;
 
-	/* Store code for exchange (will be freed in oauth_exchange_code) */
+	/* Store code for exchange (will be freed in oauth_exchange_code_idle) */
 	char *code_copy = g_strdup(code);
 	g_free(code);
 	g_free(state);
 
 	/* Use idle callback to exchange code */
-	g_idle_add((GSourceFunc)oauth_exchange_code, session);
+	g_timeout_add(500, oauth_exchange_code_idle, session);
 
 	/* Store code in session temporarily for the exchange */
 	/* We'll pass it through user_data of the session */
@@ -855,7 +871,7 @@ oauth_token_exchange_callback(GObject *source, GAsyncResult *result, gpointer us
  * This is called on the main thread via g_idle_add
  */
 static gboolean
-oauth_exchange_code_impl(gpointer user_data)
+oauth_exchange_code_idle(gpointer user_data)
 {
 	oauth_session *session = (oauth_session *)user_data;
 	SoupSession *soup_session;
@@ -929,17 +945,6 @@ oauth_exchange_code_impl(gpointer user_data)
 	g_object_unref(msg);
 
 	return G_SOURCE_REMOVE;
-}
-
-static void
-oauth_exchange_code(oauth_session *session, const char *code)
-{
-	/* The code parameter is unused here - we get it from session->error_message
-	 * which was set in oauth_http_callback. This function is called via g_idle_add
-	 * which only passes the session pointer.
-	 */
-	(void)code;
-	oauth_exchange_code_impl(session);
 }
 
 #elif defined(USE_LIBCURL)
@@ -1156,14 +1161,13 @@ oauth_curl_exchange_idle(gpointer user_data)
 /*
  * Exchange authorization code for access token using libcurl
  */
-static void
-oauth_exchange_code(oauth_session *session, const char *code_unused)
+static gboolean
+oauth_exchange_code_idle(gpointer user_data)
 {
+	oauth_session *session = (oauth_session *)user_data;
 	curl_exchange_context *ctx;
 	char *redirect_uri;
 	char *code;
-
-	(void)code_unused;
 
 	/* Retrieve the authorization code stored in error_message field */
 	code = session->error_message;
@@ -1172,7 +1176,7 @@ oauth_exchange_code(oauth_session *session, const char *code_unused)
 	if (!code)
 	{
 		oauth_complete_session(session, NULL, "No authorization code available");
-		return;
+		return G_SOURCE_REMOVE;
 	}
 
 	ctx = g_new0(curl_exchange_context, 1);
@@ -1213,6 +1217,8 @@ oauth_exchange_code(oauth_session *session, const char *code_unused)
 
 	/* Schedule the exchange on idle to avoid blocking the callback */
 	g_idle_add(oauth_curl_exchange_idle, ctx);
+
+	return G_SOURCE_REMOVE;
 }
 
 #else /* !USE_LIBSOUP && !USE_LIBCURL */
@@ -1221,12 +1227,13 @@ oauth_exchange_code(oauth_session *session, const char *code_unused)
  * Exchange authorization code for access token
  * Stub implementation when no HTTP client is available
  */
-static void
-oauth_exchange_code(oauth_session *session, const char *code)
+static gboolean
+oauth_exchange_code_idle(gpointer user_data)
 {
-	(void)code;
+	oauth_session *session = (oauth_session *)user_data;
 	oauth_complete_session(session, NULL,
 	                       "Token exchange not available (no HTTP client library)");
+	return G_SOURCE_REMOVE;
 }
 
 #endif /* USE_LIBSOUP / USE_LIBCURL */

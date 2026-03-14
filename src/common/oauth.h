@@ -121,7 +121,7 @@ char *oauth_generate_state(void);
 
 /*
  * OAUTHBEARER encoding (RFC 7628)
- * Format: n,,\x01auth=Bearer <token>\x01host=<host>\x01port=<port>\x01\x01
+ * Format: n,,^Aauth=Bearer <token>^Ahost=<host>^Aport=<port>^A^A  (^A = 0x01 SOH)
  * Returns base64-encoded string ready for AUTHENTICATE command
  */
 char *oauth_encode_sasl_oauthbearer(const char *token, const char *host, int port);

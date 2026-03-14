@@ -265,16 +265,29 @@ http_callback(struct lws *wsi, enum lws_callback_reasons reason,
 			char *response_body = NULL;
 			const char *content_type = "text/html";
 			int status = 200;
-			char uri[256];
+			const char *uri = (const char *)in;
 			char *query = NULL;
 
-			/* Extract URI and query string */
-			lws_snprintf(uri, sizeof(uri), "%s", (const char *)in);
-			query = strchr(uri, '?');
-			if (query)
+			/* LWS_CALLBACK_HTTP provides only the path in 'in'.
+			 * Query parameters are stored as separate fragments and must
+			 * be reassembled with '&' separators. */
 			{
-				*query = '\0';
-				query++;
+				GString *qs = g_string_new(NULL);
+				char frag[512];
+				int fi = 0, flen;
+
+				while ((flen = lws_hdr_copy_fragment(wsi, frag, sizeof(frag),
+				            WSI_TOKEN_HTTP_URI_ARGS, fi)) > 0)
+				{
+					if (fi > 0)
+						g_string_append_c(qs, '&');
+					g_string_append_len(qs, frag, flen);
+					fi++;
+				}
+				if (qs->len > 0)
+					query = g_string_free(qs, FALSE);
+				else
+					g_string_free(qs, TRUE);
 			}
 
 			if (server->callbacks.on_http(server, "GET", uri, query,
@@ -286,6 +299,8 @@ http_callback(struct lws *wsi, enum lws_callback_reasons reason,
 				unsigned char *p = buffer + LWS_PRE;
 				unsigned char *end = buffer + sizeof(buffer);
 				size_t body_len = response_body ? strlen(response_body) : 0;
+
+				g_free(query);
 
 				if (lws_add_http_common_headers(wsi, status, content_type,
 				                                body_len, &p, end))
@@ -309,6 +324,8 @@ http_callback(struct lws *wsi, enum lws_callback_reasons reason,
 				g_free(response_body);
 				return 0;
 			}
+
+			g_free(query);
 		}
 
 		/* Default 404 response */
