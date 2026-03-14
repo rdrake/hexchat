@@ -683,6 +683,7 @@ session_free (session *killsess)
 	history_free (&killsess->history);
 	g_free (killsess->topic);
 	g_free (killsess->current_modes);
+	g_free (killsess->join_msgid);
 	g_free (killsess->oldest_msgid);
 	g_free (killsess->newest_msgid);
 	g_free (killsess->last_read_msgid);

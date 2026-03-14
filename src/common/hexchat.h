@@ -450,6 +450,7 @@ typedef struct session
 	tab_state_flags last_tab_state; /* before event is handled */
 	gtk_xtext_search_flags lastlog_flags;
 	void (*scrollback_replay_marklast) (struct session *sess);
+	char *join_msgid;		/* msgid of our current JOIN (suppress from chathistory) */
 	char *oldest_msgid;		/* oldest message in buffer (for BEFORE requests) */
 	char *newest_msgid;		/* newest message in buffer (for AFTER requests) */
 	char *last_read_msgid;	/* last read message ID (for read-marker sync) */

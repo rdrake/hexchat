@@ -519,6 +519,17 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 	/* event-playback: Handle JOIN, PART, QUIT, KICK, MODE, TOPIC, NICK */
 	else if (g_ascii_strcasecmp (msg->command, "JOIN") == 0)
 	{
+		/* Skip the JOIN that started *this* session — inbound_ujoin already
+		 * displayed "Now talking on" for it.  Other historical self-JOINs
+		 * (previous visits) are kept so JOIN/PART history stays balanced. */
+		if (sess->join_msgid && msg->msgid &&
+		    strcmp (sess->join_msgid, msg->msgid) == 0)
+		{
+			g_free (nick);
+			g_free (host);
+			return TRUE;  /* consumed, not a duplicate */
+		}
+
 		/* Historical JOIN - display only, don't modify nicklist.
 		 * The current channel membership comes from NAMES, not replayed history. */
 		char *account = NULL;
