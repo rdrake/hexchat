@@ -37,6 +37,7 @@
 #include "../common/servlist.h"
 #include "../common/fe.h"
 #include "fe-gtk.h"
+#include "gtkutil.h"
 #include "chanlist.h"
 
 
@@ -133,6 +134,8 @@ joind_show_dialog (server *serv)
 
 	/* GTK4: GtkDialog is deprecated, use GtkWindow with manual layout */
 	serv->gui->joind_win = dialog1 = gtk_window_new ();
+	if (fe_get_application ())
+		gtk_window_set_application (GTK_WINDOW (dialog1), fe_get_application ());
 	g_snprintf(buf, sizeof(buf), _("Connection Complete - %s"), _(DISPLAY_NAME));
 	gtk_window_set_title (GTK_WINDOW (dialog1), buf);
 	gtk_window_set_transient_for (GTK_WINDOW(dialog1), GTK_WINDOW(serv->front_session->gui->window));

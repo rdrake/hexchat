@@ -744,9 +744,6 @@ servlist_edit_close_cb (GtkWidget *button, gpointer userdata)
 	hc_window_destroy (edit_win);
 	edit_win = NULL;
 
-	/* Ensure focus returns to the server list window */
-	if (serverlist_win)
-		gtkutil_restore_parent_focus (serverlist_win);
 }
 
 static gboolean
@@ -790,6 +787,9 @@ servlist_edit_cb (GtkWidget *but, gpointer none)
 	servlist_commands_populate (selected_net, edit_trees[CMD_TREE]);
 	g_signal_connect (G_OBJECT (edit_win), "close-request",
 						 	G_CALLBACK (servlist_editwin_delete_cb), 0);
+	g_signal_connect (G_OBJECT (edit_win), "close-request",
+	                  G_CALLBACK (gtkutil_close_request_focus_parent),
+	                  serverlist_win);
 	g_signal_connect (G_OBJECT (edit_win), "notify::default-width",
 							G_CALLBACK (servlist_edit_configure_cb), 0);
 	g_signal_connect (G_OBJECT (edit_win), "notify::default-height",
@@ -1894,6 +1894,8 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	char buf[128];
 
 	editwindow = gtk_window_new ();
+	if (fe_get_application ())
+		gtk_window_set_application (GTK_WINDOW (editwindow), fe_get_application ());
 	hc_container_set_border_width (editwindow, 4);
 	g_snprintf (buf, sizeof (buf), _("Edit %s - %s"), net->name, _(DISPLAY_NAME));
 	gtk_window_set_title (GTK_WINDOW (editwindow), buf);
@@ -2234,6 +2236,8 @@ servlist_open_networks (void)
 	char buf[128];
 
 	servlist = gtk_window_new ();
+	if (fe_get_application ())
+		gtk_window_set_application (GTK_WINDOW (servlist), fe_get_application ());
 	hc_container_set_border_width (servlist, 4);
 	g_snprintf(buf, sizeof(buf), _("Network List - %s"), _(DISPLAY_NAME));
 	gtk_window_set_title (GTK_WINDOW (servlist), buf);
@@ -2243,16 +2247,16 @@ servlist_open_networks (void)
 	if (current_sess)
 	{
 		gtk_window_set_transient_for (GTK_WINDOW (servlist), GTK_WINDOW (current_sess->gui->window));
-		g_signal_connect_object (servlist, "destroy",
-		                         G_CALLBACK (gtkutil_restore_parent_focus),
-		                         current_sess->gui->window, G_CONNECT_SWAPPED);
+		g_signal_connect (servlist, "close-request",
+		                  G_CALLBACK (gtkutil_close_request_focus_parent),
+		                  current_sess->gui->window);
 	}
 	else if (parent_window)
 	{
 		gtk_window_set_transient_for (GTK_WINDOW (servlist), GTK_WINDOW (parent_window));
-		g_signal_connect_object (servlist, "destroy",
-		                         G_CALLBACK (gtkutil_restore_parent_focus),
-		                         parent_window, G_CONNECT_SWAPPED);
+		g_signal_connect (servlist, "close-request",
+		                  G_CALLBACK (gtkutil_close_request_focus_parent),
+		                  parent_window);
 	}
 
 	vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);

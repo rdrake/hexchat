@@ -230,11 +230,12 @@ hc_widget_destroy_impl (GtkWidget *widget)
 	hc_widget_destroy_impl(GTK_WIDGET(widget))
 
 /*
- * hc_window_destroy - In GTK4, gtk_window_close() allows proper cleanup
- * and event processing before destruction.
+ * hc_window_destroy - Use gtk_window_destroy() for immediate removal.
+ * gtk_window_close() is asynchronous and on Win32 causes focus to escape
+ * to other applications before the transient parent can reclaim it.
  */
 #define hc_window_destroy(window) \
-	gtk_window_close(GTK_WINDOW(window))
+	gtk_window_destroy(GTK_WINDOW(window))
 
 /*
  * =============================================================================

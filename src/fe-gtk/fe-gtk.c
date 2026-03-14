@@ -60,8 +60,14 @@
 
 cairo_surface_t *channelwin_pix;
 
-/* GTK4 doesn't have gtk_main/gtk_main_quit, so we use a GMainLoop */
-static GMainLoop *gtk4_main_loop = NULL;
+static GtkApplication *hexchat_app = NULL;
+static GMainLoop *hexchat_main_loop = NULL;
+
+GtkApplication *
+fe_get_application (void)
+{
+	return hexchat_app;
+}
 
 #ifdef USE_LIBCANBERRA
 static ca_context *ca_con;
@@ -255,6 +261,16 @@ fe_args (int argc, char *argv[])
 #endif
 
 	gtk_init ();
+
+	/* Create GtkApplication so all windows are grouped for proper focus
+	 * management and platform integration (taskbar grouping, etc.).
+	 * NON_UNIQUE: allow multiple instances (HexChat tradition).
+	 * We don't use g_application_run() — HexChat manages its own main loop
+	 * and startup sequence.  The app is registered so GTK knows about it,
+	 * and windows are associated via gtk_window_set_application(). */
+	hexchat_app = gtk_application_new ("io.github.Hexchat",
+	                                   G_APPLICATION_NON_UNIQUE);
+	g_application_register (G_APPLICATION (hexchat_app), NULL, NULL);
 
 #ifdef HAVE_GTK_MAC
 	osx_app = g_object_new(GTKOSX_TYPE_APPLICATION, NULL);
@@ -521,11 +537,10 @@ fe_main (void)
 	g_signal_connect (G_OBJECT(osx_app), "NSApplicationWillTerminate",
 					G_CALLBACK(gtkosx_application_terminate), NULL);
 #endif
-	/* GTK4: Use GMainLoop since gtk_main() was removed */
-	gtk4_main_loop = g_main_loop_new (NULL, FALSE);
-	g_main_loop_run (gtk4_main_loop);
-	g_main_loop_unref (gtk4_main_loop);
-	gtk4_main_loop = NULL;
+	hexchat_main_loop = g_main_loop_new (NULL, FALSE);
+	g_main_loop_run (hexchat_main_loop);
+	g_main_loop_unref (hexchat_main_loop);
+	hexchat_main_loop = NULL;
 
 	/* sleep for 2 seconds so any QUIT messages are not lost. The  */
 	/* GUI is closed at this point, so the user doesn't even know! */
@@ -543,8 +558,10 @@ fe_cleanup (void)
 void
 fe_exit (void)
 {
-	if (gtk4_main_loop && g_main_loop_is_running (gtk4_main_loop))
-		g_main_loop_quit (gtk4_main_loop);
+	if (hexchat_main_loop && g_main_loop_is_running (hexchat_main_loop))
+		g_main_loop_quit (hexchat_main_loop);
+
+	g_clear_object (&hexchat_app);
 }
 
 int

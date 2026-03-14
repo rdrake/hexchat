@@ -646,22 +646,18 @@ gtkutil_set_icon (GtkWidget *win)
 
 extern GtkWidget *parent_window;	/* maingui.c */
 
-static gboolean
-present_window_idle (gpointer data)
+/* Present the parent window before a transient child is destroyed.
+ * Connected to close-request, which fires BEFORE destruction — this
+ * ensures the parent has focus when the child disappears, preventing
+ * the OS from shifting focus to an unrelated application. */
+gboolean
+gtkutil_close_request_focus_parent (GtkWindow *win, gpointer parent)
 {
-	gtk_window_present (GTK_WINDOW (data));
-	return G_SOURCE_REMOVE;
+	(void)win;
+	gtk_window_present (GTK_WINDOW (parent));
+	return FALSE; /* allow the close to proceed */
 }
 
-/* Schedule a deferred gtk_window_present for the given window.
- * Deferring via g_idle_add lets GTK finish its own destroy/focus
- * processing first, preventing the visible focus-flash that happens
- * with a synchronous present during a destroy handler. */
-void
-gtkutil_restore_parent_focus (GtkWidget *parent)
-{
-	g_idle_add (present_window_idle, parent);
-}
 
 GtkWidget *
 gtkutil_window_new (char *title, char *role, int width, int height, int flags)
@@ -669,6 +665,8 @@ gtkutil_window_new (char *title, char *role, int width, int height, int flags)
 	GtkWidget *win;
 
 	win = gtk_window_new ();
+	if (fe_get_application ())
+		gtk_window_set_application (GTK_WINDOW (win), fe_get_application ());
 	gtkutil_set_icon (win);
 #ifdef WIN32
 	gtk_window_set_wmclass (GTK_WINDOW (win), "HexChat", "hexchat");
@@ -683,14 +681,9 @@ gtkutil_window_new (char *title, char *role, int width, int height, int flags)
 		gtk_window_set_type_hint (GTK_WINDOW (win), GDK_WINDOW_TYPE_HINT_DIALOG);
 		gtk_window_set_transient_for (GTK_WINDOW (win), GTK_WINDOW (parent_window));
 		gtk_window_set_destroy_with_parent (GTK_WINDOW (win), TRUE);
-
-		/* Deferred focus restore: fires after GTK finishes its own destroy
-		 * processing, avoiding the flicker of a synchronous present.
-		 * g_signal_connect_object ensures the idle is cancelled if the
-		 * parent is destroyed first. */
-		g_signal_connect_object (win, "destroy",
-		                         G_CALLBACK (gtkutil_restore_parent_focus),
-		                         parent_window, G_CONNECT_SWAPPED);
+		g_signal_connect (win, "close-request",
+		                  G_CALLBACK (gtkutil_close_request_focus_parent),
+		                  parent_window);
 	}
 
 	return win;
