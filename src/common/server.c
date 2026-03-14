@@ -186,7 +186,7 @@ tcp_send_len (server *serv, char *buf, int len)
 	char *dbuf;
 	int noqueue = !serv->outbound_queue;
 
-	if (!prefs.hex_net_throttle)
+	if (!prefs.hex_net_throttle || !serv->end_of_motd)
 		return server_send_real (serv, buf, len);
 
 	dbuf = g_malloc (len + 2);	/* first byte is the priority */

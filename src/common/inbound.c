@@ -644,7 +644,11 @@ inbound_ujoin (server *serv, char *chan, char *nick, char *ip,
 
 	/* Track join msgid so our own JOIN isn't duplicated in chathistory */
 	if (tags_data->msgid)
+	{
 		chathistory_track_msgid (sess, tags_data->msgid, FALSE);
+		g_free (sess->join_msgid);
+		sess->join_msgid = g_strdup (tags_data->msgid);
+	}
 
 	/* Catch up missed messages via CHATHISTORY LATEST */
 	if (prefs.hex_irc_chathistory_auto && serv->have_chathistory &&
@@ -2738,6 +2742,39 @@ inbound_cap_list (server *serv, char *nick, char *extensions,
 								  NULL, NULL, 0, tags_data->timestamp);
 }
 
+/*
+ * Send a base64-encoded SASL payload with 400-byte chunking.
+ * Builds all AUTHENTICATE lines into a single buffer and sends at once
+ * to avoid the outbound throttle delaying login handshake.
+ */
+static void
+sasl_send_authenticate (server *serv, const char *encoded)
+{
+	GString *buf;
+	size_t len, sent;
+
+	len = strlen (encoded);
+	/* Pre-allocate: each 400 bytes needs "AUTHENTICATE " (13) + chunk + "\r\n" (2) */
+	buf = g_string_sized_new (len + (len / 400 + 1) * 15 + 20);
+
+	sent = 0;
+	while (sent < len)
+	{
+		size_t chunk_size = (len - sent > 400) ? 400 : (len - sent);
+		g_string_append (buf, "AUTHENTICATE ");
+		g_string_append_len (buf, encoded + sent, chunk_size);
+		g_string_append (buf, "\r\n");
+		sent += chunk_size;
+	}
+
+	/* If final chunk was exactly 400 bytes, send empty to signal end */
+	if (len % 400 == 0)
+		g_string_append (buf, "AUTHENTICATE +\r\n");
+
+	tcp_send_len (serv, buf->str, buf->len);
+	g_string_free (buf, TRUE);
+}
+
 static void
 plain_authenticate (server *serv, char *user, char *password)
 {
@@ -2750,24 +2787,7 @@ plain_authenticate (server *serv, char *user, char *password)
 		return;
 	}
 
-	/* long SASL passwords must be split into 400-byte chunks
-	   https://ircv3.net/specs/extensions/sasl-3.1#the-authenticate-command */
-	size_t pass_len = strlen (pass);
-	if (pass_len <= 400)
-		tcp_sendf (serv, "AUTHENTICATE %s\r\n", pass);
-	else
-	{
-		size_t sent = 0;
-		while (sent < pass_len)
-		{
-			char *pass_chunk = g_strndup (pass + sent, 400);
-			tcp_sendf (serv, "AUTHENTICATE %s\r\n", pass_chunk);
-			sent += 400;
-			g_free (pass_chunk);
-		}
-	}
-	if (pass_len % 400 == 0)
-		tcp_sendf (serv, "AUTHENTICATE +\r\n");
+	sasl_send_authenticate (serv, pass);
 }
 
 #ifdef USE_OPENSSL
@@ -2892,27 +2912,7 @@ inbound_sasl_authenticate (server *serv, char *data)
 					tcp_sendf (serv, "AUTHENTICATE *\r\n");
 					return;
 				}
-				/* Handle 400-byte chunking per IRCv3 SASL 3.1 */
-				size_t len = strlen(encoded);
-				if (len <= 400)
-				{
-					tcp_sendf (serv, "AUTHENTICATE %s\r\n", encoded);
-				}
-				else
-				{
-					size_t sent = 0;
-					while (sent < len)
-					{
-						size_t chunk_size = (len - sent > 400) ? 400 : (len - sent);
-						char *chunk = g_strndup(encoded + sent, chunk_size);
-						tcp_sendf (serv, "AUTHENTICATE %s\r\n", chunk);
-						g_free(chunk);
-						sent += chunk_size;
-					}
-					/* If final chunk was exactly 400 bytes, send empty to signal end */
-					if (len % 400 == 0)
-						tcp_sendf (serv, "AUTHENTICATE +\r\n");
-				}
+				sasl_send_authenticate (serv, encoded);
 				g_free(encoded);
 			}
 			break;
