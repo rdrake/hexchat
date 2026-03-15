@@ -1663,6 +1663,8 @@ inbound_login_end (session *sess, char *text, const message_tags_data *tags_data
 
 	if (!serv->end_of_motd)
 	{
+		serv->end_of_motd = TRUE;
+
 		if (prefs.hex_dcc_ip_from_server && serv->use_who)
 		{
 			serv->skip_next_userhost = TRUE;
@@ -1711,8 +1713,6 @@ inbound_login_end (session *sess, char *text, const message_tags_data *tags_data
 
 		/* Discover missed DMs via CHATHISTORY TARGETS on reconnect */
 		chathistory_request_targets_on_reconnect (serv);
-
-		serv->end_of_motd = TRUE;
 	}
 
 	if (prefs.hex_irc_skip_motd && !serv->motd_skipped)
@@ -2932,3 +2932,53 @@ inbound_sasl_error (server *serv)
 	/* Just abort, not much we can do */
 	tcp_sendf (serv, "AUTHENTICATE *\r\n");
 }
+
+#ifdef USE_LIBWEBSOCKETS
+/* Callback after reactive OAuth token refresh (triggered by SASL 904). */
+static void
+oauth_sasl_retry_cb (server *serv, oauth_token *token, const char *error)
+{
+	if (!is_server (serv))
+		return;
+
+	if (error || !token)
+	{
+		PrintTextf (serv->server_session,
+			"OAuth: Token refresh failed: %s\n",
+			error ? error : "unknown error");
+		inbound_sasl_error (serv);
+		serv->waiting_on_sasl = FALSE;
+		if (!serv->sent_capend)
+		{
+			serv->sent_capend = TRUE;
+			tcp_send_len (serv, "CAP END\r\n", 9);
+		}
+		return;
+	}
+
+	oauth_update_server_tokens (serv, token);
+	PrintText (serv->server_session,
+		_("OAuth: Token refreshed, retrying authentication...\n"));
+
+	/* Re-attempt SASL OAUTHBEARER with the new token */
+	inbound_sasl_authenticate (serv, "+");
+}
+
+/* Attempt to refresh the OAuth token after a SASL 904 failure.
+ * Returns TRUE if refresh was initiated (caller should not abort SASL). */
+gboolean
+inbound_sasl_oauth_refresh (server *serv)
+{
+	ircnet *net = serv->network;
+
+	if (!net || serv->oauth_refresh_attempted)
+		return FALSE;
+
+	serv->oauth_refresh_attempted = TRUE;
+
+	PrintText (serv->server_session,
+		_("OAuth: SASL authentication failed, attempting token refresh...\n"));
+
+	return oauth_refresh_token (net, oauth_sasl_retry_cb, serv);
+}
+#endif
