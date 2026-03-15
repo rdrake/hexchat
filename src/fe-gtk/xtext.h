@@ -291,6 +291,10 @@ struct _GtkXText
 	int scroll_top_backoff_ms;		/* current backoff delay (exponential) */
 	void (*scroll_to_top_cb) (GtkXText *xtext, gpointer userdata);
 	gpointer scroll_to_top_userdata;
+
+	/* Typing indicator bottom status strip */
+	char *typing_text;					/* formatted nick list or NULL */
+	unsigned int typing_strip_visible:1;
 };
 
 struct _GtkXTextClass
@@ -358,6 +362,9 @@ GType gtk_xtext_get_type (void);
 textentry *gtk_xtext_find_by_msgid (xtext_buffer *buf, const char *msgid);
 textentry *gtk_xtext_find_by_id (xtext_buffer *buf, guint64 entry_id);
 textentry *gtk_xtext_set_msgid (xtext_buffer *buf, textentry *ent, const char *msgid);
+
+/* Typing indicator bottom status strip */
+void gtk_xtext_set_typing_text (GtkXText *xtext, const char *text);
 guint64 gtk_xtext_get_entry_id (textentry *ent);
 const char *gtk_xtext_get_msgid (textentry *ent);
 

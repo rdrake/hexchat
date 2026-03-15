@@ -108,6 +108,8 @@ guint64 fe_get_last_entry_id (struct session *sess);
 void fe_set_entry_pending (struct session *sess, guint64 entry_id);
 void fe_confirm_entry (struct session *sess, guint64 entry_id);
 void fe_clear_all_pending (struct session *sess);
+/* IRCv3 typing indicators */
+void fe_typing_update (struct session *sess);
 void fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel);
 int fe_userlist_remove (struct session *sess, struct User *user);
 void fe_userlist_rehash (struct session *sess, struct User *user);

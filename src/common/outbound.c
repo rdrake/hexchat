@@ -5508,6 +5508,92 @@ xit:
 	return ret;
 }
 
+/* IRCv3 +typing outbound state machine */
+
+#define TYPING_SEND_INTERVAL_MS  3000
+#define TYPING_SEND_EXPIRE_US    (6 * G_USEC_PER_SEC)
+
+static int typing_send_timer_cb (void *userdata);
+
+static void
+typing_send_active (session *sess)
+{
+	tcp_sendf (sess->server, "@+typing=active TAGMSG %s\r\n", sess->channel);
+	sess->typing_last_sent = g_get_monotonic_time ();
+
+	/* Restart the 3s re-send timer */
+	if (sess->typing_send_timer)
+		fe_timeout_remove (sess->typing_send_timer);
+	sess->typing_send_timer = fe_timeout_add (TYPING_SEND_INTERVAL_MS,
+	                                           typing_send_timer_cb, sess);
+}
+
+static int
+typing_send_timer_cb (void *userdata)
+{
+	session *sess = userdata;
+
+	/* Did the user type since our last send? */
+	if (sess->typing_last_keystroke > sess->typing_last_sent)
+	{
+		typing_send_active (sess);
+		return 0; /* typing_send_active started a new timer */
+	}
+
+	/* User stopped typing — let indicator expire server-side */
+	sess->typing_last_sent = 0;
+	sess->typing_send_timer = 0;
+	return 0;
+}
+
+void
+typing_indicator_cancel (session *sess)
+{
+	if (sess->typing_send_timer)
+	{
+		fe_timeout_remove (sess->typing_send_timer);
+		sess->typing_send_timer = 0;
+	}
+	sess->typing_last_sent = 0;
+}
+
+void
+typing_indicator_keystroke (session *sess)
+{
+	gint64 now;
+
+	if (!prefs.hex_irc_typing_send)
+		return;
+	if (!sess->server || !sess->server->connected)
+		return;
+	if (!sess->server->have_message_tags)
+		return;
+	if (sess->type != SESS_CHANNEL && sess->type != SESS_DIALOG)
+		return;
+	if (!sess->channel[0])
+		return;
+
+	/* Check if input box is empty — if so, cancel */
+	{
+		const char *text = fe_get_inputbox_contents (sess);
+		if (!text || !*text)
+		{
+			typing_indicator_cancel (sess);
+			return;
+		}
+	}
+
+	now = g_get_monotonic_time ();
+	sess->typing_last_keystroke = now;
+
+	/* Send active if never sent or expired server-side */
+	if (sess->typing_last_sent == 0 ||
+	    now - sess->typing_last_sent >= TYPING_SEND_EXPIRE_US)
+	{
+		typing_send_active (sess);
+	}
+}
+
 /* handle one line entered into the input box */
 
 static int
@@ -5515,6 +5601,8 @@ handle_user_input (session *sess, char *text, int history, int nocommand)
 {
 	if (*text == '\0')
 		return 1;
+
+	typing_indicator_cancel (sess);
 
 	if (history)
 		history_add (&sess->history, text);

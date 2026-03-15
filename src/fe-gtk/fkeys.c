@@ -373,6 +373,8 @@ key_handle_key_press (GtkEventControllerKey *controller, guint keyval,
 		break;
 	}
 
+	typing_indicator_keystroke (sess);
+
 	return 0;
 }
 

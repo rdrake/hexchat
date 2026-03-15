@@ -79,6 +79,7 @@ gboolean   sexy_spell_entry_is_checked(SexySpellEntry *entry);
 void       sexy_spell_entry_set_checked(SexySpellEntry *entry, gboolean checked);
 void       sexy_spell_entry_set_parse_attributes (SexySpellEntry *entry, gboolean parse);
 void       sexy_spell_entry_activate_default_languages(SexySpellEntry *entry);
+void       sexy_spell_entry_set_emoji_cache(SexySpellEntry *entry, struct _xtext_emoji_cache *cache);
 
 G_END_DECLS
 

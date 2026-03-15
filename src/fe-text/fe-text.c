@@ -611,6 +611,11 @@ fe_beep (session *sess)
 }
 
 void
+fe_typing_update (session *sess)
+{
+}
+
+void
 fe_add_rawlog (struct server *serv, char *text, int len, int outbound)
 {
 }

@@ -49,6 +49,7 @@
 #include "../common/hexchatc.h"
 #include "palette.h"
 #include "xtext.h"
+#include "xtext-emoji.h"
 #include "gtk-compat.h"
 
 /*
@@ -94,6 +95,7 @@ struct _SexySpellEntryPriv
 	gboolean              checked;
 	gboolean              parseattr;
 	gboolean              spell_actions_installed;
+	xtext_emoji_cache    *emoji_cache;  /* borrowed pointer, NULL = no sprites */
 };
 
 static void sexy_spell_entry_class_init(SexySpellEntryClass *klass);
@@ -102,6 +104,8 @@ static void sexy_spell_entry_init(SexySpellEntry *entry);
 static void sexy_spell_entry_finalize(GObject *obj);
 static void sexy_spell_entry_destroy(GObject *obj);
 static void sexy_spell_entry_snapshot(GtkWidget *widget, GtkSnapshot *snapshot);
+static void sexy_spell_entry_draw_emoji_sprites (SexySpellEntry *entry, GtkSnapshot *snapshot);
+static void sexy_spell_entry_add_emoji_attrs (SexySpellEntry *entry, const char *text, int text_len);
 
 /* GtkEditable handlers */
 static void sexy_spell_entry_changed(GtkEditable *editable, gpointer data);
@@ -895,6 +899,14 @@ sexy_spell_entry_recheck_all(SexySpellEntry *entry)
 		}
 	}
 
+	/* Add emoji shape attributes for Twemoji sprite rendering */
+	if (entry->priv->emoji_cache)
+	{
+		const char *etext = hc_entry_get_text (GTK_WIDGET (entry));
+		if (etext)
+			sexy_spell_entry_add_emoji_attrs (entry, etext, strlen (etext));
+	}
+
 	/* GTK4: Apply attributes to the GtkText child widget */
 	sexy_spell_entry_apply_attributes (entry, entry->priv->attr_list);
 
@@ -923,6 +935,13 @@ sexy_spell_entry_snapshot(GtkWidget *widget, GtkSnapshot *snapshot)
 	}
 
 	GTK_WIDGET_CLASS(parent_class)->snapshot (widget, snapshot);
+
+	/* Draw emoji sprites on top of the rendered text.  PangoAttrShape hides
+	 * the original emoji glyphs and reserves space; GTK4's render-node
+	 * pipeline doesn't invoke pango_cairo shape renderers, so we paint
+	 * the Twemoji sprites here in the snapshot phase. */
+	if (entry->priv->emoji_cache)
+		sexy_spell_entry_draw_emoji_sprites (entry, snapshot);
 }
 
 
@@ -1707,4 +1726,186 @@ sexy_spell_entry_set_parse_attributes (SexySpellEntry *entry, gboolean parse)
 		entry_strsplit_utf8 (GTK_ENTRY (entry), &entry->priv->words, &entry->priv->word_starts, &entry->priv->word_ends);
 		sexy_spell_entry_recheck_all (entry);
 	}
+}
+
+/*
+ * Draw Twemoji sprites over PangoAttrShape placeholders in the snapshot phase.
+ * GTK4's GskPangoRenderer does not invoke pango_cairo shape renderers, so we
+ * create a matching PangoLayout, find emoji positions via index_to_pos(), and
+ * paint the cached cairo surfaces with gtk_snapshot_append_cairo().
+ */
+static void
+sexy_spell_entry_draw_emoji_sprites (SexySpellEntry *entry, GtkSnapshot *snapshot)
+{
+	GtkText *tw;
+	const char *text;
+	int text_len, size, tw_height;
+	gint scroll_offset = 0;
+	PangoLayout *layout;
+	graphene_point_t text_origin;
+	int pos;
+
+	tw = sexy_spell_entry_get_text_widget (entry);
+	if (!tw)
+		return;
+
+	text = gtk_editable_get_text (GTK_EDITABLE (tw));
+	if (!text || !*text)
+		return;
+
+	text_len = strlen (text);
+	size = entry->priv->emoji_cache->target_size;
+
+	g_object_get (tw, "scroll-offset", &scroll_offset, NULL);
+
+	/* Build a layout matching the GtkText's internal one */
+	layout = gtk_widget_create_pango_layout (GTK_WIDGET (tw), text);
+	pango_layout_set_attributes (layout, entry->priv->attr_list);
+	pango_layout_set_single_paragraph_mode (layout, TRUE);
+
+	/* Map GtkText origin into GtkEntry (our widget) coordinates */
+	if (!gtk_widget_compute_point (GTK_WIDGET (tw), GTK_WIDGET (entry),
+	                                &GRAPHENE_POINT_INIT (0, 0), &text_origin))
+	{
+		g_object_unref (layout);
+		return;
+	}
+
+	tw_height = gtk_widget_get_height (GTK_WIDGET (tw));
+
+	/* Use a single cairo context covering the GtkText area for all sprites */
+	{
+		int tw_width = gtk_widget_get_width (GTK_WIDGET (tw));
+		graphene_rect_t bounds = GRAPHENE_RECT_INIT (
+			text_origin.x, text_origin.y, tw_width, tw_height);
+		cairo_t *cr = gtk_snapshot_append_cairo (snapshot, &bounds);
+
+		pos = 0;
+		while (pos < text_len)
+		{
+			int emoji_bytes;
+			char filename[64];
+
+			if (xtext_emoji_detect ((const unsigned char *) text + pos,
+			                         text_len - pos, &emoji_bytes,
+			                         filename, sizeof (filename)))
+			{
+				PangoRectangle pos_rect;
+				cairo_surface_t *sprite;
+
+				pango_layout_index_to_pos (layout, pos, &pos_rect);
+				pango_extents_to_pixels (&pos_rect, NULL);
+
+				sprite = xtext_emoji_cache_get (entry->priv->emoji_cache, filename);
+				if (sprite)
+				{
+					double x = pos_rect.x - scroll_offset;
+					double y = (tw_height - size) / 2.0;
+					cairo_set_source_surface (cr, sprite, x, y);
+					cairo_paint (cr);
+				}
+
+				pos += emoji_bytes;
+			}
+			else
+			{
+				pos += g_utf8_skip[((const unsigned char *) text)[pos]];
+			}
+		}
+
+		cairo_destroy (cr);
+	}
+	g_object_unref (layout);
+}
+
+static void
+sexy_spell_entry_add_emoji_attrs (SexySpellEntry *entry, const char *text, int text_len)
+{
+	int pos = 0;
+
+	while (pos < text_len)
+	{
+		int emoji_bytes;
+		char filename[64];
+
+		if (xtext_emoji_detect ((const unsigned char *) text + pos,
+		                         text_len - pos, &emoji_bytes,
+		                         filename, sizeof (filename)))
+		{
+			int size_pu = entry->priv->emoji_cache->target_size * PANGO_SCALE;
+			int cp_off = 0;
+			gboolean first = TRUE;
+
+			/* Pango splits PangoAttrShape at codepoint/item boundaries,
+			 * giving each codepoint the full shape width.  To get one
+			 * sprite-width for the whole sequence, create per-codepoint
+			 * shape attrs: first codepoint gets full width, the rest
+			 * get zero width. */
+			while (cp_off < emoji_bytes)
+			{
+				int cp_len = g_utf8_skip[((const unsigned char *) text)[pos + cp_off]];
+				PangoRectangle ink, logical;
+				PangoAttribute *attr;
+
+				if (first)
+				{
+					ink.x = 0;
+					ink.y = -size_pu;
+					ink.width = size_pu;
+					ink.height = size_pu;
+					first = FALSE;
+				}
+				else
+				{
+					ink.x = 0;
+					ink.y = -size_pu;
+					ink.width = 0;
+					ink.height = size_pu;
+				}
+				logical = ink;
+
+				attr = pango_attr_shape_new (&ink, &logical);
+				attr->start_index = pos + cp_off;
+				attr->end_index = pos + cp_off + cp_len;
+				pango_attr_list_insert (entry->priv->attr_list, attr);
+
+				cp_off += cp_len;
+			}
+
+			pos += emoji_bytes;
+		}
+		else
+		{
+			pos += g_utf8_skip[((const unsigned char *)text)[pos]];
+		}
+	}
+}
+
+void
+sexy_spell_entry_set_emoji_cache (SexySpellEntry *entry, xtext_emoji_cache *cache)
+{
+	GtkText *tw;
+
+	entry->priv->emoji_cache = cache;
+
+	tw = sexy_spell_entry_get_text_widget (entry);
+	if (!tw)
+		return;
+
+	/* Suppress/restore GTK's "Insert Emoji" context menu item.
+	 * When sprites are on, the system emoji picker inserts native emoji
+	 * which is inconsistent with Twemoji rendering. */
+	{
+		GtkInputHints hints;
+		g_object_get (tw, "input-hints", &hints, NULL);
+		if (cache)
+			hints |= GTK_INPUT_HINT_NO_EMOJI;
+		else
+			hints &= ~GTK_INPUT_HINT_NO_EMOJI;
+		g_object_set (tw, "input-hints", hints, NULL);
+	}
+
+	/* Trigger re-render if widget is already set up */
+	if (entry->priv->words)
+		sexy_spell_entry_recheck_all (entry);
 }

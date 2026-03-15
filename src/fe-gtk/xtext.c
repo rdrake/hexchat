@@ -146,6 +146,7 @@ static textentry *xtext_resolve_marker (xtext_buffer *buf);
 static void gtk_xtext_recalc_widths (xtext_buffer *buf, int);
 static void gtk_xtext_fix_indent (xtext_buffer *buf);
 static int gtk_xtext_find_subline (GtkXText *xtext, textentry *ent, int line);
+static void gtk_xtext_draw_typing_strip (GtkXText *xtext, int width, int height);
 /* static char *gtk_xtext_conv_color (unsigned char *text, int len, int *newlen); */
 /* For use by gtk_xtext_strip_color() and its callers -- */
 struct offlen_s {
@@ -565,7 +566,12 @@ gtk_xtext_adjustment_set (xtext_buffer *buf, int fire_signal)
 		if (upper == 0)
 			upper = 1;
 
-		page_size = alloc.height / buf->xtext->fontsize;
+		{
+			int effective_height = alloc.height;
+			if (buf->xtext->typing_strip_visible)
+				effective_height -= (buf->xtext->fontsize * 2 / 3 + 4);
+			page_size = effective_height / buf->xtext->fontsize;
+		}
 		value = gtk_adjustment_get_value (adj);
 
 		if (value > upper - page_size)
@@ -737,6 +743,9 @@ gtk_xtext_dispose (GObject * object)
 		xtext_emoji_cache_free (xtext->emoji_cache);
 		xtext->emoji_cache = NULL;
 	}
+
+	g_free (xtext->typing_text);
+	xtext->typing_text = NULL;
 
 	if (xtext->font)
 	{
@@ -970,6 +979,18 @@ find_x (GtkXText *xtext, textentry *ent, int x, int subline, int indent)
 	{
 		if (off >= suboff)
 			break;
+		/* Skip full emoji sequences, not just one codepoint */
+		if (xtext->emoji_cache)
+		{
+			int emoji_bytes;
+			if (xtext_emoji_detect (ent->str + off, ent->str_len - off,
+			                         &emoji_bytes, NULL, 0))
+			{
+				len -= emoji_bytes;
+				off += emoji_bytes;
+				continue;
+			}
+		}
 		mbl = charlen (ent->str + off);
 		len -= mbl;
 		off += mbl;
@@ -982,6 +1003,34 @@ find_x (GtkXText *xtext, textentry *ent, int x, int subline, int indent)
 	len = meta->len - (off - meta->off);
 	while (wid > 0)
 	{
+		/* Handle emoji sequences as single units with fontsize width */
+		if (xtext->emoji_cache)
+		{
+			int emoji_bytes;
+			if (xtext_emoji_detect (ent->str + off, ent->str_len - off,
+			                         &emoji_bytes, NULL, 0))
+			{
+				mbw = xtext->fontsize;
+				wid -= mbw;
+				xx += mbw;
+				if (xx >= x)
+					return off;
+				len -= emoji_bytes;
+				off += emoji_bytes;
+				if (len <= 0)
+				{
+					if (meta->emph & EMPH_HIDDEN)
+						hid = list;
+					list = g_slist_next (list);
+					if (list == NULL)
+						return ent->str_len;
+					meta = list->data;
+					off = meta->off;
+					len = meta->len;
+				}
+				continue;
+			}
+		}
 		mbl = charlen (ent->str + off);
 		mbw = backend_get_text_width_emph (xtext, ent->str + off, mbl, meta->emph);
 		wid -= mbw;
@@ -4170,7 +4219,14 @@ gtk_xtext_render_page (GtkXText * xtext)
 	(void)overlap;
 
 	width -= MARGIN;
-	lines_max = ((height + xtext->pixel_offset) / xtext->fontsize) + 1;
+
+	/* Reserve space for typing indicator strip at bottom */
+	{
+		int text_height = height;
+		if (xtext->typing_strip_visible)
+			text_height -= (xtext->fontsize * 2 / 3 + 4);
+		lines_max = ((text_height + xtext->pixel_offset) / xtext->fontsize) + 1;
+	}
 
 	while (ent)
 	{
@@ -4197,6 +4253,62 @@ gtk_xtext_render_page (GtkXText * xtext)
 
 	/* draw the separator line */
 	gtk_xtext_draw_sep (xtext, -1);
+
+	/* draw the typing indicator strip at the bottom */
+	if (xtext->typing_strip_visible && xtext->typing_text)
+		gtk_xtext_draw_typing_strip (xtext, width + MARGIN, height);
+}
+
+static void
+gtk_xtext_draw_typing_strip (GtkXText *xtext, int width, int height)
+{
+	int strip_h = xtext->fontsize * 2 / 3 + 4;
+	int y = height - strip_h;
+	PangoLayout *layout;
+	PangoRectangle logical;
+	int text_x;
+	cairo_t *cr = xtext->cr;
+
+	if (!cr || !xtext->typing_text)
+		return;
+
+	/* Semi-transparent background */
+	cairo_save (cr);
+	gdk_cairo_set_source_rgba (cr, &xtext->palette[XTEXT_BG]);
+	cairo_rectangle (cr, 0, y, width, strip_h);
+	cairo_fill (cr);
+
+	/* Subtle foreground text, right-aligned */
+	layout = pango_layout_new (gtk_widget_get_pango_context (GTK_WIDGET (xtext)));
+	pango_layout_set_font_description (layout, xtext->font->font);
+	pango_layout_set_text (layout, xtext->typing_text, -1);
+	pango_layout_get_pixel_extents (layout, NULL, &logical);
+
+	text_x = width - logical.width - 6;
+	if (text_x < 4)
+		text_x = 4;
+
+	cairo_move_to (cr, text_x, y + (strip_h - logical.height) / 2);
+	cairo_set_source_rgba (cr,
+	                       xtext->palette[XTEXT_FG].red,
+	                       xtext->palette[XTEXT_FG].green,
+	                       xtext->palette[XTEXT_FG].blue,
+	                       0.6);
+	pango_cairo_show_layout (cr, layout);
+	g_object_unref (layout);
+
+	cairo_restore (cr);
+}
+
+void
+gtk_xtext_set_typing_text (GtkXText *xtext, const char *text)
+{
+	g_free (xtext->typing_text);
+	xtext->typing_text = g_strdup (text);
+	xtext->typing_strip_visible = (text != NULL);
+
+	gtk_xtext_adjustment_set (xtext->buffer, TRUE);
+	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 }
 
 void

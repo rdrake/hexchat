@@ -1077,6 +1077,42 @@ fe_clear_all_pending (session *sess)
 }
 
 void
+fe_typing_update (session *sess)
+{
+	GtkXText *xtext;
+
+	if (!sess->gui || !sess->gui->xtext)
+		return;
+	if (sess->gui->is_tab && sess != current_tab)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+
+	if (!sess->typing_nicks)
+	{
+		gtk_xtext_set_typing_text (xtext, NULL);
+	}
+	else
+	{
+		GString *str = g_string_new ("+typing: ");
+		GSList *list;
+		int first = 1;
+
+		for (list = sess->typing_nicks; list; list = list->next)
+		{
+			typing_entry *entry = list->data;
+			if (!first)
+				g_string_append (str, ", ");
+			g_string_append (str, entry->nick);
+			first = 0;
+		}
+
+		gtk_xtext_set_typing_text (xtext, str->str);
+		g_string_free (str, TRUE);
+	}
+}
+
+void
 fe_beep (session *sess)
 {
 #ifdef WIN32

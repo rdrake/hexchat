@@ -76,6 +76,22 @@ clear_channel (session *sess)
 
 	chathistory_cancel_catchup (sess);
 
+	/* Clean up typing indicator state */
+	if (sess->typing_sweep_timer)
+	{
+		fe_timeout_remove (sess->typing_sweep_timer);
+		sess->typing_sweep_timer = 0;
+	}
+	if (sess->typing_send_timer)
+	{
+		fe_timeout_remove (sess->typing_send_timer);
+		sess->typing_send_timer = 0;
+	}
+	g_slist_free_full (sess->typing_nicks, g_free);
+	sess->typing_nicks = NULL;
+	sess->typing_last_sent = 0;
+	sess->typing_last_keystroke = 0;
+
 	fe_clear_channel (sess);
 	userlist_clear (sess);
 	fe_set_nonchannel (sess, FALSE);
@@ -2217,6 +2233,107 @@ inbound_batch_add_message (server *serv, const char *prefix, const char *command
 	return TRUE;
 }
 
+/* IRCv3 +typing indicator helpers */
+
+#define TYPING_EXPIRE_US       (6 * G_USEC_PER_SEC)
+#define TYPING_SWEEP_INTERVAL  2  /* seconds */
+
+static int typing_sweep_cb (void *userdata);
+
+static void
+typing_indicator_update (session *sess, const char *nick)
+{
+	GSList *list;
+	typing_entry *entry;
+
+	if (!prefs.hex_irc_typing_show)
+		return;
+
+	/* Search for existing entry (case-insensitive) */
+	for (list = sess->typing_nicks; list; list = list->next)
+	{
+		entry = list->data;
+		if (!sess->server->p_cmp (entry->nick, nick))
+		{
+			entry->last_seen = g_get_monotonic_time ();
+			fe_typing_update (sess);
+			return;
+		}
+	}
+
+	/* New typer — add to list */
+	entry = g_new0 (typing_entry, 1);
+	safe_strcpy (entry->nick, nick, sizeof (entry->nick));
+	entry->last_seen = g_get_monotonic_time ();
+	sess->typing_nicks = g_slist_prepend (sess->typing_nicks, entry);
+
+	/* Start sweep timer if not running */
+	if (!sess->typing_sweep_timer)
+		sess->typing_sweep_timer = fe_timeout_add_seconds (TYPING_SWEEP_INTERVAL,
+		                                                    typing_sweep_cb, sess);
+
+	fe_typing_update (sess);
+}
+
+static void
+typing_indicator_remove (session *sess, const char *nick)
+{
+	GSList *list;
+	typing_entry *entry;
+
+	for (list = sess->typing_nicks; list; list = list->next)
+	{
+		entry = list->data;
+		if (!sess->server->p_cmp (entry->nick, nick))
+		{
+			sess->typing_nicks = g_slist_remove (sess->typing_nicks, entry);
+			g_free (entry);
+
+			if (!sess->typing_nicks && sess->typing_sweep_timer)
+			{
+				fe_timeout_remove (sess->typing_sweep_timer);
+				sess->typing_sweep_timer = 0;
+			}
+
+			fe_typing_update (sess);
+			return;
+		}
+	}
+}
+
+static int
+typing_sweep_cb (void *userdata)
+{
+	session *sess = userdata;
+	gint64 now = g_get_monotonic_time ();
+	GSList *list, *next;
+	typing_entry *entry;
+	int removed = 0;
+
+	for (list = sess->typing_nicks; list; list = next)
+	{
+		next = list->next;
+		entry = list->data;
+		if (now - entry->last_seen > TYPING_EXPIRE_US)
+		{
+			sess->typing_nicks = g_slist_remove (sess->typing_nicks, entry);
+			g_free (entry);
+			removed++;
+		}
+	}
+
+	if (removed)
+		fe_typing_update (sess);
+
+	if (!sess->typing_nicks)
+	{
+		sess->typing_sweep_timer = 0;
+		return 0;
+	}
+
+	return 1;
+}
+
 /* IRCv3 TAGMSG - tag-only messages
  * Used for typing indicators (+typing), reactions (+react), replies (+reply), etc.
  * See https://ircv3.net/specs/extensions/message-tags#the-tagmsg-tag
@@ -2231,19 +2348,22 @@ inbound_tagmsg (server *serv, char *to, char *nick, char *ip,
 	if (!serv->have_message_tags)
 		return;
 
-	/* Find the appropriate session */
+	/* Ignore self-echo */
+	if (!serv->p_cmp (nick, serv->nick))
+		return;
+
+	/* Find the appropriate session — don't fall back to server console */
 	if (is_channel (serv, to))
 	{
 		sess = find_channel (serv, to);
 		if (!sess)
-			sess = serv->server_session;
+			return;
 	}
 	else
 	{
-		/* Private TAGMSG */
 		sess = find_dialog (serv, nick);
 		if (!sess)
-			sess = serv->server_session;
+			return;
 	}
 
 	/* Handle +typing tag for typing indicators
@@ -2254,23 +2374,13 @@ inbound_tagmsg (server *serv, char *to, char *nick, char *ip,
 		typing_value = g_hash_table_lookup (tags_data->all_tags, "+typing");
 		if (typing_value)
 		{
-			/* TODO: Update typing indicator UI
-			 * For now, we just acknowledge the typing notification.
-			 * Future implementation will:
-			 * - Show typing indicator icon next to nick in userlist
-			 * - Show "User is typing..." in status bar for queries
-			 */
-			if (!strcmp (typing_value, "active"))
+			if (!strcmp (typing_value, "active") || !strcmp (typing_value, "paused"))
 			{
-				/* User started typing */
-			}
-			else if (!strcmp (typing_value, "paused"))
-			{
-				/* User paused typing */
+				typing_indicator_update (sess, nick);
 			}
 			else if (!strcmp (typing_value, "done"))
 			{
-				/* User finished typing */
+				typing_indicator_remove (sess, nick);
 			}
 		}
 
@@ -2284,9 +2394,6 @@ inbound_tagmsg (server *serv, char *to, char *nick, char *ip,
 		 */
 		/* TODO: Implement reply threading */
 	}
-
-	/* Emit plugin hook for TAGMSG so plugins can handle custom tags */
-	/* Note: The full tags are available in tags_data->all_tags */
 }
 
 void

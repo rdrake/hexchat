@@ -191,6 +191,8 @@ struct hexchatprefs
 	unsigned int hex_irc_raw_modes;
 	unsigned int hex_irc_servernotice;
 	unsigned int hex_irc_skip_motd;
+	unsigned int hex_irc_typing_send;
+	unsigned int hex_irc_typing_show;
 	unsigned int hex_irc_wallops;
 	unsigned int hex_irc_who_join;
 	unsigned int hex_irc_whois_front;
@@ -376,6 +378,11 @@ typedef enum {
 	TAB_STATE_NEW_HILIGHT = (1 << 2),
 } tab_state_flags;
 
+typedef struct {
+	char nick[NICKLEN];
+	gint64 last_seen;		/* g_get_monotonic_time() */
+} typing_entry;
+
 typedef struct session
 {
 	/* Per-Channel Alerts */
@@ -461,6 +468,13 @@ typedef struct session
 	const char *current_msgid;	/* temporary: msgid of message being processed (not owned) */
 	GHashTable *known_msgids;	/* hash set of msgids already displayed (for deduplication) */
 	time_t catchup_newest_time;	/* newest timestamp from first catch-up batch (for separator) */
+
+	/* Typing indicators (IRCv3 +typing) */
+	GSList *typing_nicks;			/* GSList of typing_entry* — who's typing here */
+	int typing_sweep_timer;			/* timer to expire stale typers (fires every 2s) */
+	gint64 typing_last_sent;		/* monotonic time of last +typing=active we sent */
+	int typing_send_timer;			/* timer for periodic re-sends (fires every 3s) */
+	gint64 typing_last_keystroke;	/* monotonic time of last keystroke in input box */
 } session;
 
 /* SASL Mechanisms */

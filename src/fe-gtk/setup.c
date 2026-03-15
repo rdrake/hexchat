@@ -43,6 +43,7 @@
 #include "../common/fe.h"
 #endif
 #include "sexy-spell-entry.h"
+#include "xtext.h"
 
 InputStyle *create_input_style (InputStyle *);
 void apply_tree_css (void);
@@ -2085,6 +2086,10 @@ setup_apply_to_sess (session_gui *gui)
 
 	sexy_spell_entry_set_checked ((SexySpellEntry *)gui->input_box, prefs.hex_gui_input_spell);
 	sexy_spell_entry_set_parse_attributes ((SexySpellEntry *)gui->input_box, prefs.hex_gui_input_attr);
+
+	/* Update emoji cache — xtext's cache may have been (re)created or destroyed */
+	sexy_spell_entry_set_emoji_cache ((SexySpellEntry *)gui->input_box,
+	                                   GTK_XTEXT (gui->xtext)->emoji_cache);
 }
 
 static void

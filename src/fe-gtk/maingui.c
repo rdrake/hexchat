@@ -1022,6 +1022,9 @@ mg_populate (session *sess)
 
 	gtk_xtext_buffer_show (GTK_XTEXT (gui->xtext), res->buffer, render);
 
+	/* Update typing indicator strip for this tab */
+	fe_typing_update (sess);
+
 	if (gui->is_tab)
 		gtk_widget_set_sensitive (gui->menu, TRUE);
 
@@ -3818,6 +3821,12 @@ mg_create_entry (session *sess, GtkWidget *box)
 	/* GTK4: populate_popup doesn't exist, context menu handled differently */
 	g_signal_connect (G_OBJECT (entry), "word-check",
 							G_CALLBACK (mg_spellcheck_cb), NULL);
+
+	/* Share xtext's emoji cache with the input box for consistent rendering */
+	if (gui->xtext && GTK_XTEXT (gui->xtext)->emoji_cache)
+		sexy_spell_entry_set_emoji_cache (SEXY_SPELL_ENTRY (entry),
+		                                   GTK_XTEXT (gui->xtext)->emoji_cache);
+
 	gtk_widget_grab_focus (entry);
 }
 

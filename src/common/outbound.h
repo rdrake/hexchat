@@ -39,4 +39,8 @@ int menu_streq (const char *s1, const char *s2, int def);
 session *open_query (server *serv, char *nick, gboolean focus_existing);
 gboolean load_perform_file (session *sess, char *file);
 
+/* IRCv3 typing indicators — outbound state machine */
+void typing_indicator_keystroke (session *sess);
+void typing_indicator_cancel (session *sess);
+
 #endif
