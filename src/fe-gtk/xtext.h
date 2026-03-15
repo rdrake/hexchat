@@ -107,8 +107,8 @@ typedef struct {
 	textentry *text_first;
 	textentry *text_last;
 
-	textentry *last_ent_start;	  /* this basically describes the last rendered */
-	textentry *last_ent_end;	  /* selection. */
+	guint64 last_ent_start_id;	  /* this basically describes the last rendered */
+	guint64 last_ent_end_id;	  /* selection (entry_ids, 0 = not set). */
 	int last_offset_start;
 	int last_offset_end;
 
@@ -121,7 +121,7 @@ typedef struct {
 	int num_lines;
 	int indent;						  /* position of separator (pixels) from left */
 
-	textentry *marker_pos;
+	guint64 marker_pos_id;				/* entry_id of first unread message (0 = not set) */
 	marker_reset_reason marker_state;
 
 	int window_width;				/* window size when last rendered. */
@@ -141,7 +141,7 @@ typedef struct {
 	GList *curmark;			/* current item in ent->marks */
 	offsets_t curdata;		/* current offset info, from *curmark */
 	GRegex *search_re;		/* Compiled regular expression */
-	textentry *hintsearch;	/* textentry found for last search */
+	guint64 hintsearch_id;	/* entry_id found for last search (0 = not set) */
 
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	GHashTable *entries_by_msgid;	/* msgid string → textentry* for O(1) lookup */

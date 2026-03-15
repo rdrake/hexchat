@@ -140,6 +140,7 @@ static void gtk_xtext_adjustment_changed (GtkAdjustment * adj,
 static void gtk_xtext_scroll_adjustments (GtkXText *xtext, GtkAdjustment *hadj,
 										GtkAdjustment *vadj);
 static int gtk_xtext_render_ents (GtkXText * xtext, textentry *, textentry *);
+static textentry *xtext_resolve_marker (xtext_buffer *buf);
 static void gtk_xtext_recalc_widths (xtext_buffer *buf, int);
 static void gtk_xtext_fix_indent (xtext_buffer *buf);
 static int gtk_xtext_find_subline (GtkXText *xtext, textentry *ent, int line);
@@ -903,14 +904,14 @@ gtk_xtext_selection_clear (xtext_buffer *buf)
 	textentry *ent;
 	int ret = 0;
 
-	ent = buf->last_ent_start;
+	ent = gtk_xtext_find_by_id (buf, buf->last_ent_start_id);
 	while (ent)
 	{
 		if (ent->mark_start != -1)
 			ret = 1;
 		ent->mark_start = -1;
 		ent->mark_end = -1;
-		if (ent == buf->last_ent_end)
+		if (ent->entry_id == buf->last_ent_end_id)
 			break;
 		ent = ent->next;
 	}
@@ -1147,12 +1148,12 @@ gtk_xtext_draw_marker (GtkXText * xtext, textentry * ent, int y)
 
 	/* marker_pos points to the FIRST UNREAD message. The marker should be drawn
 	 * ABOVE marker_pos (between last read and first unread). */
-	if (xtext->buffer->marker_pos == ent)
+	if (xtext->buffer->marker_pos_id == ent->entry_id)
 	{
 		/* We're rendering marker_pos (first unread) - draw marker at top of entry */
 		render_y = y + 4;
 	}
-	else if (xtext->buffer->marker_pos == ent->next && ent->next != NULL)
+	else if (ent->next != NULL && xtext->buffer->marker_pos_id == ent->next->entry_id)
 	{
 		/* We're rendering the last read entry - draw marker after all sublines */
 		render_y = y + xtext->fontsize * g_slist_length (ent->sublines) + 4;
@@ -1291,7 +1292,7 @@ gtk_xtext_selection_up (GtkXText *xtext, textentry *start, textentry *end,
 		gtk_xtext_render_ents (xtext, start->next, end);
 
 	/* now the incomplete upper line */
-	if (start == xtext->buffer->last_ent_start)
+	if (start->entry_id == xtext->buffer->last_ent_start_id)
 		xtext->jump_in_offset = xtext->buffer->last_offset_start;
 	else
 		xtext->jump_in_offset = start_offset;
@@ -1312,7 +1313,7 @@ gtk_xtext_selection_down (GtkXText *xtext, textentry *start, textentry *end,
 		gtk_xtext_render_ents (xtext, start, end->prev);
 
 	/* now the incomplete bottom line */
-	if (end == xtext->buffer->last_ent_end)
+	if (end->entry_id == xtext->buffer->last_ent_end_id)
 		xtext->jump_out_offset = xtext->buffer->last_offset_end;
 	else
 		xtext->jump_out_offset = end_offset;
@@ -1332,7 +1333,7 @@ gtk_xtext_selection_render (GtkXText *xtext, textentry *start_ent, textentry *en
 	xtext->skip_stamp = TRUE;
 
 	/* force an optimized render if there was no previous selection */
-	if (xtext->buffer->last_ent_start == NULL && start_ent == end_ent)
+	if (xtext->buffer->last_ent_start_id == 0 && start_ent == end_ent)
 	{
 		xtext->buffer->last_offset_start = start_offset;
 		xtext->buffer->last_offset_end = end_offset;
@@ -1340,8 +1341,8 @@ gtk_xtext_selection_render (GtkXText *xtext, textentry *start_ent, textentry *en
 	}
 
 	/* mark changed within 1 ent only? */
-	if (xtext->buffer->last_ent_start == start_ent &&
-		 xtext->buffer->last_ent_end == end_ent)
+	if (xtext->buffer->last_ent_start_id == start_ent->entry_id &&
+		 xtext->buffer->last_ent_end_id == end_ent->entry_id)
 	{
 		/* when only 1 end of the selection is changed, we can really
 			save on rendering */
@@ -1393,14 +1394,15 @@ lamejump:
 		xtext->jump_in_offset = 0;
 	}
 	/* marking downward? */
-	else if (xtext->buffer->last_ent_start == start_ent &&
+	else if (xtext->buffer->last_ent_start_id == start_ent->entry_id &&
 				xtext->buffer->last_offset_start == start_offset)
 	{
 		/* find the range that covers both old and new selection */
+		textentry *last_end = gtk_xtext_find_by_id (xtext->buffer, xtext->buffer->last_ent_end_id);
 		ent = start_ent;
 		while (ent)
 		{
-			if (ent == xtext->buffer->last_ent_end)
+			if (ent == last_end)
 			{
 				gtk_xtext_selection_down (xtext, ent, end_ent, end_offset);
 				/*gtk_xtext_render_ents (xtext, ent, end_ent);*/
@@ -1408,28 +1410,29 @@ lamejump:
 			}
 			if (ent == end_ent)
 			{
-				gtk_xtext_selection_down (xtext, ent, xtext->buffer->last_ent_end, end_offset);
-				/*gtk_xtext_render_ents (xtext, ent, xtext->buffer->last_ent_end);*/
+				gtk_xtext_selection_down (xtext, ent, last_end, end_offset);
+				/*gtk_xtext_render_ents (xtext, ent, last_end);*/
 				break;
 			}
 			ent = ent->next;
 		}
 	}
 	/* marking upward? */
-	else if (xtext->buffer->last_ent_start != NULL &&
-				xtext->buffer->last_ent_end == end_ent &&
+	else if (xtext->buffer->last_ent_start_id != 0 &&
+				xtext->buffer->last_ent_end_id == end_ent->entry_id &&
 				xtext->buffer->last_offset_end == end_offset)
 	{
+		textentry *last_start = gtk_xtext_find_by_id (xtext->buffer, xtext->buffer->last_ent_start_id);
 		ent = end_ent;
 		while (ent)
 		{
-			if (ent == start_ent && xtext->buffer->last_ent_start)
+			if (ent == start_ent && last_start)
 			{
-				gtk_xtext_selection_up (xtext, xtext->buffer->last_ent_start, ent, start_offset);
-				/*gtk_xtext_render_ents (xtext, xtext->buffer->last_ent_start, ent);*/
+				gtk_xtext_selection_up (xtext, last_start, ent, start_offset);
+				/*gtk_xtext_render_ents (xtext, last_start, ent);*/
 				break;
 			}
-			if (ent == xtext->buffer->last_ent_start)
+			if (ent == last_start)
 			{
 				gtk_xtext_selection_up (xtext, start_ent, ent, start_offset);
 				/*gtk_xtext_render_ents (xtext, start_ent, ent);*/
@@ -1440,15 +1443,17 @@ lamejump:
 	}
 	else	/* cross-over mark (stretched or shrunk at both ends) */
 	{
+		textentry *old_start = gtk_xtext_find_by_id (xtext->buffer, xtext->buffer->last_ent_start_id);
+		textentry *old_end = gtk_xtext_find_by_id (xtext->buffer, xtext->buffer->last_ent_end_id);
 		/* unrender the old mark */
-		gtk_xtext_render_ents (xtext, xtext->buffer->last_ent_start, xtext->buffer->last_ent_end);
+		gtk_xtext_render_ents (xtext, old_start, old_end);
 		/* now render the new mark, but skip overlaps */
-		if (start_ent == xtext->buffer->last_ent_start)
+		if (start_ent == old_start)
 		{
 			/* if the new mark is a sub-set of the old, do nothing */
 			if (start_ent != end_ent)
 				gtk_xtext_render_ents (xtext, start_ent->next, end_ent);
-		} else if (end_ent == xtext->buffer->last_ent_end)
+		} else if (end_ent == old_end)
 		{
 			/* if the new mark is a sub-set of the old, do nothing */
 			if (start_ent != end_ent)
@@ -1457,8 +1462,8 @@ lamejump:
 			gtk_xtext_render_ents (xtext, start_ent, end_ent);
 	}
 
-	xtext->buffer->last_ent_start = start_ent;
-	xtext->buffer->last_ent_end = end_ent;
+	xtext->buffer->last_ent_start_id = start_ent->entry_id;
+	xtext->buffer->last_ent_end_id = end_ent->entry_id;
 	xtext->buffer->last_offset_start = start_offset;
 	xtext->buffer->last_offset_end = end_offset;
 
@@ -1612,7 +1617,7 @@ gtk_xtext_scrolldown_timeout (GtkXText * xtext)
 	adj_upper = gtk_adjustment_get_upper (adj);
 	adj_page_size = gtk_adjustment_get_page_size (adj);
 
-	if (buf->last_ent_end == NULL ||	/* If context has changed OR */
+	if (buf->last_ent_end_id == 0 ||	/* If context has changed OR */
 		 buf->pagetop_ent == NULL ||	/* pagetop_ent is reset OR */
 		 p_y <= win_height ||			/* pointer not below bottom margin OR */
 		 adj_value >= adj_upper - adj_page_size) 	/* we're scrolled to bottom */
@@ -1625,7 +1630,7 @@ gtk_xtext_scrolldown_timeout (GtkXText * xtext)
 	xtext->select_start_adj++;
 	gtk_adjustment_set_value (adj, adj_value + 1);
 	gtk_xtext_selection_draw (xtext, NULL, TRUE);
-	gtk_xtext_render_ents (xtext, buf->pagetop_ent->next, buf->last_ent_end);
+	gtk_xtext_render_ents (xtext, buf->pagetop_ent->next, gtk_xtext_find_by_id (buf, buf->last_ent_end_id));
 	/* GTK3: Queue redraw after scroll selection update */
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	xtext->scroll_tag = g_timeout_add (gtk_xtext_timeout_ms (xtext, p_y - win_height),
@@ -1649,7 +1654,7 @@ gtk_xtext_scrollup_timeout (GtkXText * xtext)
 	p_y = xtext->select_end_y;
 	adj_value = gtk_adjustment_get_value (adj);
 
-	if (buf->last_ent_start == NULL ||	/* If context has changed OR */
+	if (buf->last_ent_start_id == 0 ||	/* If context has changed OR */
 		 buf->pagetop_ent == NULL ||		/* pagetop_ent is reset OR */
 		 p_y >= 0 ||							/* not above top margin OR */
 		 adj_value == 0)						/* we're scrolled to the top */
@@ -1671,7 +1676,7 @@ gtk_xtext_scrollup_timeout (GtkXText * xtext)
 	xtext->select_start_y += delta_y;
 	xtext->select_start_adj = adj_value;
 	gtk_xtext_selection_draw (xtext, NULL, TRUE);
-	gtk_xtext_render_ents (xtext, buf->pagetop_ent->prev, buf->last_ent_end);
+	gtk_xtext_render_ents (xtext, buf->pagetop_ent->prev, gtk_xtext_find_by_id (buf, buf->last_ent_end_id));
 	/* GTK3: Queue redraw after scroll selection update */
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	xtext->scroll_tag = g_timeout_add (gtk_xtext_timeout_ms (xtext, p_y),
@@ -1985,8 +1990,8 @@ gtk_xtext_motion_notify (GtkEventControllerMotion *controller, double event_x, d
 		if (redraw)
 		{
 			xtext->force_stamp = TRUE;
-			gtk_xtext_render_ents (xtext, xtext->buffer->last_ent_start,
-										  xtext->buffer->last_ent_end);
+			gtk_xtext_render_ents (xtext, gtk_xtext_find_by_id (xtext->buffer, xtext->buffer->last_ent_start_id),
+										  gtk_xtext_find_by_id (xtext->buffer, xtext->buffer->last_ent_end_id));
 			xtext->force_stamp = FALSE;
 			gtk_widget_queue_draw (widget);
 		}
@@ -2095,26 +2100,34 @@ gtk_xtext_unselect (GtkXText *xtext)
 	xtext->skip_border_fills = TRUE;
 	xtext->skip_stamp = TRUE;
 
-	xtext->jump_in_offset = buf->last_ent_start->mark_start;
-	/* just a single ent was marked? */
-	if (buf->last_ent_start == buf->last_ent_end)
 	{
-		xtext->jump_out_offset = buf->last_ent_start->mark_end;
-		buf->last_ent_end = NULL;
+		textentry *sel_start = gtk_xtext_find_by_id (buf, buf->last_ent_start_id);
+		textentry *sel_end = gtk_xtext_find_by_id (buf, buf->last_ent_end_id);
+
+		if (sel_start)
+			xtext->jump_in_offset = sel_start->mark_start;
+		/* just a single ent was marked? */
+		if (buf->last_ent_start_id == buf->last_ent_end_id)
+		{
+			if (sel_start)
+				xtext->jump_out_offset = sel_start->mark_end;
+			buf->last_ent_end_id = 0;
+			sel_end = NULL;
+		}
+
+		gtk_xtext_selection_clear (xtext->buffer);
+
+		/* FIXME: use jump_out on multi-line selects too! */
+		xtext->jump_in_offset = 0;
+		xtext->jump_out_offset = 0;
+		gtk_xtext_render_ents (xtext, sel_start, sel_end);
 	}
-
-	gtk_xtext_selection_clear (xtext->buffer);
-
-	/* FIXME: use jump_out on multi-line selects too! */
-	xtext->jump_in_offset = 0;
-	xtext->jump_out_offset = 0;
-	gtk_xtext_render_ents (xtext, buf->last_ent_start, buf->last_ent_end);
 
 	xtext->skip_border_fills = FALSE;
 	xtext->skip_stamp = FALSE;
 
-	xtext->buffer->last_ent_start = NULL;
-	xtext->buffer->last_ent_end = NULL;
+	xtext->buffer->last_ent_start_id = 0;
+	xtext->buffer->last_ent_end_id = 0;
 
 	/* GTK3: Queue redraw to ensure selection is cleared */
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
@@ -2166,7 +2179,7 @@ gtk_xtext_button_release (GtkGestureClick *gesture, int n_press, double x, doubl
 		gtk_grab_remove (widget);
 
 		/* got a new selection? */
-		if (xtext->buffer->last_ent_start)
+		if (xtext->buffer->last_ent_start_id)
 		{
 			xtext->color_paste = FALSE;
 			if (state & STATE_CTRL || prefs.hex_text_autocopy_color)
@@ -2186,7 +2199,7 @@ gtk_xtext_button_release (GtkGestureClick *gesture, int n_press, double x, doubl
 
 		if (xtext->select_start_x == (int)x &&
 			 xtext->select_start_y == (int)y &&
-			 xtext->buffer->last_ent_start)
+			 xtext->buffer->last_ent_start_id)
 		{
 			gtk_xtext_unselect (xtext);
 			xtext->mark_stamp = FALSE;
@@ -2309,7 +2322,7 @@ static gboolean
 gtk_xtext_selection_kill (GtkXText *xtext, void *event)
 {
 #ifndef WIN32
-	if (xtext->buffer->last_ent_start)
+	if (xtext->buffer->last_ent_start_id)
 		gtk_xtext_unselect (xtext);
 #endif
 	return TRUE;
@@ -2325,12 +2338,12 @@ gtk_xtext_is_selecting (GtkXText *xtext)
 	if (!buf)
 		return FALSE;
 
-	for (ent = buf->last_ent_start; ent; ent = ent->next)
+	for (ent = gtk_xtext_find_by_id (buf, buf->last_ent_start_id); ent; ent = ent->next)
 	{
 		if (ent->mark_start != -1 && ent->mark_end - ent->mark_start > 0)
 			return TRUE;
 
-		if (ent == buf->last_ent_end)
+		if (ent->entry_id == buf->last_ent_end_id)
 			break;
 	}
 
@@ -2354,7 +2367,7 @@ gtk_xtext_selection_get_text (GtkXText *xtext, int *len_ret)
 
 	/* first find out how much we need to malloc ... */
 	len = 0;
-	ent = buf->last_ent_start;
+	ent = gtk_xtext_find_by_id (buf, buf->last_ent_start_id);
 	while (ent)
 	{
 		if (ent->mark_start != -1)
@@ -2373,7 +2386,7 @@ gtk_xtext_selection_get_text (GtkXText *xtext, int *len_ret)
 			else
 				len++;
 		}
-		if (ent == buf->last_ent_end)
+		if (ent->entry_id == buf->last_ent_end_id)
 			break;
 		ent = ent->next;
 	}
@@ -2383,7 +2396,7 @@ gtk_xtext_selection_get_text (GtkXText *xtext, int *len_ret)
 
 	/* now allocate mem and copy buffer */
 	pos = txt = g_malloc (len);
-	ent = buf->last_ent_start;
+	ent = gtk_xtext_find_by_id (buf, buf->last_ent_start_id);
 	while (ent)
 	{
 		if (ent->mark_start != -1)
@@ -2411,7 +2424,7 @@ gtk_xtext_selection_get_text (GtkXText *xtext, int *len_ret)
 				pos += ent->mark_end - ent->mark_start;
 			}
 		}
-		if (ent == buf->last_ent_end)
+		if (ent->entry_id == buf->last_ent_end_id)
 			break;
 		ent = ent->next;
 	}
@@ -4125,22 +4138,12 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 	if (ent == buffer->pagetop_ent)
 		buffer->pagetop_ent = NULL;
 
-	if (ent == buffer->last_ent_start)
-	{
-		buffer->last_ent_start = ent->next;
-		buffer->last_offset_start = 0;
-	}
+	/* last_ent_start_id / last_ent_end_id: stale IDs self-heal (resolve to NULL) */
 
-	if (ent == buffer->last_ent_end)
-	{
-		buffer->last_ent_start = NULL;
-		buffer->last_ent_end = NULL;
-	}
-
-	if (buffer->marker_pos == ent)
+	if (buffer->marker_pos_id == ent->entry_id)
 	{
 		/* Allow for "Marker line reset because exceeded scrollback limit. to appear. */
-		buffer->marker_pos = ent->next;
+		buffer->marker_pos_id = ent->next ? ent->next->entry_id : 0;
 		buffer->marker_state = MARKER_RESET_BY_KILL;
 	}
 
@@ -4272,7 +4275,7 @@ gtk_xtext_clear (xtext_buffer *buf, int lines)
 			lines *= -1;
 			while (lines)
 			{
-				if (buf->text_last == buf->marker_pos)
+				if (buf->text_last && buf->text_last->entry_id == buf->marker_pos_id)
 					marker_reset = TRUE;
 				gtk_xtext_remove_bottom (buf);
 				lines--;
@@ -4283,7 +4286,7 @@ gtk_xtext_clear (xtext_buffer *buf, int lines)
 			/* delete lines from top */
 			while (lines)
 			{
-				if (buf->text_first == buf->marker_pos)
+				if (buf->text_first && buf->text_first->entry_id == buf->marker_pos_id)
 					marker_reset = TRUE;
 				gtk_xtext_remove_top (buf);
 				lines--;
@@ -4298,9 +4301,9 @@ gtk_xtext_clear (xtext_buffer *buf, int lines)
 		if (buf->xtext->auto_indent)
 			buf->indent = MARGIN;
 		buf->scrollbar_down = TRUE;
-		buf->last_ent_start = NULL;
-		buf->last_ent_end = NULL;
-		buf->marker_pos = NULL;
+		buf->last_ent_start_id = 0;
+		buf->last_ent_end_id = 0;
+		buf->marker_pos_id = 0;
 		if (buf->text_first)
 			marker_reset = TRUE;
 		dontscroll (buf);
@@ -4370,7 +4373,7 @@ gtk_xtext_check_ent_visibility (GtkXText * xtext, textentry *find_ent, int add)
 void
 gtk_xtext_check_marker_visibility (GtkXText * xtext)
 {
-	if (gtk_xtext_check_ent_visibility (xtext, xtext->buffer->marker_pos, 1))
+	if (gtk_xtext_check_ent_visibility (xtext, xtext_resolve_marker (xtext->buffer), 1))
 		xtext->buffer->marker_seen = TRUE;
 }
 
@@ -4496,9 +4499,9 @@ gtk_xtext_search_textentry_add (xtext_buffer *buf, textentry *ent, GList *gl, gb
 	if (gl)
 	{
 		buf->search_found = (pre? g_list_prepend: g_list_append) (buf->search_found, ent);
-		if (pre == FALSE && buf->hintsearch == NULL)
+		if (pre == FALSE && buf->hintsearch_id == 0)
 		{
-			buf->hintsearch = ent;
+			buf->hintsearch_id = ent->entry_id;
 		}
 	}
 }
@@ -4519,9 +4522,9 @@ gtk_xtext_search_textentry_del (xtext_buffer *buf, textentry *ent)
 	{
 		buf->pagetop_ent = NULL;
 	}
-	if (buf->hintsearch == ent)
+	if (buf->hintsearch_id == ent->entry_id)
 	{
-		buf->hintsearch = NULL;
+		buf->hintsearch_id = 0;
 	}
 	buf->search_found = g_list_remove (buf->search_found, ent);
 }
@@ -4571,7 +4574,7 @@ gtk_xtext_search_init (xtext_buffer *buf, const gchar *text, gtk_xtext_search_fl
 	{
 		return TRUE;
 	}
-	buf->hintsearch = buf->cursearch? buf->cursearch->data: NULL;
+	buf->hintsearch_id = buf->cursearch? ((textentry *)buf->cursearch->data)->entry_id: 0;
 	gtk_xtext_search_fini (buf);
 	buf->search_text = g_strdup (text);
 	if (flags & regexp)
@@ -4690,7 +4693,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 			}
 
 			/* If user changed the search, let's look starting where he was */
-			else if (buf->hintsearch)
+			else if (buf->hintsearch_id)
 			{
 				GList *mark;
 				offsets_t last, this;
@@ -4699,7 +4702,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 				 * the first character of an occurrence on this line for this new search
 				 * is within that former item, use the occurrence as current.
 				 */
-				ent = buf->hintsearch;
+				ent = gtk_xtext_find_by_id (buf, buf->hintsearch_id);
 				last.u = buf->curdata.u;
 				for (mark = ent->marks; mark; mark = mark->next)
 				{
@@ -4709,7 +4712,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 				}
 				if (mark == NULL)
 				{
-					for (ent = buf->hintsearch; ent; ent = BACKWARD? ent->prev: ent->next)
+					for (ent = gtk_xtext_find_by_id (buf, buf->hintsearch_id); ent; ent = BACKWARD? ent->prev: ent->next)
 						if (ent->marks)
 							break;
 					mark = ent? FIRSTLAST (ent->marks): NULL;
@@ -4728,16 +4731,17 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 			buf->curdata.u = (buf->curmark)? GPOINTER_TO_UINT (buf->curmark->data): 0;
 		}
 	}
-	buf->hintsearch = ent;
+	buf->hintsearch_id = ent ? ent->entry_id : 0;
 
 	if (!gtk_xtext_check_ent_visibility (xtext, ent, 1))
 	{
 		GtkAdjustment *adj = xtext->adj;
 		float value;
+		textentry *hint = ent;
 
 		buf->pagetop_ent = NULL;
 		for (value = 0, ent = buf->text_first;
-			  ent && ent != buf->hintsearch; ent = ent->next)
+			  ent && ent != hint; ent = ent->next)
 		{
 			value += g_slist_length (ent->sublines);
 		}
@@ -4758,7 +4762,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 
-	return buf->hintsearch;
+	return gtk_xtext_find_by_id (buf, buf->hintsearch_id);
 }
 #undef BACKWARD
 #undef FIRSTLAST
@@ -4851,10 +4855,10 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	ent->sublines = NULL;
 	buf->num_lines += gtk_xtext_lines_taken (buf, ent);
 
-	if ((buf->marker_pos == NULL || buf->marker_seen) && (buf->xtext->buffer != buf || 
+	if ((buf->marker_pos_id == 0 || buf->marker_seen) && (buf->xtext->buffer != buf ||
 		!gtk_window_has_toplevel_focus (GTK_WINDOW (gtk_widget_get_toplevel (GTK_WIDGET (buf->xtext))))))
 	{
-		buf->marker_pos = ent;
+		buf->marker_pos_id = ent->entry_id;
 		buf->marker_state = MARKER_IS_SET;
 		dontscroll (buf); /* force scrolling off */
 		buf->marker_seen = FALSE;
@@ -5636,21 +5640,28 @@ gtk_xtext_reset_scroll_top_backoff (GtkXText *xtext)
 	xtext->scroll_top_backoff_ms = 500;
 }
 
+/* Resolve marker_pos_id to a textentry pointer. Returns NULL if not set or stale. */
+static textentry *
+xtext_resolve_marker (xtext_buffer *buf)
+{
+	return gtk_xtext_find_by_id (buf, buf->marker_pos_id);
+}
+
 void
 gtk_xtext_set_marker_last (session *sess)
 {
 	xtext_buffer *buf = sess->res->buffer;
 
-	buf->marker_pos = buf->text_last;
+	buf->marker_pos_id = buf->text_last ? buf->text_last->entry_id : 0;
 	buf->marker_state = MARKER_IS_SET;
 }
 
 void
 gtk_xtext_reset_marker_pos (GtkXText *xtext)
 {
-	if (xtext->buffer->marker_pos)
+	if (xtext->buffer->marker_pos_id)
 	{
-		xtext->buffer->marker_pos = NULL;
+		xtext->buffer->marker_pos_id = 0;
 		dontscroll (xtext->buffer); /* force scrolling off */
 		/* GTK3: Queue a redraw instead of rendering directly */
 		gtk_widget_queue_draw (GTK_WIDGET (xtext));
@@ -5666,36 +5677,42 @@ gtk_xtext_moveto_marker_pos (GtkXText *xtext)
 	textentry *ent = buf->text_first;
 	GtkAdjustment *adj = xtext->adj;
 
-	if (buf->marker_pos == NULL)
+	if (buf->marker_pos_id == 0)
 		return buf->marker_state;
 
-	if (gtk_xtext_check_ent_visibility (xtext, buf->marker_pos, 1) == FALSE)
 	{
-		while (ent)
-		{
-			if (ent == buf->marker_pos)
-				break;
-			value += g_slist_length (ent->sublines);
-			ent = ent->next;
-		}
-		if (value >= gtk_adjustment_get_value (adj) && value < gtk_adjustment_get_value (adj) + gtk_adjustment_get_page_size (adj))
-			return MARKER_IS_SET;
-		value -= gtk_adjustment_get_page_size (adj) / 2;
-		if (value < 0)
-			value = 0;
-		if (value > gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj))
-			value = gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj);
-		gtk_adjustment_set_value (adj, value);
-		/* GTK3: Queue a redraw instead of rendering directly */
-		gtk_widget_queue_draw (GTK_WIDGET (xtext));
-	}
+		textentry *marker = xtext_resolve_marker (buf);
+		if (!marker)
+			return buf->marker_state;
 
-	/* If we previously lost marker position to scrollback limit -- */
-	if (buf->marker_pos == buf->text_first &&
-		 buf->marker_state == MARKER_RESET_BY_KILL)
-		return MARKER_RESET_BY_KILL;
-	else
-		return MARKER_IS_SET;
+		if (gtk_xtext_check_ent_visibility (xtext, marker, 1) == FALSE)
+		{
+			while (ent)
+			{
+				if (ent == marker)
+					break;
+				value += g_slist_length (ent->sublines);
+				ent = ent->next;
+			}
+			if (value >= gtk_adjustment_get_value (adj) && value < gtk_adjustment_get_value (adj) + gtk_adjustment_get_page_size (adj))
+				return MARKER_IS_SET;
+			value -= gtk_adjustment_get_page_size (adj) / 2;
+			if (value < 0)
+				value = 0;
+			if (value > gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj))
+				value = gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj);
+			gtk_adjustment_set_value (adj, value);
+			/* GTK3: Queue a redraw instead of rendering directly */
+			gtk_widget_queue_draw (GTK_WIDGET (xtext));
+		}
+
+		/* If we previously lost marker position to scrollback limit -- */
+		if (marker == buf->text_first &&
+			 buf->marker_state == MARKER_RESET_BY_KILL)
+			return MARKER_RESET_BY_KILL;
+		else
+			return MARKER_IS_SET;
+	}
 }
 
 void
