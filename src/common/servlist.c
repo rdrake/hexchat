@@ -353,6 +353,38 @@ servlist_favchan_copy (favchannel *fav)
 	return newfav;
 }
 
+#ifdef USE_LIBWEBSOCKETS
+/* Callback for proactive OAuth token refresh before connecting.
+ * Called asynchronously after the token endpoint responds.
+ * Connection hostname/port are stashed on serv->oauth_connect_host/port. */
+static void
+servlist_oauth_refresh_cb (server *serv, oauth_token *token, const char *error)
+{
+	if (!is_server (serv))
+		return;
+
+	if (error)
+	{
+		PrintTextf (serv->server_session,
+			"OAuth: Token refresh failed: %s\n", error);
+		g_free (serv->oauth_connect_host);
+		serv->oauth_connect_host = NULL;
+		return; /* don't connect — token is expired and can't be refreshed */
+	}
+
+	if (token)
+	{
+		oauth_update_server_tokens (serv, token);
+		PrintText (serv->server_session,
+			_("OAuth: Token refreshed successfully.\n"));
+	}
+
+	serv->connect (serv, serv->oauth_connect_host, serv->oauth_connect_port, FALSE);
+	g_free (serv->oauth_connect_host);
+	serv->oauth_connect_host = NULL;
+}
+#endif
+
 void
 servlist_connect (session *sess, ircnet *net, gboolean join)
 {
@@ -452,26 +484,64 @@ servlist_connect (session *sess, ircnet *net, gboolean join)
 
 	serv->network = net;
 
-	port = strrchr (ircserv->hostname, '/');
-	if (port)
+	/* Parse hostname and port from ircserv->hostname ("host/port" format) */
 	{
-		*port = 0;
+		char *hostname;
+		int portnum = -1;
 
-		/* support "+port" to indicate SSL (like mIRC does) */
-		if (port[1] == '+')
+		port = strrchr (ircserv->hostname, '/');
+		if (port)
 		{
+			hostname = g_strndup (ircserv->hostname, port - ircserv->hostname);
+			if (port[1] == '+')
+			{
 #ifdef USE_OPENSSL
-			serv->use_ssl = TRUE;
+				serv->use_ssl = TRUE;
 #endif
-			serv->connect (serv, ircserv->hostname, atoi (port + 2), FALSE);
-		} else
+				portnum = atoi (port + 2);
+			}
+			else
+			{
+				portnum = atoi (port + 1);
+			}
+		}
+		else
 		{
-			serv->connect (serv, ircserv->hostname, atoi (port + 1), FALSE);
+			hostname = g_strdup (ircserv->hostname);
 		}
 
-		*port = '/';
-	} else
-		serv->connect (serv, ircserv->hostname, -1, FALSE);
+#ifdef USE_LIBWEBSOCKETS
+		/* If the token is expired and we have a refresh token, refresh
+		 * before connecting.  The callback will call serv->connect(). */
+		if (serv->loginmethod == LOGIN_SASL_OAUTHBEARER
+			&& serv->oauth_access_token
+			&& serv->oauth_token_expires > 0
+			&& time (NULL) >= (serv->oauth_token_expires - 30))
+		{
+			server_set_encoding (serv, net->encoding);
+
+			PrintText (serv->server_session,
+				_("OAuth: Access token expired, attempting refresh...\n"));
+
+			g_free (serv->oauth_connect_host);
+			serv->oauth_connect_host = g_strdup (hostname);
+			serv->oauth_connect_port = portnum;
+
+			if (oauth_refresh_token (net, servlist_oauth_refresh_cb, serv))
+			{
+				g_free (hostname);
+				return;	/* async refresh in progress */
+			}
+
+			/* oauth_refresh_token returned FALSE — callback already
+			 * fired with an error.  Fall through to connect anyway
+			 * (SASL will fail, but the user sees the error message). */
+		}
+#endif
+
+		serv->connect (serv, hostname, portnum, FALSE);
+		g_free (hostname);
+	}
 
 	server_set_encoding (serv, net->encoding);
 }

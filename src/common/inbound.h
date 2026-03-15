@@ -99,6 +99,7 @@ void inbound_cap_del (server *serv, char *nick, char *extensions,
 							  const message_tags_data *tags_data);
 void inbound_sasl_authenticate (server *serv, char *data);
 void inbound_sasl_error (server *serv);
+gboolean inbound_sasl_oauth_refresh (server *serv);
 void do_dns (session *sess, char *nick, char *host,
 				 const message_tags_data *tags_data);
 gboolean alert_match_word (char *word, char *masks);

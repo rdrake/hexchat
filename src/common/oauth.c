@@ -131,6 +131,32 @@ oauth_save_tokens(const char *network_name, const oauth_token *token)
 }
 
 /*
+ * Update tokens on both the server and network structs, and persist
+ * to secure storage.  Used after a successful token refresh.
+ */
+void
+oauth_update_server_tokens(server *serv, oauth_token *token)
+{
+	ircnet *net = serv->network;
+
+	g_free(serv->oauth_access_token);
+	serv->oauth_access_token = g_strdup(token->access_token);
+	serv->oauth_token_expires = token->expires_at;
+
+	if (net)
+	{
+		g_free(net->oauth_access_token);
+		net->oauth_access_token = g_strdup(token->access_token);
+		g_free(net->oauth_refresh_token);
+		net->oauth_refresh_token = token->refresh_token ? g_strdup(token->refresh_token) : NULL;
+		net->oauth_token_expires = token->expires_at;
+
+		if (net->name)
+			oauth_save_tokens(net->name, token);
+	}
+}
+
+/*
  * Load OAuth tokens from secure storage
  */
 oauth_token *
@@ -1434,7 +1460,7 @@ oauth_token_refresh_callback(GObject *source, GAsyncResult *result, gpointer use
 		error_msg = g_strdup_printf("Token refresh failed: %s", error->message);
 		g_error_free(error);
 		if (ctx->callback)
-			ctx->callback(NULL, NULL, error_msg);
+			ctx->callback(ctx->user_data, NULL, error_msg);
 		g_free(error_msg);
 		g_object_unref(soup_session);
 		g_free(ctx);
@@ -1448,7 +1474,7 @@ oauth_token_refresh_callback(GObject *source, GAsyncResult *result, gpointer use
 	if (!token)
 	{
 		if (ctx->callback)
-			ctx->callback(NULL, NULL, error_msg);
+			ctx->callback(ctx->user_data, NULL, error_msg);
 		g_free(error_msg);
 		g_object_unref(soup_session);
 		g_free(ctx);
@@ -1457,7 +1483,7 @@ oauth_token_refresh_callback(GObject *source, GAsyncResult *result, gpointer use
 
 	/* Success! */
 	if (ctx->callback)
-		ctx->callback(NULL, token, NULL);
+		ctx->callback(ctx->user_data, token, NULL);
 
 	oauth_token_free(token);
 	g_object_unref(soup_session);
@@ -1472,105 +1498,270 @@ oauth_refresh_token(struct ircnet *network,
                     oauth_completion_callback callback,
                     gpointer user_data)
 {
-	(void)user_data; /* Not used until token storage is implemented */
+	oauth_refresh_context *ctx;
+	SoupSession *soup_session;
+	SoupMessage *msg;
+	char *post_body;
+	char *refresh_token = NULL;
+	oauth_token *stored;
 
 	if (!network)
 	{
 		if (callback)
-			callback(NULL, NULL, "No network specified");
+			callback(user_data, NULL, "No network specified");
 		return FALSE;
 	}
 
-	/* Validate required fields */
 	if (!network->oauth_token_url || !network->oauth_client_id)
 	{
 		if (callback)
-			callback(NULL, NULL, "Missing OAuth configuration (token URL or client ID)");
+			callback(user_data, NULL, "Missing OAuth configuration (token URL or client ID)");
 		return FALSE;
 	}
 
-	/* Note: We need a refresh_token stored somewhere to refresh.
-	 * For now, this function expects the caller to have stored the refresh_token.
-	 * A proper implementation would store tokens in a secure location.
-	 * This is a placeholder until token storage is implemented.
-	 */
-	if (callback)
-		callback(NULL, NULL, "Token refresh requires stored refresh_token (not yet implemented)");
-	return FALSE;
+	/* Try secure storage first, fall back to in-memory */
+	stored = oauth_load_tokens(network->name);
+	if (stored && stored->refresh_token)
+	{
+		refresh_token = g_strdup(stored->refresh_token);
+		oauth_token_free(stored);
+	}
+	else
+	{
+		if (stored)
+			oauth_token_free(stored);
+		if (network->oauth_refresh_token)
+			refresh_token = g_strdup(network->oauth_refresh_token);
+	}
 
-	/* The code below is ready for when token storage is implemented:
-	 *
-	 * Build POST body
-	 * if (network->oauth_client_secret && network->oauth_client_secret[0])
-	 * {
-	 *     post_body = g_strdup_printf(
-	 *         "grant_type=refresh_token&refresh_token=%s"
-	 *         "&client_id=%s&client_secret=%s",
-	 *         stored_refresh_token,
-	 *         network->oauth_client_id,
-	 *         network->oauth_client_secret);
-	 * }
-	 * else
-	 * {
-	 *     post_body = g_strdup_printf(
-	 *         "grant_type=refresh_token&refresh_token=%s&client_id=%s",
-	 *         stored_refresh_token,
-	 *         network->oauth_client_id);
-	 * }
-	 *
-	 * soup_session = soup_session_new();
-	 * msg = soup_message_new("POST", network->oauth_token_url);
-	 * soup_message_set_request_body_from_bytes(msg, "application/x-www-form-urlencoded",
-	 *                                           g_bytes_new_take(post_body, strlen(post_body)));
-	 *
-	 * ctx = g_new0(oauth_refresh_context, 1);
-	 * ctx->callback = callback;
-	 * ctx->user_data = user_data;
-	 * ctx->soup_session = soup_session;
-	 *
-	 * soup_session_send_and_read_async(soup_session, msg, G_PRIORITY_DEFAULT, NULL,
-	 *                                   oauth_token_refresh_callback, ctx);
-	 * g_object_unref(msg);
-	 * return TRUE;
-	 */
+	if (!refresh_token)
+	{
+		if (callback)
+			callback(user_data, NULL, "No refresh token available. Please re-authorize in Network List.");
+		return FALSE;
+	}
+
+	/* Build POST body */
+	if (network->oauth_client_secret && network->oauth_client_secret[0])
+	{
+		post_body = g_strdup_printf(
+			"grant_type=refresh_token&refresh_token=%s"
+			"&client_id=%s&client_secret=%s",
+			refresh_token,
+			network->oauth_client_id,
+			network->oauth_client_secret);
+	}
+	else
+	{
+		post_body = g_strdup_printf(
+			"grant_type=refresh_token&refresh_token=%s&client_id=%s",
+			refresh_token,
+			network->oauth_client_id);
+	}
+
+	memset(refresh_token, 0, strlen(refresh_token));
+	g_free(refresh_token);
+
+	soup_session = soup_session_new();
+	msg = soup_message_new("POST", network->oauth_token_url);
+	if (!msg)
+	{
+		if (callback)
+			callback(user_data, NULL, "Failed to create token refresh request");
+		g_free(post_body);
+		g_object_unref(soup_session);
+		return FALSE;
+	}
+
+	soup_message_set_request_body_from_bytes(msg, "application/x-www-form-urlencoded",
+	                                          g_bytes_new_take(post_body, strlen(post_body)));
+
+	ctx = g_new0(oauth_refresh_context, 1);
+	ctx->callback = callback;
+	ctx->user_data = user_data;
+	ctx->soup_session = soup_session;
+
+	soup_session_send_and_read_async(soup_session, msg, G_PRIORITY_DEFAULT, NULL,
+	                                  oauth_token_refresh_callback, ctx);
+	g_object_unref(msg);
+	return TRUE;
 }
 
 #elif defined(USE_LIBCURL)
 
-/*
- * Refresh an expired token using libcurl
- * Note: This is a placeholder until token storage is implemented
- */
+/* Context for libcurl token refresh */
+typedef struct {
+	oauth_completion_callback callback;
+	gpointer user_data;
+	char *post_body;
+	char *token_url;
+	curl_response response;
+} curl_refresh_context;
+
+static gboolean
+oauth_curl_refresh_idle(gpointer user_data)
+{
+	curl_refresh_context *ctx = (curl_refresh_context *)user_data;
+	CURL *curl;
+	CURLcode res;
+	char *error_msg = NULL;
+	oauth_token *token = NULL;
+	long http_code = 0;
+
+	curl = curl_easy_init();
+	if (!curl)
+	{
+		if (ctx->callback)
+			ctx->callback(ctx->user_data, NULL, "Failed to initialize libcurl");
+		g_free(ctx->post_body);
+		g_free(ctx->token_url);
+		g_free(ctx);
+		return G_SOURCE_REMOVE;
+	}
+
+	curl_easy_setopt(curl, CURLOPT_URL, ctx->token_url);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, ctx->post_body);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, oauth_curl_write_cb);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx->response);
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+
+	res = curl_easy_perform(curl);
+
+	if (res != CURLE_OK)
+	{
+		error_msg = g_strdup_printf("Token refresh failed: %s",
+		                            curl_easy_strerror(res));
+		if (ctx->callback)
+			ctx->callback(ctx->user_data, NULL, error_msg);
+		g_free(error_msg);
+		curl_easy_cleanup(curl);
+		g_free(ctx->response.data);
+		g_free(ctx->post_body);
+		g_free(ctx->token_url);
+		g_free(ctx);
+		return G_SOURCE_REMOVE;
+	}
+
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+	curl_easy_cleanup(curl);
+
+	if (http_code < 200 || http_code >= 300)
+	{
+		token = oauth_parse_token_response_curl(ctx->response.data,
+		                                        ctx->response.size, &error_msg);
+		if (!token && !error_msg)
+			error_msg = g_strdup_printf("Token refresh endpoint returned HTTP %ld", http_code);
+
+		if (ctx->callback)
+			ctx->callback(ctx->user_data, NULL, error_msg);
+		g_free(error_msg);
+		if (token)
+			oauth_token_free(token);
+		g_free(ctx->response.data);
+		g_free(ctx->post_body);
+		g_free(ctx->token_url);
+		g_free(ctx);
+		return G_SOURCE_REMOVE;
+	}
+
+	token = oauth_parse_token_response_curl(ctx->response.data,
+	                                        ctx->response.size, &error_msg);
+	g_free(ctx->response.data);
+	g_free(ctx->post_body);
+	g_free(ctx->token_url);
+
+	if (!token)
+	{
+		if (ctx->callback)
+			ctx->callback(ctx->user_data, NULL, error_msg);
+		g_free(error_msg);
+		g_free(ctx);
+		return G_SOURCE_REMOVE;
+	}
+
+	if (ctx->callback)
+		ctx->callback(ctx->user_data, token, NULL);
+
+	oauth_token_free(token);
+	g_free(ctx);
+	return G_SOURCE_REMOVE;
+}
+
 gboolean
 oauth_refresh_token(struct ircnet *network,
                     oauth_completion_callback callback,
                     gpointer user_data)
 {
-	(void)user_data;
+	curl_refresh_context *ctx;
+	char *post_body;
+	char *refresh_token = NULL;
+	oauth_token *stored;
 
 	if (!network)
 	{
 		if (callback)
-			callback(NULL, NULL, "No network specified");
+			callback(user_data, NULL, "No network specified");
 		return FALSE;
 	}
 
-	/* Validate required fields */
 	if (!network->oauth_token_url || !network->oauth_client_id)
 	{
 		if (callback)
-			callback(NULL, NULL, "Missing OAuth configuration (token URL or client ID)");
+			callback(user_data, NULL, "Missing OAuth configuration (token URL or client ID)");
 		return FALSE;
 	}
 
-	/* Note: We need a refresh_token stored somewhere to refresh.
-	 * For now, this function expects the caller to have stored the refresh_token.
-	 * A proper implementation would store tokens in a secure location.
-	 * This is a placeholder until token storage is implemented.
-	 */
-	if (callback)
-		callback(NULL, NULL, "Token refresh requires stored refresh_token (not yet implemented)");
-	return FALSE;
+	/* Try secure storage first, fall back to in-memory */
+	stored = oauth_load_tokens(network->name);
+	if (stored && stored->refresh_token)
+	{
+		refresh_token = g_strdup(stored->refresh_token);
+		oauth_token_free(stored);
+	}
+	else
+	{
+		if (stored)
+			oauth_token_free(stored);
+		if (network->oauth_refresh_token)
+			refresh_token = g_strdup(network->oauth_refresh_token);
+	}
+
+	if (!refresh_token)
+	{
+		if (callback)
+			callback(user_data, NULL, "No refresh token available. Please re-authorize in Network List.");
+		return FALSE;
+	}
+
+	if (network->oauth_client_secret && network->oauth_client_secret[0])
+	{
+		post_body = g_strdup_printf(
+			"grant_type=refresh_token&refresh_token=%s"
+			"&client_id=%s&client_secret=%s",
+			refresh_token,
+			network->oauth_client_id,
+			network->oauth_client_secret);
+	}
+	else
+	{
+		post_body = g_strdup_printf(
+			"grant_type=refresh_token&refresh_token=%s&client_id=%s",
+			refresh_token,
+			network->oauth_client_id);
+	}
+
+	memset(refresh_token, 0, strlen(refresh_token));
+	g_free(refresh_token);
+
+	ctx = g_new0(curl_refresh_context, 1);
+	ctx->callback = callback;
+	ctx->user_data = user_data;
+	ctx->post_body = post_body;
+	ctx->token_url = g_strdup(network->oauth_token_url);
+
+	g_idle_add(oauth_curl_refresh_idle, ctx);
+	return TRUE;
 }
 
 #else /* !USE_LIBSOUP && !USE_LIBCURL */
@@ -1588,7 +1779,7 @@ oauth_refresh_token(struct ircnet *network,
 	(void)user_data;
 
 	if (callback)
-		callback(NULL, NULL, "Token refresh not available (no HTTP client library)");
+		callback(user_data, NULL, "Token refresh not available (no HTTP client library)");
 
 	return FALSE;
 }

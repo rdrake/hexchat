@@ -2073,6 +2073,10 @@ server_set_defaults (server *serv)
 	/* Clear stale active batches on reconnect */
 	if (serv->active_batches)
 		g_hash_table_remove_all (serv->active_batches);
+
+#ifdef USE_LIBWEBSOCKETS
+	serv->oauth_refresh_attempted = FALSE;
+#endif
 }
 
 char *
@@ -2227,6 +2231,11 @@ server_free (server *serv)
 		g_hash_table_destroy (serv->pending_labels);
 	if (serv->active_batches)
 		g_hash_table_destroy (serv->active_batches);
+
+#ifdef USE_LIBWEBSOCKETS
+	g_free (serv->oauth_access_token);
+	g_free (serv->oauth_connect_host);
+#endif
 
 	fe_server_callback (serv);
 

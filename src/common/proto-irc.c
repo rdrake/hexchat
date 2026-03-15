@@ -1075,6 +1075,18 @@ process_numeric (session * sess, int n,
 									  tags_data->timestamp);
 		break;
 	case 904:	/* failed SASL auth */
+#ifdef USE_LIBWEBSOCKETS
+		if (serv->sasl_mech == MECH_OAUTHBEARER
+			&& inbound_sasl_oauth_refresh (serv))
+		{
+			/* Refresh initiated — don't abort SASL or send CAP END yet.
+			 * The refresh callback will retry or abort. */
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_SASLRESPONSE, serv->server_session,
+				word[1], word[2], word[3], ++word_eol[4], 0,
+				tags_data->timestamp);
+			break;
+		}
+#endif
 		inbound_sasl_error (serv);
 	case 903:	/* successful SASL auth */
 	case 905:	/* failed SASL auth */

@@ -167,6 +167,8 @@ gboolean oauth_refresh_token(struct ircnet *network,
                              oauth_completion_callback callback,
                              gpointer user_data);
 
+void oauth_update_server_tokens(struct server *serv, oauth_token *token);
+
 /*
  * Session management (internal use)
  */

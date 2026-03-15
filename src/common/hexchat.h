@@ -693,6 +693,9 @@ typedef struct server
 	struct oauth_session *oauth_session;	/* Active OAuth flow, if any */
 	char *oauth_access_token;				/* Current access token for SASL OAUTHBEARER */
 	time_t oauth_token_expires;				/* When current token expires */
+	unsigned int oauth_refresh_attempted:1;	/* Prevent infinite refresh loop on 904 */
+	char *oauth_connect_host;				/* Stashed hostname for deferred connect after refresh */
+	int oauth_connect_port;					/* Stashed port for deferred connect after refresh */
 #endif
 
 	/* IRCv3 batch state */
