@@ -25,7 +25,8 @@ hexchat_gtk_sources = [
   'textgui.c',
   'urlgrab.c',
   'userlistgui.c',
-  'xtext.c'
+  'xtext.c',
+  'xtext-emoji.c'
 ]
 
 # GTK4 dependency (GTK3 no longer supported)

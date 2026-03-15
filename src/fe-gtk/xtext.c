@@ -36,6 +36,7 @@
 #include "../common/fe.h"
 #include "../common/util.h"
 #include "../common/hexchatc.h"
+#include "../common/cfgfiles.h"
 #include "../common/url.h"
 
 #ifdef WIN32
@@ -47,6 +48,7 @@
 
 #include "fe-gtk.h"
 #include "xtext.h"
+#include "xtext-emoji.h"
 #include "fkeys.h"
 #include "gtk-compat.h"
 
@@ -337,6 +339,10 @@ backend_font_open (GtkXText *xtext, char *name)
 #endif
 
 	pango_font_metrics_unref (metrics);
+
+	/* Update emoji sprite cache to match new font size */
+	if (xtext->emoji_cache)
+		xtext_emoji_cache_set_size (xtext->emoji_cache, xtext->fontsize);
 }
 
 /* Fast path for single ASCII character width using the font cache.
@@ -504,6 +510,7 @@ gtk_xtext_init (GtkXText * xtext)
 	xtext->recycle = FALSE;
 	xtext->dont_render = FALSE;
 	xtext->dont_render2 = FALSE;
+	xtext->emoji_cache = NULL;
 	gtk_xtext_scroll_adjustments (xtext, NULL, NULL);
 
 	/* GTK4: Set up event controllers for mouse/keyboard/scroll events */
@@ -723,6 +730,12 @@ gtk_xtext_dispose (GObject * object)
 	{
 		cairo_surface_destroy (xtext->pixmap);
 		xtext->pixmap = NULL;
+	}
+
+	if (xtext->emoji_cache)
+	{
+		xtext_emoji_cache_free (xtext->emoji_cache);
+		xtext->emoji_cache = NULL;
 	}
 
 	if (xtext->font)
@@ -2992,6 +3005,31 @@ gtk_xtext_render_str (GtkXText * xtext, int y, textentry * ent,
 
 	while (i < len)
 	{
+		/* Inline emoji sprite rendering */
+		if (xtext->emoji_cache)
+		{
+			int emoji_bytes;
+			char emoji_file[64];
+			if (xtext_emoji_detect (str + i, len - i, &emoji_bytes, emoji_file, sizeof (emoji_file)))
+			{
+				RENDER_FLUSH;
+				pstr += j;
+				j = 0;
+				if (!xtext->dont_render && !xtext->dont_render2)
+				{
+					cairo_surface_t *sprite = xtext_emoji_cache_get (xtext->emoji_cache, emoji_file);
+					if (sprite)
+					{
+						cairo_set_source_surface (xtext->cr, sprite, x, y - xtext->font->ascent);
+						cairo_paint (xtext->cr);
+					}
+				}
+				x += xtext->fontsize;
+				i += emoji_bytes;
+				pstr = str + i;
+				continue;
+			}
+		}
 
 		if (xtext->hilight_ent == ent && xtext->hilight_start == (i + offset))
 		{
@@ -3350,8 +3388,11 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 	int emphasis = 0;
 	GSList *lp;
 
-	/* single liners - but only if no embedded newlines (multiline messages) */
-	if (win_width >= ent->str_width + ent->indent && !memchr (ent->str, '\n', ent->str_len))
+	/* single liners - but only if no embedded newlines (multiline messages)
+	 * Skip this fast-path when emoji sprites are active since str_width from
+	 * Pango won't account for emoji sprite widths. */
+	if (!xtext->emoji_cache &&
+		 win_width >= ent->str_width + ent->indent && !memchr (ent->str, '\n', ent->str_len))
 		return ent->str_len;
 
 	/* it does happen! */
@@ -3425,6 +3466,41 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 				goto done;
 			default:
 			def:
+				/* Check for emoji sprite — use fontsize as width instead of Pango */
+				if (xtext->emoji_cache)
+				{
+					int emoji_bytes;
+					if (xtext_emoji_detect (str, orig_str + ent->str_len - str, &emoji_bytes, NULL, 0))
+					{
+						if (!hidden) str_width += xtext->fontsize;
+						if (str_width > win_width)
+						{
+							if (xtext->wordwrap)
+							{
+								if (str - last_space > WORDWRAP_LIMIT + limit_offset)
+									ret = str - orig_str;
+								else
+								{
+									if (*last_space == ' ')
+										last_space++;
+									ret = last_space - orig_str;
+									if (ret == 0)
+										ret = str - orig_str;
+								}
+								goto done;
+							}
+							ret = str - orig_str;
+							goto done;
+						}
+						str += emoji_bytes;
+						if (is_del (*str))
+						{
+							last_space = str;
+							limit_offset = 0;
+						}
+						break;
+					}
+				}
 				mbl = charlen (str);
 				char_width = backend_get_text_width_emph (xtext, str, mbl, emphasis);
 				if (!hidden) str_width += char_width;
@@ -3737,6 +3813,15 @@ gtk_xtext_set_font (GtkXText *xtext, char *name)
 	backend_font_open (xtext, name);
 	if (xtext->font == NULL)
 		return FALSE;
+
+	/* Initialize emoji sprite cache if enabled and not already created */
+	if (prefs.hex_gui_emoji_sprites && !xtext->emoji_cache)
+	{
+		char *emoji_dir = g_build_filename (get_xdir (), "emoji", NULL);
+		if (g_file_test (emoji_dir, G_FILE_TEST_IS_DIR))
+			xtext->emoji_cache = xtext_emoji_cache_new (emoji_dir, xtext->fontsize);
+		g_free (emoji_dir);
+	}
 
 	{
 		char *time_str;

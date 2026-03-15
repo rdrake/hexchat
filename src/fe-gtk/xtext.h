@@ -149,6 +149,8 @@ typedef struct {
 	guint64 next_entry_id;			/* monotonic counter for generating entry IDs */
 } xtext_buffer;
 
+typedef struct _xtext_emoji_cache xtext_emoji_cache;
+
 struct _GtkXText
 {
 	GtkWidget widget;
@@ -218,6 +220,7 @@ struct _GtkXText
 	PangoLayout *layout;
 
 	int fontsize;
+	xtext_emoji_cache *emoji_cache;	/* NULL if emoji sprites disabled */
 	int space_width;				  /* width (pixels) of the space " " character */
 	int stamp_width;				  /* width of "[88:88:88]" */
 	int max_auto_indent;

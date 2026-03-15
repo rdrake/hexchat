@@ -98,6 +98,7 @@ powershell "Get-Content -Encoding UTF8 '$(HexChatLib)hexchat.rc.utf8' | Out-File
     <ClInclude Include="urlgrab.h" />
     <ClInclude Include="userlistgui.h" />
     <ClInclude Include="xtext.h" />
+    <ClInclude Include="xtext-emoji.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ascii.c" />
@@ -132,6 +133,7 @@ powershell "Get-Content -Encoding UTF8 '$(HexChatLib)hexchat.rc.utf8' | Out-File
     <ClCompile Include="urlgrab.c" />
     <ClCompile Include="userlistgui.c" />
     <ClCompile Include="xtext.c" />
+    <ClCompile Include="xtext-emoji.c" />
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="..\..\win32\hexchat.exe.manifest" />
