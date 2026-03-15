@@ -230,12 +230,20 @@ hc_widget_destroy_impl (GtkWidget *widget)
 	hc_widget_destroy_impl(GTK_WIDGET(widget))
 
 /*
- * hc_window_destroy - Use gtk_window_destroy() for immediate removal.
- * gtk_window_close() is asynchronous and on Win32 causes focus to escape
- * to other applications before the transient parent can reclaim it.
+ * hc_window_destroy - Present the transient parent (if any) before
+ * destroying, so focus returns to it instead of escaping to another
+ * application.  Uses gtk_window_destroy() for immediate removal.
  */
+static inline void
+hc_window_destroy_fn (GtkWindow *window)
+{
+	GtkWindow *parent = gtk_window_get_transient_for (window);
+	if (parent)
+		gtk_window_present (parent);
+	gtk_window_destroy (window);
+}
 #define hc_window_destroy(window) \
-	gtk_window_destroy(GTK_WINDOW(window))
+	hc_window_destroy_fn(GTK_WINDOW(window))
 
 /*
  * =============================================================================

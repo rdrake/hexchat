@@ -1582,7 +1582,7 @@ servlist_edit_message (const char *msg, int type)
 									 GTK_DIALOG_DESTROY_WITH_PARENT | GTK_DIALOG_MODAL,
 									 type, GTK_BUTTONS_OK, "%s", msg);
 	gtk_window_set_transient_for (GTK_WINDOW (dialog), parent);
-	g_signal_connect (dialog, "response", G_CALLBACK (gtk_window_destroy), NULL);
+	g_signal_connect (dialog, "response", G_CALLBACK (gtkutil_dialog_response_destroy), NULL);
 	gtk_window_present (GTK_WINDOW (dialog));
 }
 

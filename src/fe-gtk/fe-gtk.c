@@ -126,7 +126,7 @@ create_msg_dialog (gchar *title, gchar *message)
 	g_signal_connect (G_OBJECT (dialog), "response",
 					  G_CALLBACK (create_msg_dialog_response_cb), &done);
 	g_signal_connect (G_OBJECT (dialog), "response",
-					  G_CALLBACK (gtk_window_destroy), NULL);
+					  G_CALLBACK (gtkutil_dialog_response_destroy), NULL);
 
 	gtk_window_present (GTK_WINDOW (dialog));
 
@@ -688,7 +688,7 @@ fe_message (char *msg, int flags)
 		gtk_message_dialog_set_markup (GTK_MESSAGE_DIALOG (dialog), msg);
 
 	g_signal_connect (G_OBJECT (dialog), "response",
-							G_CALLBACK (gtk_window_destroy), NULL);
+							G_CALLBACK (gtkutil_dialog_response_destroy), NULL);
 
 	gtk_window_set_resizable (GTK_WINDOW (dialog), FALSE);
 	/* GTK4: gtk_window_set_position removed - window manager handles placement */

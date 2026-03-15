@@ -658,6 +658,20 @@ gtkutil_close_request_focus_parent (GtkWindow *win, gpointer parent)
 	return FALSE; /* allow the close to proceed */
 }
 
+/* Response handler for message dialogs: present the transient parent
+ * before destroying.  gtk_window_destroy() doesn't fire close-request,
+ * so dialogs using response→gtk_window_destroy lose focus. */
+void
+gtkutil_dialog_response_destroy (GtkDialog *dialog, int response, gpointer user_data)
+{
+	GtkWindow *parent = gtk_window_get_transient_for (GTK_WINDOW (dialog));
+	(void)response;
+	(void)user_data;
+	if (parent)
+		gtk_window_present (parent);
+	gtk_window_destroy (GTK_WINDOW (dialog));
+}
+
 
 GtkWidget *
 gtkutil_window_new (char *title, char *role, int width, int height, int flags)
