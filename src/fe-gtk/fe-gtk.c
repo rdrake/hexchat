@@ -1076,6 +1076,22 @@ fe_clear_all_pending (session *sess)
 	}
 }
 
+time_t
+fe_get_newest_stamp (session *sess)
+{
+	xtext_buffer *buf;
+	textentry *last;
+
+	if (!sess->res || !sess->res->buffer)
+		return 0;
+
+	buf = sess->res->buffer;
+	last = gtk_xtext_buffer_get_last (buf);
+	if (!last)
+		return 0;
+	return gtk_xtext_entry_get_stamp (last);
+}
+
 void
 fe_typing_update (session *sess)
 {
@@ -1090,7 +1106,7 @@ fe_typing_update (session *sess)
 
 	if (!sess->typing_nicks)
 	{
-		gtk_xtext_set_typing_text (xtext, NULL);
+		gtk_xtext_status_remove (xtext, "typing");
 	}
 	else
 	{
@@ -1107,9 +1123,62 @@ fe_typing_update (session *sess)
 			first = 0;
 		}
 
-		gtk_xtext_set_typing_text (xtext, str->str);
+		gtk_xtext_status_set (xtext, "typing", str->str, 100, 0);
 		g_string_free (str, TRUE);
 	}
+}
+
+void
+fe_status_update (session *sess, const char *key, const char *text,
+                  int priority, int timeout_ms)
+{
+	GtkXText *xtext;
+
+	if (!sess->gui || !sess->gui->xtext)
+		return;
+	if (sess->gui->is_tab && sess != current_tab)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+
+	if (text)
+		gtk_xtext_status_set (xtext, key, text, priority, timeout_ms);
+	else
+		gtk_xtext_status_remove (xtext, key);
+}
+
+void
+fe_toast_show (session *sess, const char *text, int linger_ms, int type,
+               unsigned int flags)
+{
+	GtkXText *xtext;
+
+	if (!sess->gui || !sess->gui->xtext)
+		return;
+	if (sess->gui->is_tab && sess != current_tab)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+	gtk_xtext_toast_show (xtext, text, linger_ms, (xtext_toast_type)type, flags);
+}
+
+void
+fe_set_marker_from_timestamp (session *sess, time_t timestamp)
+{
+	xtext_buffer *buf;
+
+	if (!sess->res || !sess->res->buffer)
+		return;
+
+	buf = sess->res->buffer;
+	gtk_xtext_set_marker_from_timestamp (buf, timestamp);
+}
+
+void
+fe_clear_server_read_marker (session *sess)
+{
+	if (sess->res && sess->res->buffer)
+		((xtext_buffer *)sess->res->buffer)->server_read_marker = FALSE;
 }
 
 void

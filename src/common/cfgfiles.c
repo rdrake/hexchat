@@ -530,6 +530,7 @@ const struct prefs vars[] =
 	{"irc_real_name", P_OFFSET (hex_irc_real_name), TYPE_STR},
 	{"irc_servernotice", P_OFFINT (hex_irc_servernotice), TYPE_BOOL},
 	{"irc_skip_motd", P_OFFINT (hex_irc_skip_motd), TYPE_BOOL},
+	{"irc_typing_self", P_OFFINT (hex_irc_typing_self), TYPE_BOOL},
 	{"irc_typing_send", P_OFFINT (hex_irc_typing_send), TYPE_BOOL},
 	{"irc_typing_show", P_OFFINT (hex_irc_typing_show), TYPE_BOOL},
 	{"irc_user_name", P_OFFSET (hex_irc_user_name), TYPE_STR},
@@ -799,6 +800,7 @@ load_default_config(void)
 	prefs.hex_irc_chathistory_background_delay = 10; /* seconds between background fetches */
 	prefs.hex_irc_chathistory_background_max_age = 24; /* max hours to fetch in background (0 = unlimited) */
 	prefs.hex_irc_logging = 1;
+	prefs.hex_irc_typing_self = 1;
 	prefs.hex_irc_typing_send = 1;
 	prefs.hex_irc_typing_show = 1;
 	prefs.hex_irc_who_join = 1; /* Can kick with inordinate amount of channels, required for some of our features though, TODO: add cap like away check? */

@@ -67,6 +67,49 @@ typedef struct _GtkXText GtkXText;
 typedef struct _GtkXTextClass GtkXTextClass;
 typedef struct textentry textentry;
 
+/* Bottom status strip: keyed items with priority-based two-zone layout */
+#define XTEXT_STATUS_MAX_ITEMS 4
+#define XTEXT_STATUS_PRIORITY_RIGHT 100  /* >= this anchors right zone */
+
+typedef struct xtext_status_item {
+	char *key;           /* unique id: "typing", "lag", etc. */
+	char *display_text;  /* rendered text */
+	int priority;        /* >= 100 = right zone, < 100 = left zone */
+	gint64 expire_at;    /* g_get_monotonic_time() deadline, 0 = manual */
+} xtext_status_item;
+
+/* Top toast overlay notifications */
+#define XTEXT_TOAST_MAX 5
+
+typedef enum {
+	TOAST_ENTERING,   /* sliding down */
+	TOAST_VISIBLE,    /* lingering */
+	TOAST_EXITING     /* fading out */
+} xtext_toast_phase;
+
+typedef enum {
+	TOAST_TYPE_INFO,      /* general/default - neutral */
+	TOAST_TYPE_NICK,      /* nick changes */
+	TOAST_TYPE_TOPIC,     /* topic changes */
+	TOAST_TYPE_MODE,      /* mode changes */
+	TOAST_TYPE_JOIN,      /* join/part (when hidden) */
+	TOAST_TYPE_ERROR      /* errors/warnings */
+} xtext_toast_type;
+
+#define TOAST_FLAG_STICKY  0x01  /* no auto-dismiss, exempt from eviction */
+
+typedef struct xtext_toast {
+	char *text;
+	xtext_toast_phase phase;
+	xtext_toast_type type;
+	unsigned int flags;
+	gint64 phase_start;      /* monotonic time when phase began */
+	double alpha;            /* computed each frame */
+	double y_offset;         /* computed each frame (slide-in) */
+	int rendered_height;     /* cached Pango measurement */
+	int linger_ms;           /* per-toast linger duration */
+} xtext_toast;
+
 /*
  * offsets_t is used for retaining search information.
  * It is stored in the 'data' member of a GList,
@@ -131,6 +174,7 @@ typedef struct {
 	unsigned int scrollbar_down:1;
 	unsigned int needs_recalc:1;
 	unsigned int marker_seen:1;
+	unsigned int server_read_marker:1;	/* server has draft/read-marker — suppress local auto-advance */
 
 	GList *search_found;		/* list of textentries where search found strings */
 	gchar *search_text;		/* desired text to search for */
@@ -292,9 +336,16 @@ struct _GtkXText
 	void (*scroll_to_top_cb) (GtkXText *xtext, gpointer userdata);
 	gpointer scroll_to_top_userdata;
 
-	/* Typing indicator bottom status strip */
-	char *typing_text;					/* formatted nick list or NULL */
-	unsigned int typing_strip_visible:1;
+	/* Bottom status strip (generalized from typing indicator) */
+	xtext_status_item status_items[XTEXT_STATUS_MAX_ITEMS];
+	int status_item_count;
+	unsigned int status_strip_visible:1;
+	guint status_expire_timer;
+
+	/* Top toast overlay notifications */
+	xtext_toast *toasts[XTEXT_TOAST_MAX];
+	int toast_count;
+	guint toast_anim_timer;
 };
 
 struct _GtkXTextClass
@@ -332,6 +383,7 @@ int gtk_xtext_lastlog (xtext_buffer *out, xtext_buffer *search_area);
 textentry *gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags flags, GError **err);
 void gtk_xtext_reset_marker_pos (GtkXText *xtext);
 int gtk_xtext_moveto_marker_pos (GtkXText *xtext);
+void gtk_xtext_set_marker_from_timestamp (xtext_buffer *buf, time_t timestamp);
 void gtk_xtext_check_marker_visibility(GtkXText *xtext);
 void gtk_xtext_set_marker_last (session *sess);
 
@@ -363,9 +415,18 @@ textentry *gtk_xtext_find_by_msgid (xtext_buffer *buf, const char *msgid);
 textentry *gtk_xtext_find_by_id (xtext_buffer *buf, guint64 entry_id);
 textentry *gtk_xtext_set_msgid (xtext_buffer *buf, textentry *ent, const char *msgid);
 
-/* Typing indicator bottom status strip */
-void gtk_xtext_set_typing_text (GtkXText *xtext, const char *text);
+/* Bottom status strip */
+void gtk_xtext_status_set (GtkXText *xtext, const char *key, const char *text,
+                           int priority, int timeout_ms);
+void gtk_xtext_status_remove (GtkXText *xtext, const char *key);
+void gtk_xtext_status_clear (GtkXText *xtext);
+
+/* Top toast overlay notifications */
+void gtk_xtext_toast_show (GtkXText *xtext, const char *text, int linger_ms,
+                           xtext_toast_type type, unsigned int flags);
+void gtk_xtext_toast_clear (GtkXText *xtext);
 guint64 gtk_xtext_get_entry_id (textentry *ent);
+time_t gtk_xtext_entry_get_stamp (textentry *ent);
 const char *gtk_xtext_get_msgid (textentry *ent);
 
 /* Entry accessors (textentry is opaque outside xtext.c) */

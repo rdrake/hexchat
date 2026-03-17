@@ -191,6 +191,7 @@ struct hexchatprefs
 	unsigned int hex_irc_raw_modes;
 	unsigned int hex_irc_servernotice;
 	unsigned int hex_irc_skip_motd;
+	unsigned int hex_irc_typing_self;
 	unsigned int hex_irc_typing_send;
 	unsigned int hex_irc_typing_show;
 	unsigned int hex_irc_wallops;
@@ -461,7 +462,8 @@ typedef struct session
 	char *join_msgid;		/* msgid of our current JOIN (suppress from chathistory) */
 	char *oldest_msgid;		/* oldest message in buffer (for BEFORE requests) */
 	char *newest_msgid;		/* newest message in buffer (for AFTER requests) */
-	char *last_read_msgid;	/* last read message ID (for read-marker sync) */
+	char *markread_timestamp;	/* server MARKREAD timestamp string (ISO 8601, for round-trip) */
+	time_t markread_time;		/* parsed MARKREAD timestamp as time_t (for local comparison) */
 	time_t scrollback_newest_time;	/* newest timestamp from loaded scrollback */
 	char *scrollback_oldest_msgid;	/* oldest msgid from loaded scrollback (for BEFORE) */
 	char *scrollback_newest_msgid;	/* newest msgid from loaded scrollback (for AFTER) */

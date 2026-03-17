@@ -110,6 +110,16 @@ void fe_confirm_entry (struct session *sess, guint64 entry_id);
 void fe_clear_all_pending (struct session *sess);
 /* IRCv3 typing indicators */
 void fe_typing_update (struct session *sess);
+/* Get the timestamp of the newest message in a session's buffer (0 if empty) */
+time_t fe_get_newest_stamp (struct session *sess);
+/* Xtext notification areas */
+void fe_status_update (struct session *sess, const char *key, const char *text,
+                       int priority, int timeout_ms);
+void fe_toast_show (struct session *sess, const char *text, int linger_ms,
+                    int type, unsigned int flags);
+/* IRCv3 read-marker: position visual marker from server timestamp */
+void fe_set_marker_from_timestamp (struct session *sess, time_t timestamp);
+void fe_clear_server_read_marker (struct session *sess);
 void fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel);
 int fe_userlist_remove (struct session *sess, struct User *user);
 void fe_userlist_rehash (struct session *sess, struct User *user);

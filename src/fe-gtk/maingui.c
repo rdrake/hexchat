@@ -577,6 +577,9 @@ mg_focus (session *sess)
 		sess->res->tab is still NULL. */
 	if (sess->res->tab)
 		fe_set_tab_color (sess, FE_COLOR_NONE);
+
+	/* Auto-advance server read marker when tab gains focus */
+	markread_send_for_session (sess);
 }
 
 static int
@@ -3906,6 +3909,7 @@ mg_tabwin_focus_cb (GtkEventControllerFocus *controller, gpointer userdata)
 	if (current_sess)
 	{
 		gtk_xtext_check_marker_visibility (GTK_XTEXT (current_sess->gui->xtext));
+		markread_send_for_session (current_sess);
 		plugin_emit_dummy_print (current_sess, "Focus Window");
 	}
 	unflash_window (win);
@@ -3919,6 +3923,7 @@ mg_topwin_focus_cb (GtkEventControllerFocus *controller, session *sess)
 	if (!sess->server->server_session)
 		sess->server->server_session = sess;
 	gtk_xtext_check_marker_visibility(GTK_XTEXT (current_sess->gui->xtext));
+	markread_send_for_session (sess);
 	unflash_window (win);
 	plugin_emit_dummy_print (sess, "Focus Window");
 }

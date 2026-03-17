@@ -686,7 +686,7 @@ session_free (session *killsess)
 	g_free (killsess->join_msgid);
 	g_free (killsess->oldest_msgid);
 	g_free (killsess->newest_msgid);
-	g_free (killsess->last_read_msgid);
+	g_free (killsess->markread_timestamp);
 	g_free (killsess->scrollback_oldest_msgid);
 	g_free (killsess->scrollback_newest_msgid);
 	if (killsess->known_msgids)

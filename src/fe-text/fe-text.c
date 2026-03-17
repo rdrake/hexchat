@@ -615,6 +615,34 @@ fe_typing_update (session *sess)
 {
 }
 
+time_t
+fe_get_newest_stamp (session *sess)
+{
+	return 0;
+}
+
+void
+fe_status_update (session *sess, const char *key, const char *text,
+                  int priority, int timeout_ms)
+{
+}
+
+void
+fe_toast_show (session *sess, const char *text, int linger_ms, int type,
+               unsigned int flags)
+{
+}
+
+void
+fe_set_marker_from_timestamp (session *sess, time_t timestamp)
+{
+}
+
+void
+fe_clear_server_read_marker (session *sess)
+{
+}
+
 void
 fe_add_rawlog (struct server *serv, char *text, int len, int outbound)
 {

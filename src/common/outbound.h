@@ -43,4 +43,7 @@ gboolean load_perform_file (session *sess, char *file);
 void typing_indicator_keystroke (session *sess);
 void typing_indicator_cancel (session *sess);
 
+/* IRCv3 read-marker — send MARKREAD for a session's newest message */
+void markread_send_for_session (session *sess);
+
 #endif

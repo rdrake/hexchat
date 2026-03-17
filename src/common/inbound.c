@@ -673,6 +673,10 @@ inbound_ujoin (server *serv, char *chan, char *nick, char *ip,
 		chathistory_start_catchup (sess);
 	}
 
+	/* Query server read position so we can position the marker line */
+	if (serv->have_read_marker)
+		tcp_sendf (serv, "MARKREAD %s\r\n", chan);
+
 	if (prefs.hex_irc_who_join)
 	{
 		/* sends WHO #channel */
@@ -2348,8 +2352,10 @@ inbound_tagmsg (server *serv, char *to, char *nick, char *ip,
 	if (!serv->have_message_tags)
 		return;
 
-	/* Ignore self-echo */
-	if (!serv->p_cmp (nick, serv->nick))
+	/* Self-echo: with echo-message or a bouncer, the server echoes our own
+	 * TAGMSGs back.  This can indicate activity on another connected client.
+	 * Controlled by hex_irc_typing_self (default: ON). */
+	if (!serv->p_cmp (nick, serv->nick) && !prefs.hex_irc_typing_self)
 		return;
 
 	/* Find the appropriate session — don't fall back to server console */

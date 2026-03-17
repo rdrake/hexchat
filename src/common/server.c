@@ -1191,14 +1191,18 @@ server_cleanup (server * serv)
 			g_hash_table_remove_all (serv->active_batches);
 
 		/* Clear pending visual states — messages were sent, just not confirmed.
-		 * Transition PENDING → NORMAL so they don't stay dimmed forever. */
+		 * Transition PENDING → NORMAL so they don't stay dimmed forever.
+		 * Also clear server_read_marker so local auto-advance resumes. */
 		{
 			GSList *slist = sess_list;
 			while (slist)
 			{
 				session *s = slist->data;
 				if (s->server == serv)
+				{
 					fe_clear_all_pending (s);
+					fe_clear_server_read_marker (s);
+				}
 				slist = slist->next;
 			}
 		}

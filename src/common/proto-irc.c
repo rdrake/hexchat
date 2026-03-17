@@ -46,6 +46,8 @@
 #include "url.h"
 #include "servlist.h"
 
+static time_t parse_iso8601_to_time_t (const char *timestr);
+
 static void
 irc_login (server *serv, char *user, char *realname)
 {
@@ -1362,6 +1364,19 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 			inbound_sasl_authenticate (sess->server, word_eol[3]);
 			return;
 
+		case WORDL('C', 'H', 'A', 'T'):
+			/* CHATHISTORY - responses inside draft/chathistory-targets batch.
+			 * Collect into batch for deferred processing; if not in a batch,
+			 * silently ignore (bare CHATHISTORY responses are informational). */
+			if (len >= 11 && strncasecmp (type, "CHATHISTORY", 11) == 0)
+			{
+				if (inbound_batch_add_message (serv, word[1], "CHATHISTORY", word, word_eol, PDIWORDS, tags_data))
+					return;
+				/* Not in a recognized batch — ignore silently */
+				return;
+			}
+			break;
+
 		case WORDL('C', 'H', 'G', 'H'):
 			inbound_user_info (sess, NULL, word[3], STRIP_COLON(word, word_eol, 4), NULL, nick, NULL,
 							   NULL, 0xff, tags_data);
@@ -1644,32 +1659,36 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 			return;
 
 		case WORDL('M','A','R','K'):
-			/* MARKREAD - read marker response
-			 * Format: MARKREAD <target> timestamp=<msgid>
-			 * or: MARKREAD <target> (query current position)
+			/* MARKREAD - read marker response / broadcast
+			 * Format: :server MARKREAD <target> timestamp=<iso8601>
 			 */
 			if (len >= 8 && strncasecmp (type, "MARKREAD", 8) == 0)
 			{
 				char *target = word[3];
-				char *timestamp = word[4];
-				session *sess;
+				char *ts_param = word[4];
+				session *markread_sess;
 
 				if (!*target)
 					return;
 
-				/* Find session for target */
-				sess = find_channel (serv, target);
-				if (!sess)
-					sess = find_dialog (serv, target);
+				markread_sess = find_channel (serv, target);
+				if (!markread_sess)
+					markread_sess = find_dialog (serv, target);
 
-				if (sess && timestamp && *timestamp)
+				if (markread_sess && ts_param && *ts_param
+				    && strncmp (ts_param, "timestamp=", 10) == 0)
 				{
-					/* Extract msgid from timestamp=xxx */
-					if (strncmp (timestamp, "timestamp=", 10) == 0)
-					{
-						g_free (sess->last_read_msgid);
-						sess->last_read_msgid = g_strdup (timestamp + 10);
-					}
+					const char *ts_value = ts_param + 10;
+					time_t parsed = parse_iso8601_to_time_t (ts_value);
+
+					/* Store raw string for round-tripping back to server */
+					g_free (markread_sess->markread_timestamp);
+					markread_sess->markread_timestamp = g_strdup (ts_value);
+					markread_sess->markread_time = (parsed != (time_t) -1) ? parsed : 0;
+
+					/* Position the visual marker line */
+					if (parsed != (time_t) -1)
+						fe_set_marker_from_timestamp (markread_sess, parsed);
 				}
 			}
 			return;
@@ -1932,9 +1951,45 @@ get_timezone (void)
 	return time_utc - time_local;
 }
 
+/* Parse an ISO 8601 timestamp (YYYY-MM-DDThh:mm:ss.sssZ) or Unix time string
+ * to time_t.  Returns (time_t)-1 on failure. */
+static time_t
+parse_iso8601_to_time_t (const char *timestr)
+{
+	if (!timestr || !*timestr)
+		return (time_t) -1;
+
+	if (timestr[strlen (timestr) - 1] == 'Z')
+	{
+		struct tm t;
+		int z;
+
+		z = sscanf (timestr, "%d-%d-%dT%d:%d:%d", &t.tm_year, &t.tm_mon, &t.tm_mday,
+					&t.tm_hour, &t.tm_min, &t.tm_sec);
+		if (z != 6)
+			return (time_t) -1;
+
+		t.tm_year -= 1900;
+		t.tm_mon -= 1;
+		t.tm_isdst = 0;
+
+		{
+			time_t result = mktime (&t);
+			if (result < 0)
+				return (time_t) -1;
+			return result - get_timezone ();
+		}
+	}
+	else
+	{
+		/* Unix timestamp (possibly with fractional seconds) */
+		return (time_t) atol (timestr);
+	}
+}
+
 /* Handle time-server tags.
- * 
- * Sets tags_data->timestamp to the correct time (in unix time). 
+ *
+ * Sets tags_data->timestamp to the correct time (in unix time).
  * This received time is always in UTC.
  *
  * See http://ircv3.atheme.org/extensions/server-time-3.2

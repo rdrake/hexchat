@@ -146,7 +146,9 @@ static textentry *xtext_resolve_marker (xtext_buffer *buf);
 static void gtk_xtext_recalc_widths (xtext_buffer *buf, int);
 static void gtk_xtext_fix_indent (xtext_buffer *buf);
 static int gtk_xtext_find_subline (GtkXText *xtext, textentry *ent, int line);
-static void gtk_xtext_draw_typing_strip (GtkXText *xtext, int width, int height);
+static void gtk_xtext_draw_status_strip (GtkXText *xtext, int width, int height);
+static void gtk_xtext_draw_toasts (GtkXText *xtext, int width, int height);
+static gboolean gtk_xtext_toast_tick (gpointer data);
 /* static char *gtk_xtext_conv_color (unsigned char *text, int len, int *newlen); */
 /* For use by gtk_xtext_strip_color() and its callers -- */
 struct offlen_s {
@@ -568,7 +570,7 @@ gtk_xtext_adjustment_set (xtext_buffer *buf, int fire_signal)
 
 		{
 			int effective_height = alloc.height;
-			if (buf->xtext->typing_strip_visible)
+			if (buf->xtext->status_strip_visible)
 				effective_height -= (buf->xtext->fontsize * 2 / 3 + 4);
 			page_size = effective_height / buf->xtext->fontsize;
 		}
@@ -744,8 +746,14 @@ gtk_xtext_dispose (GObject * object)
 		xtext->emoji_cache = NULL;
 	}
 
-	g_free (xtext->typing_text);
-	xtext->typing_text = NULL;
+	gtk_xtext_status_clear (xtext);
+	if (xtext->status_expire_timer)
+	{
+		g_source_remove (xtext->status_expire_timer);
+		xtext->status_expire_timer = 0;
+	}
+
+	gtk_xtext_toast_clear (xtext);
 
 	if (xtext->font)
 	{
@@ -4223,7 +4231,7 @@ gtk_xtext_render_page (GtkXText * xtext)
 	/* Reserve space for typing indicator strip at bottom */
 	{
 		int text_height = height;
-		if (xtext->typing_strip_visible)
+		if (xtext->status_strip_visible)
 			text_height -= (xtext->fontsize * 2 / 3 + 4);
 		lines_max = ((text_height + xtext->pixel_offset) / xtext->fontsize) + 1;
 	}
@@ -4254,61 +4262,546 @@ gtk_xtext_render_page (GtkXText * xtext)
 	/* draw the separator line */
 	gtk_xtext_draw_sep (xtext, -1);
 
-	/* draw the typing indicator strip at the bottom */
-	if (xtext->typing_strip_visible && xtext->typing_text)
-		gtk_xtext_draw_typing_strip (xtext, width + MARGIN, height);
+	/* draw the status strip at the bottom */
+	if (xtext->status_strip_visible)
+		gtk_xtext_draw_status_strip (xtext, width + MARGIN, height);
+
+	/* draw toast overlays at the top */
+	if (xtext->toast_count > 0)
+		gtk_xtext_draw_toasts (xtext, width + MARGIN, height);
+}
+
+/* ---- Bottom status strip (two-zone layout) ---- */
+
+static int
+status_item_cmp_priority (const void *a, const void *b)
+{
+	const xtext_status_item *ia = a, *ib = b;
+	return ia->priority - ib->priority;
 }
 
 static void
-gtk_xtext_draw_typing_strip (GtkXText *xtext, int width, int height)
+gtk_xtext_draw_status_strip (GtkXText *xtext, int width, int height)
 {
 	int strip_h = xtext->fontsize * 2 / 3 + 4;
 	int y = height - strip_h;
+	cairo_t *cr = xtext->cr;
 	PangoLayout *layout;
 	PangoRectangle logical;
-	int text_x;
-	cairo_t *cr = xtext->cr;
+	xtext_status_item *left_items[XTEXT_STATUS_MAX_ITEMS];
+	xtext_status_item *right_items[XTEXT_STATUS_MAX_ITEMS];
+	int left_count = 0, right_count = 0;
+	int i, text_y, right_x, left_x, right_zone_left;
+	const char *sep = " \xc2\xb7 ";  /* UTF-8 middle dot */
 
-	if (!cr || !xtext->typing_text)
+	if (!cr || xtext->status_item_count == 0)
 		return;
 
-	/* Semi-transparent background */
+	/* Partition items into left/right zones */
+	for (i = 0; i < xtext->status_item_count; i++)
+	{
+		xtext_status_item *item = &xtext->status_items[i];
+		if (item->priority >= XTEXT_STATUS_PRIORITY_RIGHT)
+			right_items[right_count++] = item;
+		else
+			left_items[left_count++] = item;
+	}
+
+	/* Sort each zone by priority */
+	if (left_count > 1)
+		qsort (left_items, left_count, sizeof (left_items[0]), status_item_cmp_priority);
+	if (right_count > 1)
+		qsort (right_items, right_count, sizeof (right_items[0]), status_item_cmp_priority);
+
 	cairo_save (cr);
+
+	/* Background */
 	gdk_cairo_set_source_rgba (cr, &xtext->palette[XTEXT_BG]);
 	cairo_rectangle (cr, 0, y, width, strip_h);
 	cairo_fill (cr);
 
-	/* Subtle foreground text, right-aligned */
 	layout = pango_layout_new (gtk_widget_get_pango_context (GTK_WIDGET (xtext)));
 	pango_layout_set_font_description (layout, xtext->font->font);
-	pango_layout_set_text (layout, xtext->typing_text, -1);
-	pango_layout_get_pixel_extents (layout, NULL, &logical);
 
-	text_x = width - logical.width - 6;
-	if (text_x < 4)
-		text_x = 4;
-
-	cairo_move_to (cr, text_x, y + (strip_h - logical.height) / 2);
 	cairo_set_source_rgba (cr,
 	                       xtext->palette[XTEXT_FG].red,
 	                       xtext->palette[XTEXT_FG].green,
 	                       xtext->palette[XTEXT_FG].blue,
 	                       0.6);
-	pango_cairo_show_layout (cr, layout);
-	g_object_unref (layout);
 
+	/* Render right zone (right-aligned) */
+	right_zone_left = width;
+	if (right_count > 0)
+	{
+		GString *rstr = g_string_new (NULL);
+		for (i = right_count - 1; i >= 0; i--)
+		{
+			if (rstr->len > 0)
+				g_string_prepend (rstr, sep);
+			g_string_prepend (rstr, right_items[i]->display_text);
+		}
+		pango_layout_set_text (layout, rstr->str, -1);
+		pango_layout_get_pixel_extents (layout, NULL, &logical);
+		right_x = width - logical.width - 6;
+		if (right_x < 6)
+			right_x = 6;
+		right_zone_left = right_x;
+		text_y = y + (strip_h - logical.height) / 2;
+		cairo_move_to (cr, right_x, text_y);
+		pango_cairo_show_layout (cr, layout);
+		g_string_free (rstr, TRUE);
+	}
+
+	/* Render left zone (left-aligned, ellipsize if overlapping right) */
+	if (left_count > 0)
+	{
+		GString *lstr = g_string_new (NULL);
+		for (i = 0; i < left_count; i++)
+		{
+			if (lstr->len > 0)
+				g_string_append (lstr, sep);
+			g_string_append (lstr, left_items[i]->display_text);
+		}
+		left_x = 6;
+		pango_layout_set_text (layout, lstr->str, -1);
+		/* Ellipsize if it would overlap the right zone */
+		pango_layout_set_width (layout, (right_zone_left - left_x - 12) * PANGO_SCALE);
+		pango_layout_set_ellipsize (layout, PANGO_ELLIPSIZE_END);
+		pango_layout_get_pixel_extents (layout, NULL, &logical);
+		text_y = y + (strip_h - logical.height) / 2;
+		cairo_move_to (cr, left_x, text_y);
+		pango_cairo_show_layout (cr, layout);
+		pango_layout_set_width (layout, -1);
+		pango_layout_set_ellipsize (layout, PANGO_ELLIPSIZE_NONE);
+		g_string_free (lstr, TRUE);
+	}
+
+	g_object_unref (layout);
+	cairo_restore (cr);
+}
+
+static int
+xtext_status_find (GtkXText *xtext, const char *key)
+{
+	int i;
+	for (i = 0; i < xtext->status_item_count; i++)
+	{
+		if (strcmp (xtext->status_items[i].key, key) == 0)
+			return i;
+	}
+	return -1;
+}
+
+static gboolean
+xtext_status_expire_tick (gpointer data)
+{
+	GtkXText *xtext = data;
+	gint64 now = g_get_monotonic_time ();
+	gint64 next_expire = 0;
+	int i;
+
+	for (i = xtext->status_item_count - 1; i >= 0; i--)
+	{
+		xtext_status_item *item = &xtext->status_items[i];
+		if (item->expire_at > 0 && item->expire_at <= now)
+		{
+			g_free (item->key);
+			g_free (item->display_text);
+			/* Shift remaining items down */
+			if (i < xtext->status_item_count - 1)
+				memmove (&xtext->status_items[i], &xtext->status_items[i + 1],
+				         sizeof (xtext_status_item) * (xtext->status_item_count - 1 - i));
+			xtext->status_item_count--;
+		}
+		else if (item->expire_at > 0)
+		{
+			if (next_expire == 0 || item->expire_at < next_expire)
+				next_expire = item->expire_at;
+		}
+	}
+
+	xtext->status_strip_visible = (xtext->status_item_count > 0);
+	xtext->status_expire_timer = 0;
+
+	if (next_expire > 0)
+	{
+		int ms = (int)((next_expire - now) / 1000);
+		if (ms < 1) ms = 1;
+		xtext->status_expire_timer = g_timeout_add (ms, xtext_status_expire_tick, xtext);
+	}
+
+	gtk_xtext_adjustment_set (xtext->buffer, TRUE);
+	gtk_widget_queue_draw (GTK_WIDGET (xtext));
+	return G_SOURCE_REMOVE;
+}
+
+void
+gtk_xtext_status_set (GtkXText *xtext, const char *key, const char *text,
+                      int priority, int timeout_ms)
+{
+	int idx;
+	xtext_status_item *item;
+	gboolean was_visible = xtext->status_strip_visible;
+
+	if (!text)
+	{
+		gtk_xtext_status_remove (xtext, key);
+		return;
+	}
+
+	idx = xtext_status_find (xtext, key);
+	if (idx >= 0)
+	{
+		item = &xtext->status_items[idx];
+		g_free (item->display_text);
+		item->display_text = g_strdup (text);
+		item->priority = priority;
+	}
+	else
+	{
+		if (xtext->status_item_count >= XTEXT_STATUS_MAX_ITEMS)
+			return;  /* full */
+		item = &xtext->status_items[xtext->status_item_count++];
+		item->key = g_strdup (key);
+		item->display_text = g_strdup (text);
+		item->priority = priority;
+	}
+
+	if (timeout_ms > 0)
+		item->expire_at = g_get_monotonic_time () + (gint64)timeout_ms * 1000;
+	else
+		item->expire_at = 0;
+
+	xtext->status_strip_visible = (xtext->status_item_count > 0);
+
+	/* Schedule expiry timer if needed */
+	if (item->expire_at > 0 && xtext->status_expire_timer == 0)
+	{
+		xtext->status_expire_timer = g_timeout_add (timeout_ms,
+		                                            xtext_status_expire_tick, xtext);
+	}
+
+	/* Recalc adjustment if visibility changed */
+	if (was_visible != xtext->status_strip_visible)
+		gtk_xtext_adjustment_set (xtext->buffer, TRUE);
+	gtk_widget_queue_draw (GTK_WIDGET (xtext));
+}
+
+void
+gtk_xtext_status_remove (GtkXText *xtext, const char *key)
+{
+	int idx = xtext_status_find (xtext, key);
+	gboolean was_visible = xtext->status_strip_visible;
+
+	if (idx < 0)
+		return;
+
+	g_free (xtext->status_items[idx].key);
+	g_free (xtext->status_items[idx].display_text);
+
+	if (idx < xtext->status_item_count - 1)
+		memmove (&xtext->status_items[idx], &xtext->status_items[idx + 1],
+		         sizeof (xtext_status_item) * (xtext->status_item_count - 1 - idx));
+	xtext->status_item_count--;
+	xtext->status_strip_visible = (xtext->status_item_count > 0);
+
+	if (was_visible != xtext->status_strip_visible)
+		gtk_xtext_adjustment_set (xtext->buffer, TRUE);
+	gtk_widget_queue_draw (GTK_WIDGET (xtext));
+}
+
+void
+gtk_xtext_status_clear (GtkXText *xtext)
+{
+	int i;
+	for (i = 0; i < xtext->status_item_count; i++)
+	{
+		g_free (xtext->status_items[i].key);
+		g_free (xtext->status_items[i].display_text);
+	}
+	xtext->status_item_count = 0;
+	xtext->status_strip_visible = FALSE;
+}
+
+/* ---- Top toast overlay notifications ---- */
+
+#define TOAST_ENTER_US   (200 * 1000)    /* 200ms in microseconds */
+#define TOAST_LINGER_US  (4000 * 1000)   /* 4000ms default */
+#define TOAST_EXIT_US    (300 * 1000)    /* 300ms */
+#define TOAST_ANIM_MS    16              /* ~60fps */
+#define TOAST_PADDING    6
+#define TOAST_GAP        2
+#define TOAST_CORNER_R   4.0
+
+static void
+xtext_toast_free (xtext_toast *toast)
+{
+	g_free (toast->text);
+	g_free (toast);
+}
+
+static void
+xtext_draw_rounded_rect (cairo_t *cr, double x, double y, double w, double h, double r)
+{
+	cairo_new_sub_path (cr);
+	cairo_arc (cr, x + w - r, y + r, r, -G_PI_2, 0);
+	cairo_arc (cr, x + w - r, y + h - r, r, 0, G_PI_2);
+	cairo_arc (cr, x + r, y + h - r, r, G_PI_2, G_PI);
+	cairo_arc (cr, x + r, y + r, r, G_PI, 3 * G_PI_2);
+	cairo_close_path (cr);
+}
+
+static gboolean
+gtk_xtext_toast_tick (gpointer data)
+{
+	GtkXText *xtext = data;
+	gint64 now = g_get_monotonic_time ();
+	int i;
+
+	for (i = xtext->toast_count - 1; i >= 0; i--)
+	{
+		xtext_toast *t = xtext->toasts[i];
+		gint64 elapsed = now - t->phase_start;
+		double progress;
+
+		switch (t->phase)
+		{
+		case TOAST_ENTERING:
+			progress = (double)elapsed / TOAST_ENTER_US;
+			if (progress >= 1.0)
+			{
+				progress = 1.0;
+				t->phase = TOAST_VISIBLE;
+				t->phase_start = now;
+			}
+			t->alpha = progress;
+			t->y_offset = -(t->rendered_height + TOAST_PADDING * 2) * (1.0 - progress);
+			break;
+
+		case TOAST_VISIBLE:
+			t->alpha = 1.0;
+			t->y_offset = 0;
+			if (!(t->flags & TOAST_FLAG_STICKY) &&
+			    elapsed >= (gint64)t->linger_ms * 1000)
+			{
+				t->phase = TOAST_EXITING;
+				t->phase_start = now;
+			}
+			break;
+
+		case TOAST_EXITING:
+			progress = (double)elapsed / TOAST_EXIT_US;
+			if (progress >= 1.0)
+			{
+				xtext_toast_free (t);
+				if (i < xtext->toast_count - 1)
+					memmove (&xtext->toasts[i], &xtext->toasts[i + 1],
+					         sizeof (xtext_toast *) * (xtext->toast_count - 1 - i));
+				xtext->toast_count--;
+				continue;
+			}
+			t->alpha = 1.0 - progress;
+			t->y_offset = 0;
+			break;
+		}
+	}
+
+	if (xtext->toast_count > 0)
+	{
+		gtk_widget_queue_draw (GTK_WIDGET (xtext));
+		return G_SOURCE_CONTINUE;
+	}
+
+	xtext->toast_anim_timer = 0;
+	return G_SOURCE_REMOVE;
+}
+
+/* Accent colors per toast type (R, G, B) */
+static const double toast_accent_colors[][3] = {
+	{ 0.40, 0.60, 0.80 },  /* INFO  - steel blue */
+	{ 0.55, 0.75, 0.50 },  /* NICK  - muted green */
+	{ 0.70, 0.55, 0.85 },  /* TOPIC - soft purple */
+	{ 0.80, 0.65, 0.30 },  /* MODE  - amber */
+	{ 0.50, 0.70, 0.70 },  /* JOIN  - teal */
+	{ 0.85, 0.40, 0.40 },  /* ERROR - muted red */
+};
+
+static void
+gtk_xtext_draw_toasts (GtkXText *xtext, int width, int height)
+{
+	cairo_t *cr = xtext->cr;
+	PangoLayout *layout;
+	PangoRectangle logical;
+	double draw_y = 6.0;
+	int i;
+	double bg_lum;
+	int dark_theme;
+	const double *accent;
+	double bg_r, bg_g, bg_b;
+
+	if (!cr || xtext->toast_count == 0)
+		return;
+
+	cairo_save (cr);
+
+	/* Clip to widget bounds so entering toasts don't draw above */
+	cairo_rectangle (cr, 0, 0, width, height);
+	cairo_clip (cr);
+
+	/* Detect dark vs light theme from background luminance */
+	bg_lum = xtext->palette[XTEXT_BG].red * 0.299
+	       + xtext->palette[XTEXT_BG].green * 0.587
+	       + xtext->palette[XTEXT_BG].blue * 0.114;
+	dark_theme = (bg_lum < 0.5);
+
+	layout = pango_layout_new (gtk_widget_get_pango_context (GTK_WIDGET (xtext)));
+	pango_layout_set_font_description (layout, xtext->font->font);
+
+	for (i = 0; i < xtext->toast_count; i++)
+	{
+		xtext_toast *t = xtext->toasts[i];
+		int type_idx = (t->type >= 0 && t->type <= TOAST_TYPE_ERROR) ? t->type : 0;
+		int accent_w = 4;
+		int box_x = MARGIN + 8;
+		int box_w = width - 2 * (MARGIN + 8);
+		int box_h = t->rendered_height + TOAST_PADDING * 2 + 2;
+		double y = draw_y + t->y_offset;
+
+		accent = toast_accent_colors[type_idx];
+
+		/* Background: blend accent color into BG for a tinted, high-contrast fill */
+		if (dark_theme)
+		{
+			/* Dark theme: lighten BG slightly, tint with accent */
+			bg_r = xtext->palette[XTEXT_BG].red * 0.6 + accent[0] * 0.15 + 0.08;
+			bg_g = xtext->palette[XTEXT_BG].green * 0.6 + accent[1] * 0.15 + 0.08;
+			bg_b = xtext->palette[XTEXT_BG].blue * 0.6 + accent[2] * 0.15 + 0.08;
+		}
+		else
+		{
+			/* Light theme: darken BG slightly, tint with accent */
+			bg_r = xtext->palette[XTEXT_BG].red * 0.85 + accent[0] * 0.08 - 0.05;
+			bg_g = xtext->palette[XTEXT_BG].green * 0.85 + accent[1] * 0.08 - 0.05;
+			bg_b = xtext->palette[XTEXT_BG].blue * 0.85 + accent[2] * 0.08 - 0.05;
+		}
+		if (bg_r < 0) bg_r = 0; if (bg_r > 1) bg_r = 1;
+		if (bg_g < 0) bg_g = 0; if (bg_g > 1) bg_g = 1;
+		if (bg_b < 0) bg_b = 0; if (bg_b > 1) bg_b = 1;
+
+		/* Background rounded rect - fully opaque for contrast */
+		xtext_draw_rounded_rect (cr, box_x, y, box_w, box_h, TOAST_CORNER_R);
+		cairo_set_source_rgba (cr, bg_r, bg_g, bg_b, 0.95 * t->alpha);
+		cairo_fill (cr);
+
+		/* Left accent bar */
+		xtext_draw_rounded_rect (cr, box_x, y, accent_w, box_h, 2.0);
+		cairo_set_source_rgba (cr, accent[0], accent[1], accent[2], 0.9 * t->alpha);
+		cairo_fill (cr);
+
+		/* Border */
+		xtext_draw_rounded_rect (cr, box_x, y, box_w, box_h, TOAST_CORNER_R);
+		cairo_set_source_rgba (cr, accent[0], accent[1], accent[2], 0.3 * t->alpha);
+		cairo_set_line_width (cr, 1.0);
+		cairo_stroke (cr);
+
+		/* Text - centered */
+		pango_layout_set_text (layout, t->text, -1);
+		pango_layout_set_width (layout, (box_w - accent_w - TOAST_PADDING * 2) * PANGO_SCALE);
+		pango_layout_set_ellipsize (layout, PANGO_ELLIPSIZE_END);
+		pango_layout_set_alignment (layout, PANGO_ALIGN_CENTER);
+		pango_layout_get_pixel_extents (layout, NULL, &logical);
+
+		/* Position at left edge of text area; Pango centers within the layout width */
+		cairo_move_to (cr, box_x + accent_w + TOAST_PADDING,
+		               y + (box_h - logical.height) / 2);
+		cairo_set_source_rgba (cr,
+		                       xtext->palette[XTEXT_FG].red,
+		                       xtext->palette[XTEXT_FG].green,
+		                       xtext->palette[XTEXT_FG].blue,
+		                       t->alpha);
+		pango_cairo_show_layout (cr, layout);
+
+		draw_y += box_h + TOAST_GAP;
+	}
+
+	pango_layout_set_width (layout, -1);
+	pango_layout_set_ellipsize (layout, PANGO_ELLIPSIZE_NONE);
+	pango_layout_set_alignment (layout, PANGO_ALIGN_LEFT);
+	g_object_unref (layout);
 	cairo_restore (cr);
 }
 
 void
-gtk_xtext_set_typing_text (GtkXText *xtext, const char *text)
+gtk_xtext_toast_show (GtkXText *xtext, const char *text, int linger_ms,
+                      xtext_toast_type type, unsigned int flags)
 {
-	g_free (xtext->typing_text);
-	xtext->typing_text = g_strdup (text);
-	xtext->typing_strip_visible = (text != NULL);
+	xtext_toast *toast;
+	PangoLayout *layout;
+	PangoRectangle logical;
 
-	gtk_xtext_adjustment_set (xtext->buffer, TRUE);
-	gtk_widget_queue_draw (GTK_WIDGET (xtext));
+	/* If at max, force-remove oldest non-sticky toast */
+	if (xtext->toast_count >= XTEXT_TOAST_MAX)
+	{
+		int victim = -1, j;
+		for (j = 0; j < xtext->toast_count; j++)
+		{
+			if (!(xtext->toasts[j]->flags & TOAST_FLAG_STICKY))
+			{
+				victim = j;
+				break;
+			}
+		}
+		if (victim >= 0)
+		{
+			xtext_toast_free (xtext->toasts[victim]);
+			if (victim < xtext->toast_count - 1)
+				memmove (&xtext->toasts[victim], &xtext->toasts[victim + 1],
+				         sizeof (xtext_toast *) * (xtext->toast_count - 1 - victim));
+			xtext->toast_count--;
+		}
+		else
+			return;  /* all slots are sticky, can't add more */
+	}
+
+	toast = g_new0 (xtext_toast, 1);
+	toast->text = g_strdup (text);
+	toast->phase = TOAST_ENTERING;
+	toast->type = type;
+	toast->flags = flags;
+	toast->phase_start = g_get_monotonic_time ();
+	toast->linger_ms = (linger_ms > 0) ? linger_ms : 4000;
+	toast->alpha = 0.0;
+
+	/* Measure text height */
+	layout = pango_layout_new (gtk_widget_get_pango_context (GTK_WIDGET (xtext)));
+	pango_layout_set_font_description (layout, xtext->font->font);
+	pango_layout_set_text (layout, text, -1);
+	pango_layout_get_pixel_extents (layout, NULL, &logical);
+	toast->rendered_height = logical.height;
+	toast->y_offset = -(logical.height + TOAST_PADDING * 2);
+	g_object_unref (layout);
+
+	xtext->toasts[xtext->toast_count++] = toast;
+
+	/* Start animation timer if not running */
+	if (xtext->toast_anim_timer == 0)
+		xtext->toast_anim_timer = g_timeout_add (TOAST_ANIM_MS,
+		                                         gtk_xtext_toast_tick, xtext);
+}
+
+void
+gtk_xtext_toast_clear (GtkXText *xtext)
+{
+	int i;
+	for (i = 0; i < xtext->toast_count; i++)
+		xtext_toast_free (xtext->toasts[i]);
+	xtext->toast_count = 0;
+
+	if (xtext->toast_anim_timer)
+	{
+		g_source_remove (xtext->toast_anim_timer);
+		xtext->toast_anim_timer = 0;
+	}
 }
 
 void
@@ -5052,8 +5545,12 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	ent->sublines = NULL;
 	buf->num_lines += gtk_xtext_lines_taken (buf, ent);
 
-	if ((buf->marker_pos_id == 0 || buf->marker_seen) && (buf->xtext->buffer != buf ||
-		!gtk_window_has_toplevel_focus (GTK_WINDOW (gtk_widget_get_toplevel (GTK_WIDGET (buf->xtext))))))
+	/* Local auto-advance: move marker to newest unread message when window is
+	 * unfocused.  Suppressed when server controls the marker (draft/read-marker). */
+	if (!buf->server_read_marker &&
+	    (buf->marker_pos_id == 0 || buf->marker_seen) &&
+	    (buf->xtext->buffer != buf ||
+	     !gtk_window_has_toplevel_focus (GTK_WINDOW (gtk_widget_get_toplevel (GTK_WIDGET (buf->xtext))))))
 	{
 		buf->marker_pos_id = ent->entry_id;
 		buf->marker_state = MARKER_IS_SET;
@@ -5913,6 +6410,34 @@ gtk_xtext_moveto_marker_pos (GtkXText *xtext)
 }
 
 void
+gtk_xtext_set_marker_from_timestamp (xtext_buffer *buf, time_t timestamp)
+{
+	textentry *ent;
+
+	buf->server_read_marker = TRUE;
+
+	/* Find the first entry AFTER the read timestamp = first unread */
+	for (ent = buf->text_first; ent; ent = ent->next)
+	{
+		if (ent->stamp > timestamp)
+		{
+			buf->marker_pos_id = ent->entry_id;
+			buf->marker_state = MARKER_IS_SET;
+			buf->marker_seen = FALSE;
+			if (buf->xtext)
+				gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
+			return;
+		}
+	}
+
+	/* All messages are at or before the timestamp — everything is read */
+	buf->marker_pos_id = 0;
+	buf->marker_state = MARKER_WAS_NEVER_SET;
+	if (buf->xtext)
+		gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
+}
+
+void
 gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 {
 	int w, h;
@@ -5941,6 +6466,9 @@ gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 		g_source_remove (xtext->io_tag);
 		xtext->io_tag = 0;
 	}
+
+	/* Dismiss toasts on buffer switch (widget-scoped) */
+	gtk_xtext_toast_clear (xtext);
 
 	if (!gtk_widget_get_realized (GTK_WIDGET (xtext)))
 		gtk_widget_realize (GTK_WIDGET (xtext));
@@ -6263,6 +6791,12 @@ int
 gtk_xtext_entry_get_left_len (textentry *ent)
 {
 	return ent ? ent->left_len : -1;
+}
+
+time_t
+gtk_xtext_entry_get_stamp (textentry *ent)
+{
+	return ent ? ent->stamp : 0;
 }
 
 void

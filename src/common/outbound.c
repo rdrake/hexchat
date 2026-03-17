@@ -2371,12 +2371,62 @@ cmd_history (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	return TRUE;
 }
 
+/* Format a time_t as ISO 8601 UTC (YYYY-MM-DDThh:mm:ss.000Z).
+ * Buffer must be at least 32 bytes. */
+static void
+format_iso8601 (time_t t, char *buf, int bufsize)
+{
+	struct tm *tm = gmtime (&t);
+	if (tm)
+		g_snprintf (buf, bufsize, "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
+		            tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+		            tm->tm_hour, tm->tm_min, tm->tm_sec);
+	else
+		g_strlcpy (buf, "0", bufsize);
+}
+
+/* Send MARKREAD for a session using its newest message timestamp.
+ * Called from auto-advance (focus/tab-switch) and /MARKREAD command. */
+void
+markread_send_for_session (session *sess)
+{
+	server *serv;
+	time_t newest;
+	char ts[64];
+
+	if (!sess || !sess->server)
+		return;
+
+	serv = sess->server;
+	if (!serv->have_read_marker || !serv->connected)
+		return;
+	if (sess->type != SESS_CHANNEL && sess->type != SESS_DIALOG)
+		return;
+	if (!sess->channel[0])
+		return;
+
+	/* Use the newest message timestamp from the buffer */
+	newest = fe_get_newest_stamp (sess);
+	if (newest == 0)
+		return;
+
+	/* Only send if we have messages newer than the current server marker */
+	if (sess->markread_time >= newest)
+		return;
+
+	format_iso8601 (newest, ts, sizeof (ts));
+	tcp_sendf (serv, "MARKREAD %s timestamp=%s\r\n", sess->channel, ts);
+
+	/* Optimistically update local state */
+	g_free (sess->markread_timestamp);
+	sess->markread_timestamp = g_strdup (ts);
+	sess->markread_time = newest;
+}
+
 static int
 cmd_markread (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	server *serv = sess->server;
-	const char *target = NULL;
-	const char *msgid = NULL;
 
 	/* Check if read-marker is available */
 	if (!serv->have_read_marker)
@@ -2391,45 +2441,30 @@ cmd_markread (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 		return TRUE;
 	}
 
-	/* Parse arguments: /MARKREAD [target] [msgid] */
-	if (word[2][0])
+	/* /MARKREAD with no arguments — mark current session as read */
+	if (!word[2][0])
 	{
-		target = word[2];
-		if (word[3][0])
-			msgid = word[3];
-	}
-	else
-	{
-		/* No arguments - use current session and newest msgid */
 		if (sess->type == SESS_CHANNEL || sess->type == SESS_DIALOG)
 		{
-			target = sess->channel;
-			msgid = sess->newest_msgid;
+			markread_send_for_session (sess);
 		}
 		else
 		{
 			PrintText (sess, "Use /MARKREAD in a channel or query window, or specify a target.\n");
-			return TRUE;
 		}
-	}
-
-	if (!target || !*target)
-	{
-		PrintText (sess, "No target specified.\n");
 		return TRUE;
 	}
 
-	/* Send MARKREAD command */
-	if (msgid && *msgid)
+	/* /MARKREAD <target> — query current marker for target */
+	/* /MARKREAD <target> <timestamp> — set marker explicitly */
 	{
-		tcp_sendf_labeled_tracked (serv, "MARKREAD", target,
-		                           "MARKREAD %s timestamp=%s\r\n", target, msgid);
-	}
-	else
-	{
-		/* Request current read marker position */
-		tcp_sendf_labeled_tracked (serv, "MARKREAD", target,
-		                           "MARKREAD %s\r\n", target);
+		const char *target = word[2];
+		const char *ts = word[3][0] ? word[3] : NULL;
+
+		if (ts)
+			tcp_sendf (serv, "MARKREAD %s timestamp=%s\r\n", target, ts);
+		else
+			tcp_sendf (serv, "MARKREAD %s\r\n", target);
 	}
 
 	return TRUE;
@@ -5540,7 +5575,8 @@ typing_send_timer_cb (void *userdata)
 		return 0; /* typing_send_active started a new timer */
 	}
 
-	/* User stopped typing — let indicator expire server-side */
+	/* User stopped typing but input still has text — send paused */
+	tcp_sendf (sess->server, "@+typing=paused TAGMSG %s\r\n", sess->channel);
 	sess->typing_last_sent = 0;
 	sess->typing_send_timer = 0;
 	return 0;
@@ -5553,6 +5589,12 @@ typing_indicator_cancel (session *sess)
 	{
 		fe_timeout_remove (sess->typing_send_timer);
 		sess->typing_send_timer = 0;
+	}
+	/* Send done if we previously sent active/paused */
+	if (sess->typing_last_sent != 0 && sess->server && sess->server->connected
+	    && sess->server->have_message_tags && sess->channel[0])
+	{
+		tcp_sendf (sess->server, "@+typing=done TAGMSG %s\r\n", sess->channel);
 	}
 	sess->typing_last_sent = 0;
 }
