@@ -302,7 +302,7 @@ hexchat_plugin_init (hexchat_plugin *plugin_handle, char **plugin_name, char **p
 	hexchat_hook_server (ph, "906", HEXCHAT_PRI_NORM, authend_cb, NULL);
 	hexchat_hook_server (ph, "907", HEXCHAT_PRI_NORM, authend_cb, NULL);
 
-	hexchat_printf (ph, "%s plugin loaded\n", name);
+	hexchat_toastf (ph, HEXCHAT_TOAST_INFO, "%s plugin loaded", name);
 
 	return 1;
 }
@@ -310,6 +310,6 @@ hexchat_plugin_init (hexchat_plugin *plugin_handle, char **plugin_name, char **p
 int
 hexchat_plugin_deinit (void)
 {
-	hexchat_printf (ph, "%s plugin unloaded\n", name);
+	hexchat_toastf (ph, HEXCHAT_TOAST_INFO, "%s plugin unloaded", name);
 	return 1;
 }

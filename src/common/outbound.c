@@ -4232,6 +4232,33 @@ cmd_topic (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 }
 
 static int
+cmd_toast (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	int type = 0;  /* TOAST_TYPE_INFO */
+	unsigned int flags = 0;
+	int arg = 2;
+
+	/* /TOAST [-nick|-topic|-mode|-join|-error] [-sticky] <text> */
+	while (word[arg][0] == '-')
+	{
+		if (strcmp (word[arg], "-nick") == 0)       type = 1;
+		else if (strcmp (word[arg], "-topic") == 0) type = 2;
+		else if (strcmp (word[arg], "-mode") == 0)  type = 3;
+		else if (strcmp (word[arg], "-join") == 0)   type = 4;
+		else if (strcmp (word[arg], "-error") == 0) type = 5;
+		else if (strcmp (word[arg], "-sticky") == 0) flags |= 1; /* TOAST_FLAG_STICKY */
+		else break;
+		arg++;
+	}
+
+	if (word_eol[arg][0])
+		fe_toast_show (sess, word_eol[arg], 4000, type, flags);
+	else
+		fe_toast_show (sess, "Test toast notification", 4000, type, flags);
+	return TRUE;
+}
+
+static int
 cmd_tray (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	if (strcmp (word[2], "-t") == 0)
@@ -4770,6 +4797,8 @@ const struct commands xc_cmds[] = {
 	{"SPLAY", cmd_splay, 0, 0, 1, "SPLAY <soundfile>"},
 	{"TAGMSG", cmd_tagmsg, 1, 0, 1,
 	 N_("TAGMSG <target> <tags>, sends a tag-only message (e.g., typing indicators, reactions)")},
+	{"TOAST", cmd_toast, 0, 0, 1,
+	 N_("TOAST [<text>], show a test toast notification overlay")},
 	{"TOPIC", cmd_topic, 1, 1, 1,
 	 N_("TOPIC [<topic>], sets the topic if one is given, else shows the current topic")},
 	{"TRAY", cmd_tray, 0, 0, 1,

@@ -1601,7 +1601,7 @@ hexchat_plugin_init (hexchat_plugin * plugin_handle, char **plugin_name,
 						 char **plugin_desc, char **plugin_version, char *arg)
 {
 	if (initialized != 0) {
-		hexchat_print (plugin_handle, "Perl interface already loaded\n");
+		hexchat_toast (plugin_handle, "Perl interface already loaded", HEXCHAT_TOAST_ERROR);
 		return 0;
 	}
 
@@ -1630,7 +1630,7 @@ hexchat_plugin_init (hexchat_plugin * plugin_handle, char **plugin_name,
 	/*perl_init (); */
 	hexchat_hook_timer (ph, 0, perl_auto_load, NULL );
 
-	hexchat_print (ph, "Perl interface loaded\n");
+	hexchat_toast (ph, "Perl interface loaded", HEXCHAT_TOAST_INFO);
 
 	return 1;
 }
@@ -1641,7 +1641,7 @@ hexchat_plugin_deinit (hexchat_plugin * plugin_handle)
 	perl_end ();
 
 	initialized = 0;
-	hexchat_print (plugin_handle, "Perl interface unloaded\n");
+	hexchat_toast (plugin_handle, "Perl interface unloaded", HEXCHAT_TOAST_INFO);
 
 	return 1;
 }

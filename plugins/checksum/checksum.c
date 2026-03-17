@@ -192,13 +192,13 @@ hexchat_plugin_init (hexchat_plugin *plugin_handle, char **plugin_name, char **p
 	hexchat_hook_print (ph, "DCC RECV Complete", HEXCHAT_PRI_NORM, dccrecv_cb, NULL);
 	hexchat_hook_print (ph, "DCC Offer", HEXCHAT_PRI_NORM, dccoffer_cb, NULL);
 
-	hexchat_printf (ph, "%s plugin loaded\n", name);
+	hexchat_toastf (ph, HEXCHAT_TOAST_INFO, "%s plugin loaded", name);
 	return 1;
 }
 
 int
 hexchat_plugin_deinit (void)
 {
-	hexchat_printf (ph, "%s plugin unloaded\n", name);
+	hexchat_toastf (ph, HEXCHAT_TOAST_INFO, "%s plugin unloaded", name);
 	return 1;
 }

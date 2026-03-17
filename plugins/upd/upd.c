@@ -54,7 +54,7 @@ hexchat_plugin_init (hexchat_plugin *plugin_handle, char **plugin_name, char **p
 
 	hexchat_hook_command (ph, "UPDCHK", HEXCHAT_PRI_NORM, check_cmd, upd_help, NULL);
 	hexchat_command (ph, "MENU -ishare\\download.png ADD \"Help/Check for Updates\" \"UPDCHK\"");
-	hexchat_printf (ph, "%s plugin loaded\n", name);
+	hexchat_toastf (ph, HEXCHAT_TOAST_INFO, "%s plugin loaded", name);
 
 	return 1;
 }
@@ -65,6 +65,6 @@ hexchat_plugin_deinit (void)
 	win_sparkle_cleanup ();
 
 	hexchat_command (ph, "MENU DEL \"Help/Check for updates\"");
-	hexchat_printf (ph, "%s plugin unloaded\n", name);
+	hexchat_toastf (ph, HEXCHAT_TOAST_INFO, "%s plugin unloaded", name);
 	return 1;
 }

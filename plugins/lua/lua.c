@@ -1709,7 +1709,7 @@ G_MODULE_EXPORT int hexchat_plugin_init(hexchat_plugin *plugin_handle, char **na
 {
 	if(initialized != 0)
 	{
-		hexchat_print(plugin_handle, "Lua interface already loaded\n");
+		hexchat_toast(plugin_handle, "Lua interface already loaded", HEXCHAT_TOAST_ERROR);
 		return 0;
 	}
 
@@ -1732,7 +1732,7 @@ G_MODULE_EXPORT int hexchat_plugin_init(hexchat_plugin *plugin_handle, char **na
 	hexchat_hook_command(ph, "RELOAD", HEXCHAT_PRI_NORM, command_reload, NULL, NULL);
 	hexchat_hook_command(ph, "lua", HEXCHAT_PRI_NORM, command_lua, command_help, NULL);
 
-	hexchat_printf(ph, "%s version %s loaded.\n", plugin_name, plugin_version);
+	hexchat_toastf(ph, HEXCHAT_TOAST_INFO, "%s version %s loaded", plugin_name, plugin_version);
 
 	scripts = g_ptr_array_new_with_free_func((GDestroyNotify)destroy_script);
 	create_interpreter();
@@ -1758,7 +1758,7 @@ G_MODULE_EXPORT int hexchat_plugin_deinit(hexchat_plugin *plugin_handle)
 		active = TRUE;
 	if(active)
 	{
-		hexchat_print(ph, "\00304Cannot unload the lua plugin while there are active states");
+		hexchat_toast(ph, "Cannot unload the lua plugin while there are active states", HEXCHAT_TOAST_ERROR);
 		return 0;
 	}
 	if(interp)

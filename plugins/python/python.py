@@ -536,7 +536,7 @@ def _on_plugin_init(plugin_name, plugin_desc, plugin_version, arg, libdir):
            CONSOLE
            ABOUT''', ffi.NULL)
 
-    lib.hexchat_print(lib.ph, b'Python interface loaded')
+    lib.hexchat_toast(lib.ph, b'Python interface loaded', 0)
     autoload()
     return 1
 

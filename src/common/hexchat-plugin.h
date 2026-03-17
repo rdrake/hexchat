@@ -39,6 +39,13 @@
 #define HEXCHAT_EAT_PLUGIN	2	/* don't let other plugins see this event */
 #define HEXCHAT_EAT_ALL		(HEXCHAT_EAT_HEXCHAT|HEXCHAT_EAT_PLUGIN)	/* don't let anything see this event */
 
+#define HEXCHAT_TOAST_INFO	0
+#define HEXCHAT_TOAST_NICK	1
+#define HEXCHAT_TOAST_TOPIC	2
+#define HEXCHAT_TOAST_MODE	3
+#define HEXCHAT_TOAST_JOIN	4
+#define HEXCHAT_TOAST_ERROR	5
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -193,6 +200,16 @@ struct _hexchat_plugin
 	hexchat_event_attrs *(*hexchat_event_attrs_create) (hexchat_plugin *ph);
 	void (*hexchat_event_attrs_free) (hexchat_plugin *ph,
 									  hexchat_event_attrs *attrs);
+	void (*hexchat_toast) (hexchat_plugin *ph,
+	    const char *text,
+	    int type);
+	void (*hexchat_toastf) (hexchat_plugin *ph,
+	    int type,
+	    const char *format, ...)
+#ifdef __GNUC__
+	__attribute__((format(printf, 3, 4)))
+#endif
+	;
 };
 #endif
 
@@ -406,6 +423,20 @@ int
 hexchat_pluginpref_list (hexchat_plugin *ph,
 		char *dest);
 
+void
+hexchat_toast (hexchat_plugin *ph,
+	    const char *text,
+	    int type);
+
+void
+hexchat_toastf (hexchat_plugin *ph,
+	    int type,
+	    const char *format, ...)
+#ifdef __GNUC__
+	__attribute__((format(printf, 3, 4)))
+#endif
+;
+
 #if !defined(PLUGIN_C) && (defined(WIN32) || defined(__CYGWIN__))
 #ifndef HEXCHAT_PLUGIN_HANDLE
 #define HEXCHAT_PLUGIN_HANDLE (ph)
@@ -451,6 +482,8 @@ hexchat_pluginpref_list (hexchat_plugin *ph,
 #define hexchat_pluginpref_get_int ((HEXCHAT_PLUGIN_HANDLE)->hexchat_pluginpref_get_int)
 #define hexchat_pluginpref_delete ((HEXCHAT_PLUGIN_HANDLE)->hexchat_pluginpref_delete)
 #define hexchat_pluginpref_list ((HEXCHAT_PLUGIN_HANDLE)->hexchat_pluginpref_list)
+#define hexchat_toast ((HEXCHAT_PLUGIN_HANDLE)->hexchat_toast)
+#define hexchat_toastf ((HEXCHAT_PLUGIN_HANDLE)->hexchat_toastf)
 #endif
 
 #ifdef __cplusplus

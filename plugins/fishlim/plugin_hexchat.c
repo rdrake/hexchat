@@ -823,7 +823,7 @@ int hexchat_plugin_init(hexchat_plugin *plugin_handle,
 
     pending_exchanges = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 
-    hexchat_printf(ph, "%s plugin loaded\n", plugin_name);
+    hexchat_toastf(ph, HEXCHAT_TOAST_INFO, "%s plugin loaded", plugin_name);
     /* Return success */
     return 1;
 }
@@ -833,7 +833,7 @@ int hexchat_plugin_deinit(void) {
     dh1080_deinit();
     fish_deinit();
 
-    hexchat_printf(ph, "%s plugin unloaded\n", plugin_name);
+    hexchat_toastf(ph, HEXCHAT_TOAST_INFO, "%s plugin unloaded", plugin_name);
     return 1;
 }
 

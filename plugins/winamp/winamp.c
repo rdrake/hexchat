@@ -140,7 +140,7 @@ hexchat_plugin_init(hexchat_plugin *plugin_handle,
 	hexchat_hook_command (ph, "WINAMP", HEXCHAT_PRI_NORM, winamp, "Usage: /WINAMP [PAUSE|PLAY|STOP|NEXT|PREV|START] - control Winamp or show what's currently playing", 0);
    	hexchat_command (ph, "MENU -ishare\\music.png ADD \"Window/Display Current Song (Winamp)\" \"WINAMP\"");
 
-	hexchat_print (ph, "Winamp plugin loaded\n");
+	hexchat_toast (ph, "Winamp plugin loaded", HEXCHAT_TOAST_INFO);
 
 	return 1;	   /* return 1 for success */
 }
@@ -149,6 +149,6 @@ int
 hexchat_plugin_deinit(void)
 {
 	hexchat_command (ph, "MENU DEL \"Window/Display Current Song (Winamp)\"");
-	hexchat_print (ph, "Winamp plugin unloaded\n");
+	hexchat_toast (ph, "Winamp plugin unloaded", HEXCHAT_TOAST_INFO);
 	return 1;
 }

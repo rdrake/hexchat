@@ -7,12 +7,13 @@ from _hexchat_embedded import ffi, lib
 __all__ = [
     'EAT_ALL', 'EAT_HEXCHAT', 'EAT_NONE', 'EAT_PLUGIN', 'EAT_XCHAT',
     'PRI_HIGH', 'PRI_HIGHEST', 'PRI_LOW', 'PRI_LOWEST', 'PRI_NORM',
+    'TOAST_INFO', 'TOAST_NICK', 'TOAST_TOPIC', 'TOAST_MODE', 'TOAST_JOIN', 'TOAST_ERROR',
     '__doc__', '__version__', 'command', 'del_pluginpref', 'emit_print',
     'find_context', 'get_context', 'get_info',
     'get_list', 'get_lists', 'get_pluginpref', 'get_prefs', 'hook_command',
     'hook_print', 'hook_print_attrs', 'hook_server', 'hook_server_attrs',
     'hook_timer', 'hook_unload', 'list_pluginpref', 'nickcmp', 'prnt',
-    'set_pluginpref', 'strip', 'unhook',
+    'set_pluginpref', 'strip', 'toast', 'unhook',
 ]
 
 __doc__ = 'HexChat Scripting Interface'
@@ -30,6 +31,13 @@ PRI_LOW = -64
 PRI_NORM = 0
 PRI_HIGH = 64
 PRI_HIGHEST = 127
+
+TOAST_INFO = 0
+TOAST_NICK = 1
+TOAST_TOPIC = 2
+TOAST_MODE = 3
+TOAST_JOIN = 4
+TOAST_ERROR = 5
 
 
 # We need each module to be able to reference their parent plugin
@@ -58,6 +66,10 @@ else:
 # ------------ API ------------
 def prnt(string):
     lib.hexchat_print(lib.ph, string.encode())
+
+
+def toast(string, toast_type=TOAST_INFO):
+    lib.hexchat_toast(lib.ph, string.encode(), toast_type)
 
 
 def emit_print(event_name, *args, **kwargs):
@@ -352,6 +364,10 @@ class Context:
     def prnt(self, string):
         with self.__change_context():
             prnt(string)
+
+    def toast(self, string, toast_type=TOAST_INFO):
+        with self.__change_context():
+            toast(string, toast_type)
 
     def emit_print(self, event_name, *args, **kwargs):
         time = kwargs.pop('time', 0)  # For py2 compat

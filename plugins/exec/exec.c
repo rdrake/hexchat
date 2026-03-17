@@ -147,7 +147,7 @@ hexchat_plugin_init (hexchat_plugin *plugin_handle, char **plugin_name, char **p
 	*plugin_version = version;
 
 	hexchat_hook_command (ph, "EXEC", HEXCHAT_PRI_NORM, run_command, "Usage: /EXEC [-O] - execute commands inside HexChat", 0);
-	hexchat_printf (ph, "%s plugin loaded\n", name);
+	hexchat_toastf (ph, HEXCHAT_TOAST_INFO, "%s plugin loaded", name);
 
 	return 1;       /* return 1 for success */
 }
@@ -155,6 +155,6 @@ hexchat_plugin_init (hexchat_plugin *plugin_handle, char **plugin_name, char **p
 int
 hexchat_plugin_deinit (void)
 {
-	hexchat_printf (ph, "%s plugin unloaded\n", name);
+	hexchat_toastf (ph, HEXCHAT_TOAST_INFO, "%s plugin unloaded", name);
 	return 1;
 }

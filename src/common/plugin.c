@@ -162,7 +162,7 @@ plugin_free (hexchat_plugin *pl, int do_deinit, int allow_refuse)
 	if (pl->fake)
 		goto xit;
 
-	/* run the plugin's deinit routine, if any */
+	/* run the plugin's deinit routine */
 	if (do_deinit && pl->deinit_callback != NULL)
 	{
 		deinit_func = pl->deinit_callback;
@@ -319,8 +319,9 @@ plugin_add (session *sess, char *filename, void *handle, void *init_func,
 		pl->hexchat_emit_print_attrs = hexchat_emit_print_attrs;
 		pl->hexchat_event_attrs_create = hexchat_event_attrs_create;
 		pl->hexchat_event_attrs_free = hexchat_event_attrs_free;
+		pl->hexchat_toast = hexchat_toast;
+		pl->hexchat_toastf = hexchat_toastf;
 
-		/* run hexchat_plugin_init, if it returns 0, close the plugin */
 		if (((hexchat_init_func *)init_func) (pl, &pl->name, &pl->desc, &pl->version, arg) == 0)
 		{
 			plugin_free (pl, FALSE, FALSE);
@@ -1071,6 +1072,32 @@ hexchat_printf (hexchat_plugin *ph, const char *format, ...)
 	va_end (args);
 
 	hexchat_print (ph, buf);
+	g_free (buf);
+}
+
+void
+hexchat_toast (hexchat_plugin *ph, const char *text, int type)
+{
+	if (!is_session (ph->context))
+	{
+		DEBUG(PrintTextf(0, "%s\thexchat_toast called without a valid context.\n", ph->name));
+		return;
+	}
+
+	fe_toast_show (ph->context, text, 4000, type, 0);
+}
+
+void
+hexchat_toastf (hexchat_plugin *ph, int type, const char *format, ...)
+{
+	va_list args;
+	char *buf;
+
+	va_start (args, format);
+	buf = g_strdup_vprintf (format, args);
+	va_end (args);
+
+	hexchat_toast (ph, buf, type);
 	g_free (buf);
 }
 

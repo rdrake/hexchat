@@ -236,7 +236,7 @@ hexchat_plugin_init (hexchat_plugin *plugin_handle, char **plugin_name, char **p
 	hexchat_hook_command (ph, "SYSINFO", HEXCHAT_PRI_NORM, sysinfo_cb, sysinfo_help, NULL);
 
 	hexchat_command (ph, "MENU ADD \"Window/Send System Info\" \"SYSINFO\"");
-	hexchat_printf (ph, _("%s plugin loaded\n"), name);
+	hexchat_toastf (ph, HEXCHAT_TOAST_INFO, _("%s plugin loaded"), name);
 	return 1;
 }
 
@@ -244,6 +244,6 @@ int
 hexchat_plugin_deinit (void)
 {
 	hexchat_command (ph, "MENU DEL \"Window/Display System Info\"");
-	hexchat_printf (ph, _("%s plugin unloaded\n"), name);
+	hexchat_toastf (ph, HEXCHAT_TOAST_INFO, _("%s plugin unloaded"), name);
 	return 1;
 }

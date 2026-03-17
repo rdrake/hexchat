@@ -241,10 +241,10 @@ scrollback_load (session *sess)
 	if (lines)
 	{
 		char *text = ctime (&newest_time);
-		char *buf = g_strdup_printf ("\n*\t%s %s\n", _("Loaded log from"), text);
-		/* Use newest_time as timestamp so CHATHISTORY AFTER messages
-		 * (which are newer) get inserted after this marker via insert_sorted */
-		fe_print_text (sess, buf, newest_time, TRUE);
+		/* ctime() returns trailing \n, strip it */
+		char *buf = g_strdup_printf ("%s %s", _("Loaded log from"), text);
+		g_strchomp (buf);
+		fe_toast_show (sess, buf, 4000, 0, 0);
 		g_free (buf);
 	}
 }

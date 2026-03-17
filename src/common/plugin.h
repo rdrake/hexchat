@@ -149,6 +149,12 @@ struct _hexchat_plugin
 	hexchat_event_attrs *(*hexchat_event_attrs_create) (hexchat_plugin *ph);
 	void (*hexchat_event_attrs_free) (hexchat_plugin *ph,
 									  hexchat_event_attrs *attrs);
+	void (*hexchat_toast) (hexchat_plugin *ph,
+	    const char *text,
+	    int type);
+	void (*hexchat_toastf) (hexchat_plugin *ph,
+	    int type,
+	    const char *format, ...);
 
 	/* PRIVATE FIELDS! */
 	void *handle;		/* from dlopen */
