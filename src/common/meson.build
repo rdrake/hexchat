@@ -10,6 +10,7 @@ common_sources = [
   'inbound.c',
   'modes.c',
   'network.c',
+  'network-icon.c',
   'notify.c',
   'outbound.c',
   'plugin.c',
@@ -92,18 +93,18 @@ if get_option('plugin')
   install_headers('hexchat-plugin.h')
 endif
 
+# libsoup3 and jansson for HTTP requests (network icon fetch, OAuth2 token exchange)
+libsoup_dep = dependency('libsoup-3.0', required: false)
+jansson_dep = dependency('jansson', version: '>= 2.10', required: false)
+if libsoup_dep.found() and jansson_dep.found()
+  common_deps += [libsoup_dep, jansson_dep]
+  common_cflags += '-DUSE_LIBSOUP'
+endif
+
 # WebSocket/HTTP server support (for OAuth2 callbacks and Electron frontend)
 if libwebsockets_dep.found()
   common_sources += ['ws-server.c', 'oauth.c', 'secure-storage.c']
   common_deps += libwebsockets_dep
-
-  # libsoup3 and jansson for OAuth2 token exchange HTTP requests
-  libsoup_dep = dependency('libsoup-3.0', required: false)
-  jansson_dep = dependency('jansson', version: '>= 2.10', required: false)
-  if libsoup_dep.found() and jansson_dep.found()
-    common_deps += [libsoup_dep, jansson_dep]
-    common_cflags += '-DUSE_LIBSOUP'
-  endif
 
   # libsecret for secure token storage on Linux
   libsecret_dep = dependency('libsecret-1', required: false)

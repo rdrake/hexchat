@@ -28,6 +28,7 @@
 #include "fe.h"
 #include "util.h"
 #include "inbound.h"
+#include "network-icon.h"
 #include "chathistory.h"
 #ifdef HAVE_STRINGS_H
 #include <strings.h>
@@ -976,6 +977,7 @@ inbound_005 (server * serv, char *word[], const message_tags_data *tags_data)
 			/* Network icon URL (draft/ICON ISUPPORT token) */
 			g_free (serv->network_icon_url);
 			serv->network_icon_url = g_strdup (tokvalue);
+			network_icon_fetch (serv);
 		}
 
 		g_free (tokname);

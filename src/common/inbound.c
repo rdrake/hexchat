@@ -2494,6 +2494,12 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_channel_rename = enable;
 		else if (!strcmp (extension, "draft/pre-away"))
 			serv->have_pre_away = enable;
+		else if (!strcmp (extension, "draft/extended-isupport"))
+		{
+			serv->have_extended_isupport = enable;
+			if (enable)
+				tcp_send_len (serv, "ISUPPORT\r\n", 10);
+		}
 		else if (!strcmp (extension, "sasl"))
 		{
 			serv->have_sasl = enable;
@@ -2586,6 +2592,9 @@ static const char * const supported_caps[] = {
 
 	/* Solanum */
 	"solanum.chat/identify-msg",
+
+	/* Extended ISUPPORT (receive 005 tokens before registration) */
+	"draft/extended-isupport",
 };
 
 static int

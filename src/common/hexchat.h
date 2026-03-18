@@ -132,6 +132,7 @@ struct hexchatprefs
 	unsigned int hex_gui_input_style;
 	unsigned int hex_gui_join_dialog;
 	unsigned int hex_gui_mode_buttons;
+	unsigned int hex_gui_network_icons;
 	unsigned int hex_gui_quit_dialog;
 	/* unsigned int hex_gui_single; */
 	unsigned int hex_gui_slist_fav;
@@ -616,6 +617,8 @@ typedef struct server
 	int multiline_max_lines;		/* max lines in multiline batch (from ISUPPORT) */
 	int sts_upgrade_port;			/* STS TLS port to upgrade to (0 = no upgrade needed) */
 	char *network_icon_url;			/* Network icon URL from ISUPPORT draft/ICON */
+	void *network_icon;				/* Cached network icon pixbuf (GdkPixbuf *, NULL if not fetched) */
+	void *network_icon_cancel;		/* Opaque handle to cancel in-flight icon fetch */
 
 	void *network;						/* points to entry in servlist.c or NULL! */
 
@@ -691,6 +694,7 @@ typedef struct server
 	unsigned int have_metadata:1;	/* IRCv3 draft/metadata-2 capability */
 	unsigned int have_channel_rename:1; /* IRCv3 draft/channel-rename capability */
 	unsigned int have_pre_away:1;	/* IRCv3 draft/pre-away capability */
+	unsigned int have_extended_isupport:1; /* IRCv3 draft/extended-isupport capability */
 	unsigned int utf8only:1;		/* Server requires UTF-8 encoding (ISUPPORT UTF8ONLY) */
 	unsigned int have_except:1;	/* ban exemptions +e */
 	unsigned int have_invite:1;	/* invite exemptions +I */

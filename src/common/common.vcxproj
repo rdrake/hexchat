@@ -67,6 +67,7 @@
     <ClCompile Include="$(HexChatLib)marshal.c" />
     <ClCompile Include="modes.c" />
     <ClCompile Include="network.c" />
+    <ClCompile Include="network-icon.c" />
     <ClCompile Include="notify.c" />
     <ClCompile Include="outbound.c" />
     <ClCompile Include="plugin-timer.c" />

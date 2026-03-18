@@ -47,6 +47,7 @@ void chan_move (chan *ch, int delta);
 void chan_move_family (chan *ch, int delta);
 void chan_set_color (chan *ch, PangoAttrList *list);
 void chan_rename (chan *ch, char *new_name, int trunc_len);
+void chan_set_icon (chan *ch, GdkPixbuf *icon);
 gboolean chan_remove (chan *ch, gboolean force);
 gboolean chan_is_collapsed (chan *ch);
 chan * chan_get_parent (chan *ch);

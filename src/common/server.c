@@ -54,6 +54,7 @@
 #include "proto-irc.h"
 #include "servlist.h"
 #include "server.h"
+#include "network-icon.h"
 
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>		  /* SSL_() */
@@ -2027,6 +2028,12 @@ server_set_defaults (server *serv)
 	g_free (serv->nick_modes);
 	g_free (serv->network_icon_url);
 	serv->network_icon_url = NULL;
+	network_icon_cancel (serv);
+	if (serv->network_icon)
+	{
+		g_object_unref (serv->network_icon);
+		serv->network_icon = NULL;
+	}
 #ifdef USE_OPENSSL
         g_clear_pointer (&serv->scram_session, scram_session_free);
 #endif
@@ -2213,6 +2220,9 @@ server_free (server *serv)
 	g_free (serv->last_away_reason);
 	g_free (serv->encoding);
 	g_free (serv->network_icon_url);
+	network_icon_cancel (serv);
+	if (serv->network_icon)
+		g_object_unref (serv->network_icon);
 
 	g_iconv_close (serv->read_converter);
 	g_iconv_close (serv->write_converter);

@@ -499,6 +499,27 @@ chan_rename (chan *ch, char *name, int trunc_len)
 		g_free (new_name);
 }
 
+void
+chan_set_icon (chan *ch, GdkPixbuf *icon)
+{
+	char *name;
+
+	if (ch->icon)
+		g_object_unref (ch->icon);
+	ch->icon = icon ? g_object_ref (icon) : NULL;
+	gtk_tree_store_set (ch->cv->store, &ch->iter, COL_PIXBUF, icon, -1);
+
+	if (!ch->cv->use_icons)
+		return;
+
+	/* Trigger rebind so GTK4 list view picks up the new icon */
+	name = NULL;
+	gtk_tree_model_get (GTK_TREE_MODEL (ch->cv->store), &ch->iter,
+	                    COL_NAME, &name, -1);
+	ch->cv->func_rename (ch, name ? name : "");
+	g_free (name);
+}
+
 /* this thing is overly complicated */
 
 static int

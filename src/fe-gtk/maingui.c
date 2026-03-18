@@ -2156,7 +2156,8 @@ mg_add_chan (session *sess)
 		icon = pix_tree_channel;
 		break;
 	case SESS_SERVER:
-		icon = pix_tree_server;
+		icon = (sess->server->network_icon && prefs.hex_gui_network_icons)
+		       ? (GdkPixbuf *)sess->server->network_icon : pix_tree_server;
 		break;
 	default:
 		icon = pix_tree_dialog;

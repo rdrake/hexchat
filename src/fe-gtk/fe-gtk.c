@@ -52,6 +52,8 @@
 #include "plugin-tray.h"
 #include "urlgrab.h"
 #include "setup.h"
+#include "chanview.h"
+#include "../common/network-icon.h"
 #include "plugin-notification.h"
 
 #ifdef USE_LIBCANBERRA
@@ -1090,6 +1092,81 @@ fe_get_newest_stamp (session *sess)
 	if (!last)
 		return 0;
 	return gtk_xtext_entry_get_stamp (last);
+}
+
+void
+fe_network_icon_ready (server *serv, const guint8 *data, gsize len)
+{
+	GSList *list;
+	session *sess;
+	GdkPixbufLoader *loader;
+	GdkPixbuf *pixbuf, *scaled;
+	int w, h;
+
+	if (!data || len == 0)
+		return;
+
+	/* Decode raw image bytes into a pixbuf */
+	loader = gdk_pixbuf_loader_new ();
+	if (!gdk_pixbuf_loader_write (loader, data, len, NULL))
+	{
+		gdk_pixbuf_loader_close (loader, NULL);
+		g_object_unref (loader);
+		return;
+	}
+	gdk_pixbuf_loader_close (loader, NULL);
+
+	pixbuf = gdk_pixbuf_loader_get_pixbuf (loader);
+	if (!pixbuf)
+	{
+		g_object_unref (loader);
+		return;
+	}
+
+	/* Reject unreasonably large source images */
+	w = gdk_pixbuf_get_width (pixbuf);
+	h = gdk_pixbuf_get_height (pixbuf);
+	if (w > 256 || h > 256)
+	{
+		g_object_unref (loader);
+		return;
+	}
+
+	/* Scale to tree icon size */
+	if (w != NETWORK_ICON_SIZE || h != NETWORK_ICON_SIZE)
+	{
+		scaled = gdk_pixbuf_scale_simple (pixbuf, NETWORK_ICON_SIZE,
+		                                   NETWORK_ICON_SIZE,
+		                                   GDK_INTERP_BILINEAR);
+		g_object_unref (loader);
+		pixbuf = scaled;
+	}
+	else
+	{
+		g_object_ref (pixbuf);
+		g_object_unref (loader);
+	}
+
+	if (!pixbuf)
+		return;
+
+	/* Store on server struct (replace previous) */
+	if (serv->network_icon)
+		g_object_unref (serv->network_icon);
+	serv->network_icon = pixbuf;
+
+	/* Update all server tabs for this connection */
+	list = sess_list;
+	while (list)
+	{
+		sess = list->data;
+		if (sess->server == serv && sess->type == SESS_SERVER &&
+		    sess->res && sess->res->tab)
+		{
+			chan_set_icon (sess->res->tab, pixbuf);
+		}
+		list = list->next;
+	}
 }
 
 void

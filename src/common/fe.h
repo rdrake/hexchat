@@ -120,6 +120,8 @@ void fe_toast_show (struct session *sess, const char *text, int linger_ms,
 /* IRCv3 read-marker: position visual marker from server timestamp */
 void fe_set_marker_from_timestamp (struct session *sess, time_t timestamp);
 void fe_clear_server_read_marker (struct session *sess);
+/* IRCv3 draft/ICON: network icon fetched and ready (raw image bytes) */
+void fe_network_icon_ready (struct server *serv, const guint8 *data, gsize len);
 void fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel);
 int fe_userlist_remove (struct session *sess, struct User *user);
 void fe_userlist_rehash (struct session *sess, struct User *user);
