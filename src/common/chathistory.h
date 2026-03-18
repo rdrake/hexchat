@@ -171,16 +171,18 @@ void chathistory_parse_isupport (server *serv, const char *value);
  * @param is_history TRUE if this is a historical message (prepend to buffer)
  */
 void chathistory_track_msgid (session *sess, const char *msgid, gboolean is_history);
+void chathistory_track_msgid_ts (session *sess, const char *msgid, time_t timestamp, gboolean is_history);
 
 /**
- * Check if a message with this msgid has already been displayed.
- * Used for deduplication when processing chathistory batches.
+ * Check if a message with this msgid+timestamp has already been displayed.
+ * Uses both fields because some servers reuse msgids after restarts.
  *
  * @param sess Session to check
  * @param msgid The message ID to check
+ * @param timestamp The message timestamp (0 to match by msgid alone)
  * @return TRUE if msgid is known (duplicate), FALSE if new
  */
-gboolean chathistory_is_duplicate_msgid (session *sess, const char *msgid);
+gboolean chathistory_is_duplicate_msgid (session *sess, const char *msgid, time_t timestamp);
 
 /**
  * Check if a session can request more history (has older messages on server).

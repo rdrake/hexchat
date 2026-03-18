@@ -213,9 +213,9 @@ scrollback_load (session *sess)
 			}
 		}
 
-		/* Track msgid for deduplication with CHATHISTORY */
+		/* Track msgid+timestamp for deduplication with CHATHISTORY */
 		if (msg->msgid && msg->msgid[0])
-			chathistory_track_msgid (sess, msg->msgid, TRUE);
+			chathistory_track_msgid_ts (sess, msg->msgid, msg->timestamp, TRUE);
 
 		/* Track newest time for the "Loaded log from" message */
 		if (msg->timestamp > newest_time)
@@ -751,11 +751,18 @@ PrintTextTimeStamp (session *sess, char *text, time_t timestamp)
 		text = text_fixup_invalid_utf8 (text, -1, NULL);
 	}
 
-	log_write (sess, text, timestamp);
-	scrollback_save_msg (sess, text, timestamp, sess->current_msgid);
-	/* Clear current_msgid after use to prevent stale pointer access.
-	 * The pointer is borrowed from tags_data which may go out of scope. */
-	sess->current_msgid = NULL;
+	if (sess->display_only)
+	{
+		sess->display_only = FALSE;
+	}
+	else
+	{
+		log_write (sess, text, timestamp);
+		scrollback_save_msg (sess, text, timestamp, sess->current_msgid);
+		/* Clear current_msgid after use to prevent stale pointer access.
+		 * The pointer is borrowed from tags_data which may go out of scope. */
+		sess->current_msgid = NULL;
+	}
 	fe_print_text (sess, text, timestamp, FALSE);
 	g_free (text);
 }

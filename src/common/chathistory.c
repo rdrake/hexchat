@@ -355,16 +355,7 @@ find_session_for_target (server *serv, const char *target)
 static void
 finish_catchup (session *sess)
 {
-	/* Insert separator between catch-up history and live messages */
-	if (sess->catchup_newest_time > 0)
-	{
-		sess->history_insert_sorted_mode = TRUE;
-		PrintTextTimeStamp (sess, "\n", sess->catchup_newest_time + 1);
-		sess->history_insert_sorted_mode = FALSE;
-	}
-
 	sess->catchup_in_progress = FALSE;
-	sess->catchup_newest_time = 0;
 
 	fe_reset_scroll_top_backoff (sess);
 
@@ -388,7 +379,6 @@ chathistory_start_catchup (session *sess)
 		return;
 
 	sess->catchup_in_progress = TRUE;
-	sess->catchup_newest_time = 0;
 
 	/* Choose LATEST reference based on available scrollback */
 	if (sess->scrollback_newest_msgid && sess->scrollback_newest_msgid[0])
@@ -418,7 +408,6 @@ chathistory_cancel_catchup (session *sess)
 		return;
 
 	sess->catchup_in_progress = FALSE;
-	sess->catchup_newest_time = 0;
 	sess->history_loading = FALSE;
 	chathistory_stop_background_fetch (sess);
 }
@@ -436,8 +425,9 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 	if (!msg || !msg->command)
 		return FALSE;
 
-	/* Skip duplicate messages (already displayed from previous batches or live) */
-	if (msg->msgid && chathistory_is_duplicate_msgid (sess, msg->msgid))
+	/* Skip duplicate messages (already displayed from previous batches or live).
+	 * Uses msgid+timestamp because some servers reuse msgids after restarts. */
+	if (msg->msgid && chathistory_is_duplicate_msgid (sess, msg->msgid, msg->timestamp))
 	{
 		return FALSE;
 	}
@@ -453,7 +443,7 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 		/* Set msgid so it gets saved to scrollback via inbound functions */
 		tags_data.msgid = msg->msgid;
 		/* Track msgids for pagination and deduplication */
-		chathistory_track_msgid (sess, msg->msgid, TRUE);
+		chathistory_track_msgid_ts (sess, msg->msgid, msg->timestamp, TRUE);
 		/* Set current_msgid directly for ALL message types including events.
 		 * Only inbound_chanmsg/inbound_action set this from tags_data,
 		 * but events (JOIN/PART/etc) also need their msgids captured. */
@@ -817,10 +807,6 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		int raw_count = g_slist_length (batch->messages);
 		int effective_limit = get_effective_limit (serv, prefs.hex_irc_chathistory_lines);
 
-		/* Capture newest time from first batch only (for separator placement) */
-		if (sess->catchup_newest_time == 0 && newest_timestamp > 0)
-			sess->catchup_newest_time = newest_timestamp;
-
 		/* All messages were duplicates — gap is already filled */
 		if (msg_count == 0)
 		{
@@ -901,20 +887,44 @@ chathistory_parse_isupport (server *serv, const char *value)
 	}
 }
 
+/* Build a dedup key from msgid + timestamp.  Some servers (e.g. Nefarious)
+ * reset their msgid counter on restart, producing collisions.  Adding the
+ * timestamp makes false duplicates virtually impossible. */
+static char *
+make_dedup_key (const char *msgid, time_t timestamp)
+{
+	return g_strdup_printf ("%s@%" G_GINT64_FORMAT, msgid, (gint64) timestamp);
+}
+
 void
 chathistory_track_msgid (session *sess, const char *msgid, gboolean is_history)
 {
+	chathistory_track_msgid_ts (sess, msgid, 0, is_history);
+}
+
+void
+chathistory_track_msgid_ts (session *sess, const char *msgid, time_t timestamp,
+                            gboolean is_history)
+{
 	gboolean is_new;
+	char *key;
 
 	if (!msgid || !msgid[0])
 		return;
 
+	/* Build dedup key: msgid alone if no timestamp, msgid+timestamp otherwise.
+	 * Scrollback-loaded entries have timestamps; live messages may not yet. */
+	key = (timestamp > 0) ? make_dedup_key (msgid, timestamp) : g_strdup (msgid);
+
 	/* Add to known msgids for deduplication.
 	 * g_hash_table_add returns TRUE if this is a new entry. */
 	if (sess->known_msgids)
-		is_new = g_hash_table_add (sess->known_msgids, g_strdup (msgid));
+		is_new = g_hash_table_add (sess->known_msgids, key);
 	else
+	{
+		g_free (key);
 		is_new = TRUE;
+	}
 
 	/* Only update oldest/newest tracking for truly new msgids.
 	 * This prevents re-tracking from inbound functions after chathistory already tracked. */
@@ -946,20 +956,30 @@ chathistory_track_msgid (session *sess, const char *msgid, gboolean is_history)
 }
 
 /**
- * Check if a message with this msgid has already been displayed.
+ * Check if a message with this msgid+timestamp has already been displayed.
+ * Uses both fields because some servers reuse msgids after restarts.
  *
  * @param sess Session to check
  * @param msgid The message ID to check
+ * @param timestamp The message timestamp (0 to match by msgid alone)
  * @return TRUE if msgid is known (duplicate), FALSE if new
  */
 gboolean
-chathistory_is_duplicate_msgid (session *sess, const char *msgid)
+chathistory_is_duplicate_msgid (session *sess, const char *msgid, time_t timestamp)
 {
 	if (!sess || !msgid || !msgid[0])
 		return FALSE;
 
 	if (!sess->known_msgids)
 		return FALSE;
+
+	if (timestamp > 0)
+	{
+		char *key = make_dedup_key (msgid, timestamp);
+		gboolean found = g_hash_table_contains (sess->known_msgids, key);
+		g_free (key);
+		return found;
+	}
 
 	return g_hash_table_contains (sess->known_msgids, msgid);
 }

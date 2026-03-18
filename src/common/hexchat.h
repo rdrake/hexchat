@@ -453,6 +453,7 @@ typedef struct session
 	int history_exhausted:1; /* server has no more history for this target */
 	int history_request_used_msgid:1; /* current request used msgid reference (vs timestamp) */
 	int catchup_in_progress:1; /* catch-up loop active (join or TARGETS) */
+	int display_only:1; /* next text output skips scrollback/log save */
 	int background_history_active:1; /* background history fetch enabled for this session */
 	guint background_history_timer;	/* timer for next background history fetch */
 	tab_state_flags tab_state;
@@ -469,7 +470,6 @@ typedef struct session
 	char *scrollback_newest_msgid;	/* newest msgid from loaded scrollback (for AFTER) */
 	const char *current_msgid;	/* temporary: msgid of message being processed (not owned) */
 	GHashTable *known_msgids;	/* hash set of msgids already displayed (for deduplication) */
-	time_t catchup_newest_time;	/* newest timestamp from first catch-up batch (for separator) */
 
 	/* Typing indicators (IRCv3 +typing) */
 	GSList *typing_nicks;			/* GSList of typing_entry* — who's typing here */

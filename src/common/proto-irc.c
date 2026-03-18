@@ -1547,9 +1547,18 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 					{
 						if (is_channel (serv, to))
 						{
-							/* Tier 2: already displayed as pending, now confirmed */
+							/* Tier 2: already displayed as pending, now confirmed.
+							 * Track the msgid for chathistory deduplication even though
+							 * we skip redisplay — without this, reconnect catch-up
+							 * would show the message again. */
 							if (tags_data->echo_confirmed)
+							{
+								session *chan_sess = find_channel (serv, to);
+								if (chan_sess && tags_data->msgid)
+									chathistory_track_msgid_ts (chan_sess, tags_data->msgid,
+									                            tags_data->timestamp, FALSE);
 								return;
+							}
 							if (ignore_check (word[1], IG_CHAN))
 								return;
 							inbound_chanmsg (serv, NULL, to, nick, text, FALSE, tags_data->identified,
@@ -1564,9 +1573,16 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 							 * (the person we sent to), not with ourselves. */
 							if (!serv->p_cmp (nick, serv->nick))
 							{
-								/* Tier 2: already displayed as pending, now confirmed */
+								/* Tier 2: already displayed as pending, now confirmed.
+								 * Track msgid for chathistory dedup before returning. */
 								if (tags_data->echo_confirmed)
+								{
+									session *dlg_sess = find_dialog (serv, to);
+									if (dlg_sess && tags_data->msgid)
+										chathistory_track_msgid_ts (dlg_sess, tags_data->msgid,
+										                            tags_data->timestamp, FALSE);
 									return;
+								}
 								session *sess;
 
 								/* Self-to-self dedup: /msg MyNick sends TWO copies
@@ -1579,7 +1595,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 									{
 										if (tags_data->msgid && tags_data->msgid[0])
 										{
-											if (chathistory_is_duplicate_msgid (existing, tags_data->msgid))
+											if (chathistory_is_duplicate_msgid (existing, tags_data->msgid, tags_data->timestamp))
 												return;
 										}
 										else if (serv->have_labeled_response && !tags_data->label)

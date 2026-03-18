@@ -418,7 +418,7 @@ inbound_action (session *sess, char *chan, char *from, char *ip, char *text,
 
 	/* Track msgid for deduplication */
 	if (tags_data->msgid)
-		chathistory_track_msgid (sess, tags_data->msgid, FALSE);
+		chathistory_track_msgid_ts (sess, tags_data->msgid, tags_data->timestamp, FALSE);
 
 	if (!fromme && !privaction)
 	{
@@ -475,7 +475,7 @@ inbound_chanmsg (server *serv, session *sess, char *chan, char *from,
 	/* Track msgid for deduplication - live messages use is_history=FALSE.
 	 * If this was already tracked from chathistory, it's safely skipped. */
 	if (tags_data->msgid)
-		chathistory_track_msgid (sess, tags_data->msgid, FALSE);
+		chathistory_track_msgid_ts (sess, tags_data->msgid, tags_data->timestamp, FALSE);
 
 	if (sess != current_tab)
 	{
@@ -654,17 +654,31 @@ inbound_ujoin (server *serv, char *chan, char *nick, char *ip,
 	/* sends a MODE */
 	serv->p_join_info (sess->server, chan);
 
-	/* Show join banner immediately */
-	EMIT_SIGNAL_TIMESTAMP (XP_TE_UJOIN, sess, nick, chan, ip, NULL, 0,
-								  tags_data->timestamp);
-
-	/* Track join msgid so our own JOIN isn't duplicated in chathistory */
+	/* Track join msgid so our own JOIN isn't duplicated in chathistory.
+	 * Done before the banner so we can also suppress duplicate "Now talking on"
+	 * when a bouncer resends the same JOIN on reconnect. */
 	if (tags_data->msgid)
 	{
-		chathistory_track_msgid (sess, tags_data->msgid, FALSE);
+		if (chathistory_is_duplicate_msgid (sess, tags_data->msgid, tags_data->timestamp))
+			goto skip_banner;
+		chathistory_track_msgid_ts (sess, tags_data->msgid, tags_data->timestamp, FALSE);
 		g_free (sess->join_msgid);
 		sess->join_msgid = g_strdup (tags_data->msgid);
 	}
+
+	/* Show join banner.  Don't save to scrollback — chathistory provides the
+	 * canonical JOIN record, and "Now talking on" looks inconsistent when
+	 * replayed alongside chathistory's JOIN format.
+	 * Use sorted insertion so it lands at the correct chronological position
+	 * relative to chathistory messages that may arrive afterwards. */
+	sess->display_only = TRUE;
+	sess->history_insert_sorted_mode = TRUE;
+	EMIT_SIGNAL_TIMESTAMP (XP_TE_UJOIN, sess, nick, chan, ip, NULL, 0,
+								  tags_data->timestamp);
+	sess->history_insert_sorted_mode = FALSE;
+	sess->display_only = FALSE;  /* safety: clear if not consumed */
+
+skip_banner:
 
 	/* Catch up missed messages via CHATHISTORY LATEST */
 	if (prefs.hex_irc_chathistory_auto && serv->have_chathistory &&
@@ -1084,7 +1098,7 @@ inbound_notice (server *serv, char *to, char *nick, char *msg, char *ip, int id,
 
 	/* Track msgid for deduplication */
 	if (tags_data->msgid)
-		chathistory_track_msgid (sess, tags_data->msgid, FALSE);
+		chathistory_track_msgid_ts (sess, tags_data->msgid, tags_data->timestamp, FALSE);
 
 	/* Self-echo of our own NOTICE (echo-message / bouncer) */
 	if (serv->have_echo_message && !serv->p_cmp (nick, serv->nick))
