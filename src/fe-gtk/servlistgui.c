@@ -1355,11 +1355,20 @@ servlist_delete_cb (GtkWidget *win, gpointer userdata)
 static void
 servlist_close_cb (GtkWidget *button, gpointer userdata)
 {
+	GtkWidget *win;
+
 	(void)button; (void)userdata;
-	/* Just close the window — servlist_delete_cb handles savegui, cleanup,
-	 * and hexchat_exit() if no sessions exist. Doing it here too would
-	 * double-call hexchat_exit() since fe_exit() doesn't terminate immediately. */
-	hc_window_destroy (serverlist_win);
+	/* hc_window_destroy uses gtk_window_destroy which does NOT fire
+	 * "close-request", so servlist_delete_cb wouldn't run.  Do the
+	 * cleanup and exit check here before destroying. */
+	servlist_savegui ();
+	win = serverlist_win;
+	serverlist_win = NULL;
+	selected_net = NULL;
+	hc_window_destroy (win);
+
+	if (sess_list == NULL)
+		hexchat_exit ();
 }
 
 /* convert "host:port" format to "host/port" */

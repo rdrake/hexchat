@@ -233,6 +233,8 @@ hc_widget_destroy_impl (GtkWidget *widget)
  * hc_window_destroy - Present the transient parent (if any) before
  * destroying, so focus returns to it instead of escaping to another
  * application.  Uses gtk_window_destroy() for immediate removal.
+ * Note: gtk_window_destroy() does NOT fire "close-request" — callers
+ * that need cleanup must handle it before calling this.
  */
 static inline void
 hc_window_destroy_fn (GtkWindow *window)
