@@ -974,10 +974,27 @@ inbound_005 (server * serv, char *word[], const message_tags_data *tags_data)
 		} else if (g_strcmp0 (tokname, "draft/ICON") == 0 ||
 		           g_strcmp0 (tokname, "ICON") == 0)
 		{
-			/* Network icon URL (draft/ICON ISUPPORT token) */
-			g_free (serv->network_icon_url);
-			serv->network_icon_url = g_strdup (tokvalue);
-			network_icon_fetch (serv);
+			if (!tokadding)
+			{
+				/* Server removed ICON token (-ICON) — clear icon and cache */
+				g_free (serv->network_icon_url);
+				serv->network_icon_url = NULL;
+				network_icon_cancel (serv);
+				if (serv->network_icon)
+				{
+					g_object_unref (serv->network_icon);
+					serv->network_icon = NULL;
+				}
+				network_icon_clear_cache (serv);
+			}
+			else
+			{
+				/* Network icon URL (draft/ICON ISUPPORT token).
+				 * Update URL and let network_icon_fetch check the cache hash. */
+				g_free (serv->network_icon_url);
+				serv->network_icon_url = g_strdup (tokvalue);
+				network_icon_fetch (serv);
+			}
 		}
 
 		g_free (tokname);

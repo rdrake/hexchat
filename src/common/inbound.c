@@ -46,6 +46,7 @@
 #include "hexchatc.h"
 #include "chanopt.h"
 #include "chathistory.h"
+#include "network-icon.h"
 #ifdef USE_LIBWEBSOCKETS
 #include "oauth.h"
 #endif

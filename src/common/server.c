@@ -2034,6 +2034,10 @@ server_set_defaults (server *serv)
 		g_object_unref (serv->network_icon);
 		serv->network_icon = NULL;
 	}
+
+	/* Load icon from disk cache using network name as directory key.
+	 * ISUPPORT will update if URL changed or clear if token is gone. */
+	network_icon_load_cached (serv);
 #ifdef USE_OPENSSL
         g_clear_pointer (&serv->scram_session, scram_session_free);
 #endif

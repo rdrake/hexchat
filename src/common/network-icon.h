@@ -26,13 +26,19 @@ struct server;
  * Returns newly allocated string. */
 char *network_icon_resolve_url (const char *url_template, int size_px);
 
-/* Start async fetch of network icon for this server.
- * On completion, calls fe_network_icon_ready() with raw image data.
- * Does nothing if preference is disabled or URL is NULL. */
+/* Load icon from disk cache using network name as key.
+ * Call at connect time before ISUPPORT arrives. */
+void network_icon_load_cached (struct server *serv);
+
+/* Check ISUPPORT ICON URL against cache; fetch if changed.
+ * On completion, calls fe_network_icon_ready() with raw image data. */
 void network_icon_fetch (struct server *serv);
 
 /* Cancel any in-flight icon fetch for this server. Safe to call if none pending. */
 void network_icon_cancel (struct server *serv);
+
+/* Remove cached icon files for this server's network. */
+void network_icon_clear_cache (struct server *serv);
 
 /* Icon target size in pixels (for {size} substitution and frontend scaling) */
 #define NETWORK_ICON_SIZE 16

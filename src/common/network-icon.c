@@ -32,6 +32,7 @@
 
 #include "network-icon.h"
 #include "hexchat.h"
+#include "servlist.h"
 #include "hexchatc.h"
 #include "cfgfiles.h"
 #include "fe.h"
@@ -59,25 +60,59 @@ network_icon_resolve_url (const char *url_template, int size_px)
 	return g_string_free (result, FALSE);
 }
 
-/* ---- Disk cache ---- */
+/* ---- Disk cache ----
+ *
+ * Cache layout: <config>/icons/network/<network_name>/<url_hash>.img
+ *
+ * The network name directories let us find cached icons at connect time
+ * (before we know the URL). The URL hash filename lets us detect URL
+ * changes when ISUPPORT arrives — just hash the new URL and compare. */
 
 static char *
-cache_dir (void)
+network_cache_dir (const char *network_name)
 {
-	char *dir = g_build_filename (get_xdir (), "icons", "network", NULL);
+	char *dir = g_build_filename (get_xdir (), "icons", "network",
+	                               network_name, NULL);
 	g_mkdir_with_parents (dir, 0700);
 	return dir;
 }
 
-/* Build cache file path from URL hash */
+/* Find the first .img file in a network's cache directory.
+ * Returns the full path, or NULL if no cached icon exists. */
 static char *
-cache_path_for_url (const char *resolved_url, const char *ext)
+cache_find (const char *network_name)
+{
+	char *dir, *path = NULL;
+	GDir *gdir;
+	const char *entry;
+
+	dir = network_cache_dir (network_name);
+	gdir = g_dir_open (dir, 0, NULL);
+	if (gdir)
+	{
+		while ((entry = g_dir_read_name (gdir)) != NULL)
+		{
+			if (g_str_has_suffix (entry, ".img"))
+			{
+				path = g_build_filename (dir, entry, NULL);
+				break;
+			}
+		}
+		g_dir_close (gdir);
+	}
+	g_free (dir);
+	return path;
+}
+
+/* Build cache file path: <network_dir>/<url_hash>.img */
+static char *
+cache_path (const char *network_name, const char *resolved_url)
 {
 	char *dir, *hash, *name, *path;
 
-	dir = cache_dir ();
+	dir = network_cache_dir (network_name);
 	hash = g_compute_checksum_for_string (G_CHECKSUM_SHA256, resolved_url, -1);
-	name = g_strconcat (hash, ext, NULL);
+	name = g_strconcat (hash, ".img", NULL);
 	path = g_build_filename (dir, name, NULL);
 
 	g_free (name);
@@ -86,48 +121,45 @@ cache_path_for_url (const char *resolved_url, const char *ext)
 	return path;
 }
 
-/* Check if cached icon is still valid for the given URL.
- * If valid, loads image data into *out_data/*out_len and returns TRUE. */
-static gboolean
-cache_load (const char *resolved_url, guint8 **out_data, gsize *out_len)
+/* Remove all .img files from a network's cache directory */
+static void
+cache_clear (const char *network_name)
 {
-	char *meta_path, *icon_path, *stored_url;
-	gboolean valid = FALSE;
+	char *dir;
+	GDir *gdir;
+	const char *entry;
 
-	meta_path = cache_path_for_url (resolved_url, ".meta");
-	if (!g_file_get_contents (meta_path, &stored_url, NULL, NULL))
+	dir = network_cache_dir (network_name);
+	gdir = g_dir_open (dir, 0, NULL);
+	if (gdir)
 	{
-		g_free (meta_path);
-		return FALSE;
+		while ((entry = g_dir_read_name (gdir)) != NULL)
+		{
+			if (g_str_has_suffix (entry, ".img"))
+			{
+				char *path = g_build_filename (dir, entry, NULL);
+				g_unlink (path);
+				g_free (path);
+			}
+		}
+		g_dir_close (gdir);
 	}
-	g_free (meta_path);
-
-	valid = (g_strcmp0 (g_strstrip (stored_url), resolved_url) == 0);
-	g_free (stored_url);
-
-	if (!valid)
-		return FALSE;
-
-	icon_path = cache_path_for_url (resolved_url, ".img");
-	valid = g_file_get_contents (icon_path, (char **)out_data, out_len, NULL);
-	g_free (icon_path);
-	return valid;
+	g_free (dir);
 }
 
-/* Save downloaded data and metadata to cache */
+/* Save icon data to cache, replacing any existing file */
 static void
-cache_save (const char *resolved_url, const guint8 *data, gsize len)
+cache_save (const char *network_name, const char *resolved_url,
+            const guint8 *data, gsize len)
 {
-	char *icon_path, *meta_path;
+	char *path;
 
-	icon_path = cache_path_for_url (resolved_url, ".img");
-	meta_path = cache_path_for_url (resolved_url, ".meta");
+	/* Remove old icon(s) first */
+	cache_clear (network_name);
 
-	g_file_set_contents (icon_path, (const char *)data, len, NULL);
-	g_file_set_contents (meta_path, resolved_url, -1, NULL);
-
-	g_free (icon_path);
-	g_free (meta_path);
+	path = cache_path (network_name, resolved_url);
+	g_file_set_contents (path, (const char *)data, len, NULL);
+	g_free (path);
 }
 
 /* ---- Fetch context (shared by both backends) ---- */
@@ -135,6 +167,7 @@ cache_save (const char *resolved_url, const guint8 *data, gsize len)
 typedef struct {
 	struct server *serv;
 	char *resolved_url;
+	char *network_name;
 	gboolean cancelled;
 } icon_fetch_ctx;
 
@@ -142,6 +175,7 @@ static void
 icon_fetch_ctx_free (icon_fetch_ctx *ctx)
 {
 	g_free (ctx->resolved_url);
+	g_free (ctx->network_name);
 	g_free (ctx);
 }
 
@@ -172,7 +206,7 @@ icon_fetch_complete (icon_fetch_ctx *ctx, const guint8 *data, gsize len,
 	}
 
 	/* Save to disk cache */
-	cache_save (ctx->resolved_url, data, len);
+	cache_save (ctx->network_name, ctx->resolved_url, data, len);
 
 	ctx->serv->network_icon_cancel = NULL;
 
@@ -361,18 +395,58 @@ icon_fetch_start (icon_fetch_ctx *ctx)
 
 /* ---- Public API ---- */
 
+/* Get the network name for cache purposes. Returns NULL if unavailable. */
+static const char *
+get_network_name (struct server *serv)
+{
+	ircnet *net = (ircnet *)serv->network;
+	if (net && net->name)
+		return net->name;
+	return NULL;
+}
+
+void
+network_icon_load_cached (struct server *serv)
+{
+	const char *net_name;
+	char *path;
+	guint8 *data;
+	gsize len;
+
+	if (!prefs.hex_gui_network_icons)
+		return;
+
+	net_name = get_network_name (serv);
+	if (!net_name)
+		return;
+
+	path = cache_find (net_name);
+	if (!path)
+		return;
+
+	if (g_file_get_contents (path, (char **)&data, &len, NULL))
+	{
+		fe_network_icon_ready (serv, data, len);
+		g_free (data);
+	}
+	g_free (path);
+}
+
 void
 network_icon_fetch (struct server *serv)
 {
 	icon_fetch_ctx *ctx;
-	char *resolved_url;
-	guint8 *cached_data;
-	gsize cached_len;
+	const char *net_name;
+	char *resolved_url, *cached_path;
 
 	if (!prefs.hex_gui_network_icons)
 		return;
 
 	if (!serv->network_icon_url || serv->network_icon_url[0] == '\0')
+		return;
+
+	net_name = get_network_name (serv);
+	if (!net_name)
 		return;
 
 	/* Cancel any existing fetch */
@@ -383,23 +457,34 @@ network_icon_fetch (struct server *serv)
 	if (!resolved_url)
 		return;
 
-	/* Try disk cache first */
-	if (cache_load (resolved_url, &cached_data, &cached_len))
+	/* Check if cached file already matches this URL hash */
+	cached_path = cache_path (net_name, resolved_url);
+	if (g_file_test (cached_path, G_FILE_TEST_EXISTS))
 	{
-		fe_network_icon_ready (serv, cached_data, cached_len);
-		g_free (cached_data);
+		/* Hash matches — icon already loaded from cache or is current */
+		g_free (cached_path);
 		g_free (resolved_url);
 		return;
 	}
+	g_free (cached_path);
 
-	/* Start async download */
+	/* URL changed — need to fetch the new icon */
 	ctx = g_new0 (icon_fetch_ctx, 1);
 	ctx->serv = serv;
 	ctx->resolved_url = resolved_url;
+	ctx->network_name = g_strdup (net_name);
 	ctx->cancelled = FALSE;
 	serv->network_icon_cancel = ctx;
 
 	icon_fetch_start (ctx);
+}
+
+void
+network_icon_clear_cache (struct server *serv)
+{
+	const char *net_name = get_network_name (serv);
+	if (net_name)
+		cache_clear (net_name);
 }
 
 void
