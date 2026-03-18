@@ -93,7 +93,8 @@ typedef enum {
 	TOAST_TYPE_TOPIC,     /* topic changes */
 	TOAST_TYPE_MODE,      /* mode changes */
 	TOAST_TYPE_JOIN,      /* join/part (when hidden) */
-	TOAST_TYPE_ERROR      /* errors/warnings */
+	TOAST_TYPE_ERROR,     /* errors/warnings */
+	TOAST_TYPE_SUCCESS    /* confirmations - green */
 } xtext_toast_type;
 
 #define TOAST_FLAG_STICKY  0x01  /* no auto-dismiss, exempt from eviction */

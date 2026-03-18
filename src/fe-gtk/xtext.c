@@ -4632,7 +4632,8 @@ static const double toast_accent_colors[][3] = {
 	{ 0.70, 0.55, 0.85 },  /* TOPIC - soft purple */
 	{ 0.80, 0.65, 0.30 },  /* MODE  - amber */
 	{ 0.50, 0.70, 0.70 },  /* JOIN  - teal */
-	{ 0.85, 0.40, 0.40 },  /* ERROR - muted red */
+	{ 0.85, 0.40, 0.40 },  /* ERROR   - muted red */
+	{ 0.40, 0.75, 0.40 },  /* SUCCESS - green */
 };
 
 static void
@@ -4669,7 +4670,7 @@ gtk_xtext_draw_toasts (GtkXText *xtext, int width, int height)
 	for (i = 0; i < xtext->toast_count; i++)
 	{
 		xtext_toast *t = xtext->toasts[i];
-		int type_idx = (t->type >= 0 && t->type <= TOAST_TYPE_ERROR) ? t->type : 0;
+		int type_idx = (t->type >= 0 && t->type <= TOAST_TYPE_SUCCESS) ? t->type : 0;
 		int accent_w = 4;
 		int box_x = MARGIN + 8;
 		int box_w = width - 2 * (MARGIN + 8);

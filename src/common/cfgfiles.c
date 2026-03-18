@@ -1101,6 +1101,25 @@ save_config (void)
 }
 
 static void
+set_showval_toast (session *sess, const struct prefs *var, char *tbuf)
+{
+	switch (var->type)
+	{
+		case TYPE_STR:
+			sprintf (tbuf, "%s: %s", var->name, (char *) &prefs + var->offset);
+			break;
+		case TYPE_INT:
+			sprintf (tbuf, "%s: %d", var->name, *((int *) &prefs + var->offset));
+			break;
+		case TYPE_BOOL:
+			sprintf (tbuf, "%s: %s", var->name,
+			         *((int *) &prefs + var->offset) ? "ON" : "OFF");
+			break;
+	}
+	fe_toast_show (sess, tbuf, 4000, 0, 0);
+}
+
+static void
 set_showval (session *sess, const struct prefs *var, char *tbuf)
 {
 	size_t len;
@@ -1144,6 +1163,7 @@ set_showval (session *sess, const struct prefs *var, char *tbuf)
 			break;
 	}
 
+	sess->display_only = TRUE;
 	PrintText (sess, tbuf);
 }
 
@@ -1266,14 +1286,18 @@ cmd_set (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 
 					if (!quiet)
 					{
-						PrintTextf (sess, "%s set to: %s (was: %s)\n", var, (char *) &prefs + vars[i].offset, prev_string);
+						sprintf (tbuf, "%s set to: %s (was: %s)", var, (char *) &prefs + vars[i].offset, prev_string);
+						fe_toast_show (sess, tbuf, 4000, 6, 0); /* SUCCESS */
 					}
 
 					g_free (prev_string);
 				}
 				else
 				{
-					set_showval (sess, &vars[i], tbuf);
+					if (wild)
+						set_showval (sess, &vars[i], tbuf);
+					else
+						set_showval_toast (sess, &vars[i], tbuf);
 				}
 				break;
 			case TYPE_INT:
@@ -1317,12 +1341,16 @@ cmd_set (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 					}
 					if (!quiet)
 					{
-						PrintTextf (sess, "%s set to: %d (was: %d)\n", var, *((int *) &prefs + vars[i].offset), prev_numeric);
+						sprintf (tbuf, "%s set to: %d (was: %d)", var, *((int *) &prefs + vars[i].offset), prev_numeric);
+						fe_toast_show (sess, tbuf, 4000, 6, 0); /* SUCCESS */
 					}
 				}
 				else
 				{
-					set_showval (sess, &vars[i], tbuf);
+					if (wild)
+						set_showval (sess, &vars[i], tbuf);
+					else
+						set_showval_toast (sess, &vars[i], tbuf);
 				}
 
 				if (vars[i].after_update != NULL)
@@ -1338,11 +1366,11 @@ cmd_set (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 
 	if (!finds && !quiet)
 	{
-		PrintText (sess, "No such variable.\n");
+		fe_toast_show (sess, "No such variable.", 4000, 5, 0); /* TOAST_TYPE_ERROR */
 	}
 	else if (!save_config ())
 	{
-		PrintText (sess, "Error saving changes to disk.\n");
+		fe_toast_show (sess, "Error saving changes to disk.", 4000, 5, 0); /* TOAST_TYPE_ERROR */
 	}
 
 	return TRUE;

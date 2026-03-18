@@ -45,6 +45,7 @@
 #define HEXCHAT_TOAST_MODE	3
 #define HEXCHAT_TOAST_JOIN	4
 #define HEXCHAT_TOAST_ERROR	5
+#define HEXCHAT_TOAST_SUCCESS	6
 
 #ifdef __cplusplus
 extern "C" {
