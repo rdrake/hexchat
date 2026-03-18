@@ -681,6 +681,30 @@ inbound_ujoin (server *serv, char *chan, char *nick, char *ip,
 
 skip_banner:
 
+	/* Bouncer reconnect detection: if the JOIN timestamp predates our last
+	 * disconnect, this is a replayed JOIN from the bouncer, not a fresh one.
+	 * Emit a "Reconnected" marker at current time to pair with "Disconnected"
+	 * and give the user a visual anchor for where live messages begin.
+	 * Persisted to scrollback — the server has no knowledge of client
+	 * disconnects, so only the client can maintain these markers.
+	 *
+	 * last_disconnect_time is ephemeral (in-memory), so after a client restart
+	 * we fall back to scrollback_newest_time which reflects the "Disconnected"
+	 * entry saved on exit. */
+	{
+		time_t disconnect_ref = serv->last_disconnect_time;
+		if (disconnect_ref == 0)
+			disconnect_ref = sess->scrollback_newest_time;
+
+		if (tags_data->timestamp > 0 &&
+		    disconnect_ref > 0 &&
+		    tags_data->timestamp <= disconnect_ref)
+		{
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_RECONNECT, sess, NULL, NULL, NULL, NULL, 0,
+			                       time (NULL));
+		}
+	}
+
 	/* Catch up missed messages via CHATHISTORY LATEST */
 	if (prefs.hex_irc_chathistory_auto && serv->have_chathistory &&
 	    !sess->history_loading)

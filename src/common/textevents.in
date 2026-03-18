@@ -436,6 +436,12 @@ pevt_discon_help
 %C20*%O$tDisconnected (%C20$1%O)
 1
 
+Reconnected
+XP_TE_RECONNECT
+pevt_generic_none_help
+%C20*%O$tReconnected
+n0
+
 Fail
 XP_TE_FAIL
 pevt_stdrpl_help

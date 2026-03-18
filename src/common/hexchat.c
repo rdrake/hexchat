@@ -997,6 +997,22 @@ hexchat_exit (void)
 {
 	hexchat_is_quitting = TRUE;
 	in_hexchat_exit = TRUE;
+
+	/* Emit "Disconnected (Quit)" to all sessions while widgets are still
+	 * alive, so it goes through the normal text event pipeline and gets
+	 * saved to scrollback.  This pairs with "Reconnected" on next launch
+	 * when using a bouncer. */
+	{
+		GSList *list = sess_list;
+		while (list)
+		{
+			session *sess = list->data;
+			if (sess->server && sess->server->connected)
+				EMIT_SIGNAL (XP_TE_DISCON, sess, "Quit", NULL, NULL, NULL, 0);
+			list = list->next;
+		}
+	}
+
 	plugin_kill_all ();
 	fe_cleanup ();
 
