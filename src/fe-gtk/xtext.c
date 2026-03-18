@@ -3891,7 +3891,16 @@ gtk_xtext_set_font (GtkXText *xtext, char *name)
 	gtk_xtext_fix_indent (xtext->buffer);
 
 	if (gtk_widget_get_realized (GTK_WIDGET(xtext)))
+	{
 		gtk_xtext_recalc_widths (xtext->buffer, TRUE);
+
+		/* Snap to bottom after reflow — font change alters line count
+		 * and page size, which can unanchor the scroll position. */
+		if (xtext->buffer->scrollbar_down)
+			gtk_adjustment_set_value (xtext->adj,
+				gtk_adjustment_get_upper (xtext->adj) -
+				gtk_adjustment_get_page_size (xtext->adj));
+	}
 
 	return TRUE;
 }
