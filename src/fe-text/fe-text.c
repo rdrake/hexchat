@@ -951,3 +951,11 @@ fe_get_default_font (void)
 {
 	return NULL;
 }
+void fe_print_text_prepend (struct session *sess, char *text, time_t stamp) {}
+void fe_redact_message (struct session *sess, const char *msgid, const char *redacted_by, const char *reason, time_t redact_time) {}
+guint64 fe_get_last_entry_id (struct session *sess) { return 0; }
+void fe_set_entry_pending (struct session *sess, guint64 entry_id) {}
+void fe_confirm_entry (struct session *sess, guint64 entry_id) {}
+void fe_clear_all_pending (struct session *sess) {}
+void fe_network_icon_ready (struct server *serv, const guint8 *data, gsize len) {}
+void fe_reset_scroll_top_backoff (struct session *sess) {}
