@@ -1770,6 +1770,15 @@ inbound_login_end (session *sess, char *text, const message_tags_data *tags_data
 			notify_send_watches (serv);
 		}
 
+		/* If we loaded an icon from cache but ISUPPORT didn't advertise ICON
+		 * this connection, the server has stopped offering it — clear it. */
+		if (!serv->network_icon_url && serv->network_icon)
+		{
+			g_object_unref (serv->network_icon);
+			serv->network_icon = NULL;
+			network_icon_clear_cache (serv);
+		}
+
 		/* Discover missed DMs via CHATHISTORY TARGETS on reconnect */
 		chathistory_request_targets_on_reconnect (serv);
 	}
