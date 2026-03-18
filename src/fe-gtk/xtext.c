@@ -4711,9 +4711,11 @@ gtk_xtext_draw_toasts (GtkXText *xtext, int width, int height)
 		pango_layout_set_alignment (layout, PANGO_ALIGN_CENTER);
 		pango_layout_get_pixel_extents (layout, NULL, &logical);
 
-		/* Position at left edge of text area; Pango centers within the layout width */
+		/* Position text vertically centered in the box.
+		 * Pango's logical rect includes leading above the text, so nudge
+		 * down to visually center the glyphs within the box. */
 		cairo_move_to (cr, box_x + accent_w + TOAST_PADDING,
-		               y + (box_h - logical.height) / 2);
+		               y + TOAST_PADDING + 3);
 		cairo_set_source_rgba (cr,
 		                       xtext->palette[XTEXT_FG].red,
 		                       xtext->palette[XTEXT_FG].green,
