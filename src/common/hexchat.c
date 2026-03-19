@@ -812,7 +812,7 @@ xchat_auto_connect (gpointer userdata)
 	return 0;
 }
 
-static void
+void
 xchat_init (void)
 {
 	char buf[3068];
@@ -1131,31 +1131,8 @@ main (int argc, char *argv[])
 	}
 #endif
 
-	fe_init ();
-
-	/* This is done here because cfgfiles.c is too early in
-	* the startup process to use gtk functions. */
-	if (g_access (get_xdir (), W_OK) != 0)
-	{
-		char buf[2048];
-
-		g_snprintf (buf, sizeof(buf),
-			_("You do not have write access to %s. Nothing from this session can be saved."),
-			get_xdir ());
-		fe_message (buf, FE_MSG_ERROR);
-	}
-
-#ifndef WIN32
-#ifndef __EMX__
-	/* OS/2 uses UID 0 all the time */
-	if (getuid () == 0)
-		fe_message (_("* Running IRC as root is stupid! You should\n"
-			      "  create a User Account and use that to login.\n"), FE_MSG_WARN|FE_MSG_WAIT);
-#endif
-#endif /* !WIN32 */
-
-	xchat_init ();
-
+	/* fe_init() and xchat_init() are called from GtkApplication
+	 * startup/activate signal handlers inside fe_main(). */
 	fe_main ();
 
 #ifdef WIN32

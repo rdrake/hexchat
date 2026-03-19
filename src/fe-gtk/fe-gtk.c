@@ -21,6 +21,7 @@
 #include <stdlib.h>
 
 #include "fe-gtk.h"
+#include "hex-input-view.h"
 
 #ifdef WIN32
 #include <gdk/win32/gdkwin32.h>
@@ -63,7 +64,6 @@
 cairo_surface_t *channelwin_pix;
 
 static GtkApplication *hexchat_app = NULL;
-static GMainLoop *hexchat_main_loop = NULL;
 
 GtkApplication *
 fe_get_application (void)
@@ -137,6 +137,53 @@ create_msg_dialog (gchar *title, gchar *message)
 		g_main_context_iteration (NULL, TRUE);
 }
 #endif /* WIN32 */
+
+/* ── GtkApplication signal handlers ──────────────────────────────────── */
+
+static void
+on_app_startup (GApplication *app, gpointer user_data)
+{
+	(void) app; (void) user_data;
+
+	/* One-time GUI setup — palette, pixmaps, CSS, key bindings */
+	fe_init ();
+
+	/* Check config dir writability (needs GTK for fe_message dialog) */
+	if (g_access (get_xdir (), W_OK) != 0)
+	{
+		char buf[2048];
+
+		g_snprintf (buf, sizeof (buf),
+			_("You do not have write access to %s. Nothing from this session can be saved."),
+			get_xdir ());
+		fe_message (buf, FE_MSG_ERROR);
+	}
+
+#ifndef WIN32
+#ifndef __EMX__
+	/* OS/2 uses UID 0 all the time */
+	if (getuid () == 0)
+		fe_message (_("* Running IRC as root is stupid! You should\n"
+		              "  create a User Account and use that to login.\n"), FE_MSG_WARN|FE_MSG_WAIT);
+#endif
+#endif
+}
+
+static void
+on_app_activate (GApplication *app, gpointer user_data)
+{
+	static gboolean activated = FALSE;
+	(void) app; (void) user_data;
+
+	/* Guard against re-entrance — activate can fire more than once */
+	if (activated)
+		return;
+	activated = TRUE;
+
+	xchat_init ();
+}
+
+/* ─────────────────────────────────────────────────────────────────────── */
 
 int
 fe_args (int argc, char *argv[])
@@ -264,15 +311,15 @@ fe_args (int argc, char *argv[])
 
 	gtk_init ();
 
-	/* Create GtkApplication so all windows are grouped for proper focus
-	 * management and platform integration (taskbar grouping, etc.).
-	 * NON_UNIQUE: allow multiple instances (HexChat tradition).
-	 * We don't use g_application_run() — HexChat manages its own main loop
-	 * and startup sequence.  The app is registered so GTK knows about it,
-	 * and windows are associated via gtk_window_set_application(). */
+	/* Create GtkApplication — g_application_run() in fe_main() will
+	 * handle registration, startup/activate signals, and the main loop.
+	 * NON_UNIQUE: allow multiple instances (HexChat tradition). */
 	hexchat_app = gtk_application_new ("io.github.Hexchat",
 	                                   G_APPLICATION_NON_UNIQUE);
-	g_application_register (G_APPLICATION (hexchat_app), NULL, NULL);
+	g_signal_connect (hexchat_app, "startup",
+	                  G_CALLBACK (on_app_startup), NULL);
+	g_signal_connect (hexchat_app, "activate",
+	                  G_CALLBACK (on_app_activate), NULL);
 
 #ifdef HAVE_GTK_MAC
 	osx_app = g_object_new(GTKOSX_TYPE_APPLICATION, NULL);
@@ -539,10 +586,7 @@ fe_main (void)
 	g_signal_connect (G_OBJECT(osx_app), "NSApplicationWillTerminate",
 					G_CALLBACK(gtkosx_application_terminate), NULL);
 #endif
-	hexchat_main_loop = g_main_loop_new (NULL, FALSE);
-	g_main_loop_run (hexchat_main_loop);
-	g_main_loop_unref (hexchat_main_loop);
-	hexchat_main_loop = NULL;
+	g_application_run (G_APPLICATION (hexchat_app), 0, NULL);
 
 	/* sleep for 2 seconds so any QUIT messages are not lost. The  */
 	/* GUI is closed at this point, so the user doesn't even know! */
@@ -560,10 +604,8 @@ fe_cleanup (void)
 void
 fe_exit (void)
 {
-	if (hexchat_main_loop && g_main_loop_is_running (hexchat_main_loop))
-		g_main_loop_quit (hexchat_main_loop);
-
-	g_clear_object (&hexchat_app);
+	if (hexchat_app)
+		g_application_quit (G_APPLICATION (hexchat_app));
 }
 
 int
