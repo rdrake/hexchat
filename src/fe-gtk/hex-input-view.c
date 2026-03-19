@@ -353,7 +353,7 @@ hex_input_view_draw_emoji_sprites (HexInputView *view, GtkSnapshot *snapshot)
 				                                        GTK_TEXT_WINDOW_WIDGET,
 				                                        rect.x, rect.y, &wx, &wy);
 
-				double y = wy + (rect.height - size) / 2.0;
+				double y = wy + (rect.height - size) / 2.0 - 2;
 				graphene_rect_t bounds = GRAPHENE_RECT_INIT (wx, y, size, size);
 				cairo_t *cr = gtk_snapshot_append_cairo (snapshot, &bounds);
 				cairo_set_source_surface (cr, sprite, wx, y);
@@ -460,6 +460,8 @@ hex_input_view_init (HexInputView *view)
 	/* Text view setup */
 	gtk_text_view_set_wrap_mode (GTK_TEXT_VIEW (view), GTK_WRAP_WORD_CHAR);
 	gtk_text_view_set_accepts_tab (GTK_TEXT_VIEW (view), FALSE);
+	gtk_text_view_set_top_margin (GTK_TEXT_VIEW (view), 9);
+	//gtk_text_view_set_bottom_margin (GTK_TEXT_VIEW (view), 6);
 
 	/* Style like GtkEntry: border, padding, and focus highlight.
 	 * We add minimal overrides; the theme's entry rules provide
@@ -472,7 +474,6 @@ hex_input_view_init (HexInputView *view)
 			entry_css = gtk_css_provider_new ();
 			gtk_css_provider_load_from_data (entry_css,
 				"textview.hex-input-view {"
-				"  padding: 2px 8px;"
 				"  margin: 1px 4px 1px 0;"
 				"}", -1);
 			gtk_style_context_add_provider_for_display (
