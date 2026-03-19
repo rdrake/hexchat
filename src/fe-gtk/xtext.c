@@ -921,6 +921,7 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 	{
 		xtext->buffer->pagetop_ent = NULL;
 		gtk_xtext_adjustment_set (xtext->buffer, FALSE);
+		gtk_widget_queue_draw (widget);
 	}
 	if (xtext->buffer->scrollbar_down)
 		gtk_adjustment_set_value (xtext->adj,

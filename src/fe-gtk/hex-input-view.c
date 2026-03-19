@@ -273,6 +273,15 @@ hex_input_view_recheck_all (HexInputView *view)
 
 /* ── Buffer changed callback ────────────────────────────────────────── */
 
+static gboolean
+hex_input_view_idle_resize (gpointer data)
+{
+	GtkWidget *widget = GTK_WIDGET (data);
+	if (GTK_IS_WIDGET (widget))
+		gtk_widget_queue_resize (widget);
+	return G_SOURCE_REMOVE;
+}
+
 static void
 hex_input_view_buffer_changed (GtkTextBuffer *buf, HexInputView *view)
 {
@@ -284,8 +293,11 @@ hex_input_view_buffer_changed (GtkTextBuffer *buf, HexInputView *view)
 
 	hex_input_view_recheck_all (view);
 
-	/* Queue resize for auto-grow */
+	/* Queue resize for auto-grow. The immediate call handles typed input;
+	 * the idle callback catches pastes where GtkTextView's internal layout
+	 * hasn't finished computing line heights at "changed" signal time. */
 	gtk_widget_queue_resize (GTK_WIDGET (view));
+	g_idle_add (hex_input_view_idle_resize, view);
 }
 
 /* ── Emoji sprite rendering ─────────────────────────────────────────── */
