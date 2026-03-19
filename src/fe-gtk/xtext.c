@@ -572,7 +572,7 @@ gtk_xtext_adjustment_set (xtext_buffer *buf, int fire_signal)
 			int effective_height = alloc.height;
 			if (buf->xtext->status_strip_visible)
 				effective_height -= (buf->xtext->fontsize * 2 / 3 + 4);
-			page_size = effective_height / buf->xtext->fontsize;
+			page_size = (double)effective_height / buf->xtext->fontsize;
 		}
 		value = gtk_adjustment_get_value (adj);
 
@@ -4238,7 +4238,7 @@ gtk_xtext_render_page (GtkXText * xtext)
 
 	width -= MARGIN;
 
-	/* Reserve space for typing indicator strip at bottom */
+	/* Reserve space for status strip at bottom when visible */
 	{
 		int text_height = height;
 		if (xtext->status_strip_visible)
@@ -4451,7 +4451,6 @@ gtk_xtext_status_set (GtkXText *xtext, const char *key, const char *text,
 {
 	int idx;
 	xtext_status_item *item;
-	gboolean was_visible = xtext->status_strip_visible;
 
 	if (!text)
 	{
@@ -4482,26 +4481,27 @@ gtk_xtext_status_set (GtkXText *xtext, const char *key, const char *text,
 	else
 		item->expire_at = 0;
 
-	xtext->status_strip_visible = (xtext->status_item_count > 0);
-
-	/* Schedule expiry timer if needed */
-	if (item->expire_at > 0 && xtext->status_expire_timer == 0)
 	{
-		xtext->status_expire_timer = g_timeout_add (timeout_ms,
-		                                            xtext_status_expire_tick, xtext);
-	}
+		gboolean was_visible = xtext->status_strip_visible;
+		xtext->status_strip_visible = (xtext->status_item_count > 0);
 
-	/* Recalc adjustment if visibility changed */
-	if (was_visible != xtext->status_strip_visible)
-		gtk_xtext_adjustment_set (xtext->buffer, TRUE);
-	gtk_widget_queue_draw (GTK_WIDGET (xtext));
+		/* Schedule expiry timer if needed */
+		if (item->expire_at > 0 && xtext->status_expire_timer == 0)
+		{
+			xtext->status_expire_timer = g_timeout_add (timeout_ms,
+			                                            xtext_status_expire_tick, xtext);
+		}
+
+		if (was_visible != xtext->status_strip_visible)
+			gtk_xtext_adjustment_set (xtext->buffer, TRUE);
+		gtk_widget_queue_draw (GTK_WIDGET (xtext));
+	}
 }
 
 void
 gtk_xtext_status_remove (GtkXText *xtext, const char *key)
 {
 	int idx = xtext_status_find (xtext, key);
-	gboolean was_visible = xtext->status_strip_visible;
 
 	if (idx < 0)
 		return;
@@ -4513,10 +4513,12 @@ gtk_xtext_status_remove (GtkXText *xtext, const char *key)
 		memmove (&xtext->status_items[idx], &xtext->status_items[idx + 1],
 		         sizeof (xtext_status_item) * (xtext->status_item_count - 1 - idx));
 	xtext->status_item_count--;
-	xtext->status_strip_visible = (xtext->status_item_count > 0);
-
-	if (was_visible != xtext->status_strip_visible)
-		gtk_xtext_adjustment_set (xtext->buffer, TRUE);
+	{
+		gboolean was_visible = xtext->status_strip_visible;
+		xtext->status_strip_visible = (xtext->status_item_count > 0);
+		if (was_visible != xtext->status_strip_visible)
+			gtk_xtext_adjustment_set (xtext->buffer, TRUE);
+	}
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 }
 
