@@ -5727,10 +5727,170 @@ handle_user_input (session *sess, char *text, int history, int nocommand)
 	return handle_command (sess, text + 1, TRUE);
 }
 
+/* Send collected plain-text lines as a draft/multiline BATCH.
+ * Each line is individually split if too long for one PRIVMSG.
+ * If total would exceed server limits, closes batch and opens a new one.
+ * Returns TRUE if lines were sent as a batch, FALSE if caller should
+ * fall back to per-line sending. */
+static int
+handle_multiline_batch (session *sess, char **lines, int n_lines)
+{
+	server *serv = sess->server;
+	char *batch_tag;
+	int cmd_length = 13; /* " PRIVMSG ", " ", :, \r, \n */
+	int i;
+	int total_bytes = 0;
+	int total_lines = 0;
+	message_tags_data no_tags = MESSAGE_TAGS_DATA_INIT;
+
+	if (!serv->connected || !sess->channel[0])
+		return FALSE;
+
+	batch_tag = tcp_batch_open_multiline (serv, sess->channel);
+
+	for (i = 0; i < n_lines; i++)
+	{
+		char *text = lines[i];
+		char *split_text = NULL;
+		int offset = 0;
+		int line_len;
+
+		/* Handle lines that need splitting due to per-message length */
+		while ((split_text = split_up_text (sess, text + offset, cmd_length, split_text)))
+		{
+			line_len = strlen (split_text);
+			total_bytes += line_len;
+			total_lines++;
+
+			/* Check batch limits — close and reopen if needed */
+			if ((serv->multiline_max_bytes > 0 && total_bytes > serv->multiline_max_bytes) ||
+			    (serv->multiline_max_lines > 0 && total_lines > serv->multiline_max_lines))
+			{
+				tcp_batch_close (serv, batch_tag);
+				g_free (batch_tag);
+				batch_tag = tcp_batch_open_multiline (serv, sess->channel);
+				total_bytes = line_len;
+				total_lines = 1;
+			}
+
+			tcp_batch_privmsg (serv, batch_tag, sess->channel, split_text);
+
+			/* Local display */
+			if (!serv->have_echo_message)
+			{
+				inbound_chanmsg (serv, sess, sess->channel, serv->nick,
+				                 split_text, TRUE, FALSE, &no_tags);
+			}
+
+			if (*split_text)
+				offset += strlen (split_text);
+			g_free (split_text);
+		}
+
+		/* Remainder (or whole line if no splitting needed) */
+		line_len = strlen (text + offset);
+		total_bytes += line_len;
+		total_lines++;
+
+		if ((serv->multiline_max_bytes > 0 && total_bytes > serv->multiline_max_bytes) ||
+		    (serv->multiline_max_lines > 0 && total_lines > serv->multiline_max_lines))
+		{
+			tcp_batch_close (serv, batch_tag);
+			g_free (batch_tag);
+			batch_tag = tcp_batch_open_multiline (serv, sess->channel);
+			total_bytes = line_len;
+			total_lines = 1;
+		}
+
+		tcp_batch_privmsg (serv, batch_tag, sess->channel, text + offset);
+
+		if (!serv->have_echo_message)
+		{
+			inbound_chanmsg (serv, sess, sess->channel, serv->nick,
+			                 text + offset, TRUE, FALSE, &no_tags);
+		}
+	}
+
+	tcp_batch_close (serv, batch_tag);
+	g_free (batch_tag);
+
+	return TRUE;
+}
+
 /* changed by Steve Green. Macs sometimes paste with imbedded \r */
 void
 handle_multiline (session *sess, char *cmd, int history, int nocommand)
 {
+	server *serv = sess->server;
+
+	/* Try draft/multiline BATCH if the server supports it and the input
+	 * contains multiple lines of plain text (no commands). */
+	if (serv && serv->have_multiline && serv->multiline_max_lines > 1 &&
+	    strchr (cmd, '\n'))
+	{
+		char *p;
+		int all_text = TRUE;
+		char cmd_char = prefs.hex_input_command_char[0];
+
+		/* Non-destructive scan: check if all lines are plain text */
+		p = cmd;
+		while (*p)
+		{
+			if (*p == cmd_char && p[1] != cmd_char)
+			{
+				all_text = FALSE;
+				break;
+			}
+			/* Skip to next line */
+			p += strcspn (p, "\n\r");
+			if (*p)
+				p++;
+		}
+
+		if (all_text)
+		{
+			/* Save full text for history before destructive split,
+			 * which null-terminates newlines in the cmd buffer */
+			char *history_text = history ? g_strdup (cmd) : NULL;
+
+			/* Now destructively split and collect lines */
+			GPtrArray *lines = g_ptr_array_new ();
+			p = cmd;
+			while (1)
+			{
+				char *cr = p + strcspn (p, "\n\r");
+				int end_of_string = (*cr == 0);
+				if (!end_of_string)
+					*cr = 0;
+
+				if (*p == cmd_char && p[1] == cmd_char)
+					g_ptr_array_add (lines, p + 1);
+				else if (*p)
+					g_ptr_array_add (lines, p);
+
+				if (end_of_string)
+					break;
+				p = cr + 1;
+			}
+
+			if (lines->len >= 2)
+			{
+				if (history_text)
+					history_add (&sess->history, history_text);
+				g_free (history_text);
+				handle_multiline_batch (sess, (char **)lines->pdata, lines->len);
+				g_ptr_array_free (lines, TRUE);
+				return;
+			}
+
+			/* Only 1 line after splitting — fall through to per-line.
+			 * The string is already null-terminated at the right place. */
+			g_free (history_text);
+			g_ptr_array_free (lines, TRUE);
+		}
+	}
+
+	/* Per-line fallback */
 	while (*cmd)
 	{
 		char *cr = cmd + strcspn (cmd, "\n\r");

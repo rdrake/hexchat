@@ -32,6 +32,10 @@ char *tcp_sendf_labeled_tracked (server *serv, const char *command,
 int tcp_send_real (void *ssl, int sok, GIConv write_converter, char *buf, int len);
 
 void server_ensure_stale_sweep_timer (server *serv);
+char *tcp_batch_open_multiline (server *serv, const char *target);
+void tcp_batch_privmsg (server *serv, const char *batch_tag,
+                        const char *target, const char *text);
+void tcp_batch_close (server *serv, const char *batch_tag);
 server *server_new (void);
 int is_server (server *serv);
 void server_fill_her_up (server *serv);

@@ -2814,6 +2814,25 @@ inbound_cap_ls (server *serv, char *nick, char *extensions_str,
 			/* Don't continue - still need to request the capability */
 		}
 
+		/* IRCv3 draft/multiline - parse capability tokens
+		 * Format: draft/multiline=max-bytes=16384,max-lines=100
+		 */
+		if (!g_strcmp0 (extension, "draft/multiline") && value)
+		{
+			char **tokens = g_strsplit (value, ",", 0);
+			int j;
+
+			for (j = 0; tokens[j]; j++)
+			{
+				if (g_str_has_prefix (tokens[j], "max-bytes="))
+					serv->multiline_max_bytes = atoi (tokens[j] + 10);
+				else if (g_str_has_prefix (tokens[j], "max-lines="))
+					serv->multiline_max_lines = atoi (tokens[j] + 10);
+			}
+			g_strfreev (tokens);
+			/* Don't continue - still need to request the capability */
+		}
+
 		for (x = 0; x < G_N_ELEMENTS(supported_caps); ++x)
 		{
 			if (!g_strcmp0 (extension, supported_caps[x]))

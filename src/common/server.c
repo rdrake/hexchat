@@ -462,6 +462,55 @@ server_ensure_stale_sweep_timer (server *serv)
 			STALE_SWEEP_INTERVAL, stale_sweep_cb, serv);
 }
 
+/* Open a draft/multiline batch. Returns batch tag (caller frees).
+ * If labeled-response is available, the BATCH +tag gets a label and
+ * the pending label is tracked. */
+char *
+tcp_batch_open_multiline (server *serv, const char *target)
+{
+	char *batch_tag;
+	char *label;
+
+	batch_tag = g_strdup_printf ("hcb%u", serv->label_counter++);
+
+	label = tcp_sendf_labeled (serv, "BATCH +%s draft/multiline %s\r\n",
+	                           batch_tag, target);
+
+	if (label)
+	{
+		pending_label_info *info = g_new0 (pending_label_info, 1);
+		info->command = g_strdup ("BATCH");
+		info->target = g_strdup (target);
+		info->sent_time = time (NULL);
+
+		if (!serv->pending_labels)
+			serv->pending_labels = g_hash_table_new_full (
+				g_str_hash, g_str_equal, g_free,
+				(GDestroyNotify) pending_label_info_free);
+
+		g_hash_table_insert (serv->pending_labels, label, info);
+		serv->last_sent_label = label;
+		server_ensure_stale_sweep_timer (serv);
+	}
+
+	return batch_tag;
+}
+
+/* Send a PRIVMSG inside an open batch */
+void
+tcp_batch_privmsg (server *serv, const char *batch_tag,
+                   const char *target, const char *text)
+{
+	tcp_sendf (serv, "@batch=%s PRIVMSG %s :%s\r\n", batch_tag, target, text);
+}
+
+/* Close a batch */
+void
+tcp_batch_close (server *serv, const char *batch_tag)
+{
+	tcp_sendf (serv, "BATCH -%s\r\n", batch_tag);
+}
+
 static int
 close_socket_cb (gpointer sok)
 {
