@@ -21,6 +21,7 @@
 #include <stdlib.h>
 
 #include "fe-gtk.h"
+#include "hex-input-view.h"
 
 #include <gdk/gdkkeysyms.h>
 
@@ -979,7 +980,7 @@ userlist_key_cb (GtkEventControllerKey *controller, guint keyval,
 		{
 			char buf[2] = { (char)keyval, 0 };
 			int pos = -1;
-			gtk_editable_insert_text (GTK_EDITABLE (current_sess->gui->input_box), buf, 1, &pos);
+			SPELL_ENTRY_INSERT (current_sess->gui->input_box, buf, 1, &pos);
 		}
 		return TRUE;
 	}

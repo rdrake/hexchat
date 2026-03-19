@@ -31,6 +31,7 @@
 #include "../common/hexchatc.h"
 #include "../common/outbound.h"
 #include "fe-gtk.h"
+#include "hex-input-view.h"
 #include "gtkutil.h"
 #include "maingui.h"
 #include "palette.h"
@@ -198,6 +199,7 @@ static const setting inputbox_settings[] =
 	{ST_TOGGLE, N_("Render colors and attributes"), P_OFFINTNL (hex_gui_input_attr),0,0,0},
 	{ST_TOGGLE, N_("Show nick box"), P_OFFINTNL(hex_gui_input_nick),0,0,1},
 	{ST_TOGGLE, N_("Show user mode icon in nick box"), P_OFFINTNL(hex_gui_input_icon),0,0,0},
+	{ST_NUMBER, N_("Maximum input box height:"), P_OFFINTNL(hex_gui_input_lines), 0, (const char **)N_("lines."), 20},
 	{ST_TOGGLE, N_("Spell checking"), P_OFFINTNL(hex_gui_input_spell),0,0,1},
 	{ST_ENTRY,	N_("Dictionaries to use:"), P_OFFSETNL(hex_text_spell_langs),0,0,sizeof prefs.hex_text_spell_langs},
 #ifdef WIN32
@@ -2082,15 +2084,25 @@ setup_apply_to_sess (session_gui *gui)
 		gtk_widget_hide (gui->button_box);
 
 	/* update active languages */
-	sexy_spell_entry_deactivate_language((SexySpellEntry *)gui->input_box,NULL);
-	sexy_spell_entry_activate_default_languages((SexySpellEntry *)gui->input_box);
-
-	sexy_spell_entry_set_checked ((SexySpellEntry *)gui->input_box, prefs.hex_gui_input_spell);
-	sexy_spell_entry_set_parse_attributes ((SexySpellEntry *)gui->input_box, prefs.hex_gui_input_attr);
-
-	/* Update emoji cache — xtext's cache may have been (re)created or destroyed */
-	sexy_spell_entry_set_emoji_cache ((SexySpellEntry *)gui->input_box,
-	                                   GTK_XTEXT (gui->xtext)->emoji_cache);
+	if (HEX_IS_INPUT_VIEW (gui->input_box))
+	{
+		hex_input_view_deactivate_language (HEX_INPUT_VIEW (gui->input_box), NULL);
+		hex_input_view_activate_default_languages (HEX_INPUT_VIEW (gui->input_box));
+		hex_input_view_set_max_lines (HEX_INPUT_VIEW (gui->input_box), prefs.hex_gui_input_lines);
+		hex_input_view_set_checked (HEX_INPUT_VIEW (gui->input_box), prefs.hex_gui_input_spell);
+		hex_input_view_set_parse_attributes (HEX_INPUT_VIEW (gui->input_box), prefs.hex_gui_input_attr);
+		hex_input_view_set_emoji_cache (HEX_INPUT_VIEW (gui->input_box),
+		                                 GTK_XTEXT (gui->xtext)->emoji_cache);
+	}
+	else
+	{
+		sexy_spell_entry_deactivate_language ((SexySpellEntry *)gui->input_box, NULL);
+		sexy_spell_entry_activate_default_languages ((SexySpellEntry *)gui->input_box);
+		sexy_spell_entry_set_checked ((SexySpellEntry *)gui->input_box, prefs.hex_gui_input_spell);
+		sexy_spell_entry_set_parse_attributes ((SexySpellEntry *)gui->input_box, prefs.hex_gui_input_attr);
+		sexy_spell_entry_set_emoji_cache ((SexySpellEntry *)gui->input_box,
+		                                   GTK_XTEXT (gui->xtext)->emoji_cache);
+	}
 }
 
 static void

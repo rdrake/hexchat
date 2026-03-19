@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "fe-gtk.h"
+#include "hex-input-view.h"
 
 #include "../common/hexchat.h"
 #include "../common/hexchatc.h"

@@ -40,6 +40,7 @@
 #include "../common/chathistory.h"
 
 #include "fe-gtk.h"
+#include "hex-input-view.h"
 #include "banlist.h"
 #include "gtkutil.h"
 #include "joind.h"
@@ -3797,14 +3798,18 @@ mg_create_entry (session *sess, GtkWidget *box)
 	g_signal_connect (G_OBJECT (but), "clicked",
 							G_CALLBACK (mg_nickclick_cb), NULL);
 
-	gui->input_box = entry = sexy_spell_entry_new ();
-	sexy_spell_entry_set_checked ((SexySpellEntry *)entry, prefs.hex_gui_input_spell);
-	sexy_spell_entry_set_parse_attributes ((SexySpellEntry *)entry, prefs.hex_gui_input_attr);
+	gui->input_box = entry = hex_input_view_new ();
+	hex_input_view_set_max_lines (HEX_INPUT_VIEW (entry), prefs.hex_gui_input_lines);
+	hex_input_view_set_checked (HEX_INPUT_VIEW (entry), prefs.hex_gui_input_spell);
+	hex_input_view_set_parse_attributes (HEX_INPUT_VIEW (entry), prefs.hex_gui_input_attr);
 
-	gtk_entry_set_max_length (GTK_ENTRY (gui->input_box), 0);
 	g_signal_connect (G_OBJECT (entry), "activate",
 							G_CALLBACK (mg_inputbox_cb), gui);
+
+	/* Add directly — measure vfunc handles max height clamping,
+	 * GtkTextView scrolls internally via GtkScrollable */
 	gtk_widget_set_hexpand (entry, TRUE);
+	gtk_widget_set_valign (entry, GTK_ALIGN_CENTER);
 	hc_box_add (hbox, entry);
 
 	gtk_widget_set_name (entry, "hexchat-inputbox");
@@ -3822,14 +3827,13 @@ mg_create_entry (session *sess, GtkWidget *box)
 								G_CALLBACK (mg_inputbox_focus), gui);
 		gtk_widget_add_controller (entry, focus_controller);
 	}
-	/* GTK4: populate_popup doesn't exist, context menu handled differently */
 	g_signal_connect (G_OBJECT (entry), "word-check",
 							G_CALLBACK (mg_spellcheck_cb), NULL);
 
 	/* Share xtext's emoji cache with the input box for consistent rendering */
 	if (gui->xtext && GTK_XTEXT (gui->xtext)->emoji_cache)
-		sexy_spell_entry_set_emoji_cache (SEXY_SPELL_ENTRY (entry),
-		                                   GTK_XTEXT (gui->xtext)->emoji_cache);
+		hex_input_view_set_emoji_cache (HEX_INPUT_VIEW (entry),
+		                                 GTK_XTEXT (gui->xtext)->emoji_cache);
 
 	gtk_widget_grab_focus (entry);
 }

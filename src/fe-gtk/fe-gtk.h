@@ -186,12 +186,28 @@ typedef struct session_gui
 extern cairo_surface_t *channelwin_pix;
 extern cairo_surface_t *dialogwin_pix;
 
-/* Spell entry compatibility macros - use GTK3/GTK4 compatible versions */
-#define SPELL_ENTRY_GET_TEXT(e) ((char *)(hc_entry_get_text(e)))
-#define SPELL_ENTRY_SET_TEXT(e,txt) hc_entry_set_text(e,txt)
-#define SPELL_ENTRY_SET_EDITABLE(e,v) gtk_editable_set_editable(GTK_EDITABLE(e),v)
-#define SPELL_ENTRY_GET_POS(e) gtk_editable_get_position(GTK_EDITABLE(e))
-#define SPELL_ENTRY_SET_POS(e,p) gtk_editable_set_position(GTK_EDITABLE(e),p);
-#define SPELL_ENTRY_INSERT(e,t,l,p) gtk_editable_insert_text(GTK_EDITABLE(e),t,l,p)
+/* Spell entry compatibility macros — dispatch to HexInputView or GtkEditable
+ * depending on widget type.  Only gui->input_box is a HexInputView; other
+ * GtkEntry-based widgets (topic bar, filter entries) still use GtkEditable.
+ * Callers must #include "hex-input-view.h" themselves. */
+
+#define SPELL_ENTRY_GET_TEXT(e) \
+	(HEX_IS_INPUT_VIEW (e) ? (char *) hex_input_view_get_text (HEX_INPUT_VIEW (e)) \
+	                        : (char *) hc_entry_get_text (e))
+#define SPELL_ENTRY_SET_TEXT(e,txt) \
+	do { if (HEX_IS_INPUT_VIEW (e)) hex_input_view_set_text (HEX_INPUT_VIEW (e), txt); \
+	     else hc_entry_set_text (e, txt); } while (0)
+#define SPELL_ENTRY_SET_EDITABLE(e,v) \
+	do { if (HEX_IS_INPUT_VIEW (e)) gtk_text_view_set_editable (GTK_TEXT_VIEW (e), v); \
+	     else gtk_editable_set_editable (GTK_EDITABLE (e), v); } while (0)
+#define SPELL_ENTRY_GET_POS(e) \
+	(HEX_IS_INPUT_VIEW (e) ? hex_input_view_get_position (HEX_INPUT_VIEW (e)) \
+	                        : gtk_editable_get_position (GTK_EDITABLE (e)))
+#define SPELL_ENTRY_SET_POS(e,p) \
+	do { if (HEX_IS_INPUT_VIEW (e)) hex_input_view_set_position (HEX_INPUT_VIEW (e), p); \
+	     else gtk_editable_set_position (GTK_EDITABLE (e), p); } while (0)
+#define SPELL_ENTRY_INSERT(e,t,l,p) \
+	do { if (HEX_IS_INPUT_VIEW (e)) hex_input_view_insert_text (HEX_INPUT_VIEW (e), t, l, p); \
+	     else gtk_editable_insert_text (GTK_EDITABLE (e), t, l, p); } while (0)
 
 #endif
