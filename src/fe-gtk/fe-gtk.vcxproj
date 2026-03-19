@@ -36,7 +36,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(DepsRoot)\lib;$(OpenSSLLib);$(JanssonLib);$(LibWebSocketsLib);$(LibCurlLib);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>$(DepLibs);$(HexChatLib)common.lib;jansson.lib;websockets.lib;libcurl.lib;wbemuuid.lib;comsupp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(DepLibs);$(HexChatLib)common.lib;wbemuuid.lib;comsupp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
     </Link>
   </ItemDefinitionGroup>
@@ -48,7 +48,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(DepsRoot)\lib;$(OpenSSLLib);$(JanssonLib);$(LibWebSocketsLib);$(LibCurlLib);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>$(DepLibs);$(HexChatLib)common.lib;jansson.lib;websockets.lib;libcurl.lib;wbemuuid.lib;comsupp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(DepLibs);$(HexChatLib)common.lib;wbemuuid.lib;comsupp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
     </Link>
   </ItemDefinitionGroup>
