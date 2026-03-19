@@ -31,7 +31,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;TRAY_EXPORTS;$(OwnFlags);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\common;$(HexChatLib);$(DepsRoot)\include;$(OpenSSLInclude);$(Glib);$(Gtk);$(JanssonInclude);$(LibCurlInclude);..\..\external\tray\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\common;$(HexChatLib);$(DepsRoot)\include;$(DepsRoot)\include\librsvg-2.0;$(OpenSSLInclude);$(Glib);$(Gtk);$(JanssonInclude);$(LibCurlInclude);..\..\external\tray\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4244;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
@@ -43,7 +43,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <PreprocessorDefinitions>WIN32;_WIN64;_AMD64_;NDEBUG;_WINDOWS;TRAY_EXPORTS;$(OwnFlags);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\common;$(HexChatLib);$(DepsRoot)\include;$(OpenSSLInclude);$(Glib);$(Gtk);$(JanssonInclude);$(LibCurlInclude);..\..\external\tray\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\common;$(HexChatLib);$(DepsRoot)\include;$(DepsRoot)\include\librsvg-2.0;$(OpenSSLInclude);$(Glib);$(Gtk);$(JanssonInclude);$(LibCurlInclude);..\..\external\tray\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4244;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
@@ -100,6 +100,7 @@ powershell "Get-Content -Encoding UTF8 '$(HexChatLib)hexchat.rc.utf8' | Out-File
     <ClInclude Include="xtext.h" />
     <ClInclude Include="xtext-emoji.h" />
     <ClInclude Include="hex-input-view.h" />
+    <ClInclude Include="hex-emoji-chooser.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ascii.c" />
@@ -136,6 +137,7 @@ powershell "Get-Content -Encoding UTF8 '$(HexChatLib)hexchat.rc.utf8' | Out-File
     <ClCompile Include="xtext.c" />
     <ClCompile Include="xtext-emoji.c" />
     <ClCompile Include="hex-input-view.c" />
+    <ClCompile Include="hex-emoji-chooser.c" />
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="..\..\win32\hexchat.exe.manifest" />

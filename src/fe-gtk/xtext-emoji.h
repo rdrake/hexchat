@@ -26,6 +26,15 @@ void               xtext_emoji_cache_set_size (xtext_emoji_cache *cache, int siz
 cairo_surface_t   *xtext_emoji_cache_get  (xtext_emoji_cache *cache, const char *filename);
 
 /*
+ * Build a Twemoji base filename from a codepoint array.
+ * Codepoints are joined by '-' as lowercase hex, VS16 (0xFE0F) omitted.
+ * Result is the base name without extension (e.g., "1f600", "1f468-200d-1f469").
+ * Caller appends ".png" or ".svg" as needed.
+ */
+void xtext_emoji_build_filename (const gunichar *codepoints, int count,
+                                  char *buf, int buf_size);
+
+/*
  * Detect an emoji sequence starting at `str` with `remaining` bytes available.
  *
  * On success: returns TRUE, sets *byte_len to the number of bytes consumed,

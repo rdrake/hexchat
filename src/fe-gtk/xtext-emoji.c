@@ -12,6 +12,10 @@
 
 #include "xtext-emoji.h"
 
+#ifdef USE_LIBRSVG
+#include <librsvg/rsvg.h>
+#endif
+
 /* --- UTF-8 decoding helper --- */
 
 /* Decode one UTF-8 codepoint. Returns codepoint and sets *bytes_out to byte length.
@@ -305,37 +309,81 @@ build_filename:
 
 	if (filename_buf && buf_size > 0)
 	{
-		/* Build Twemoji filename: codepoints joined by '-', lowercase hex, '.png'
-		 * e.g., "1f600.png", "1f468-200d-1f469-200d-1f467.png"
-		 * Omit VS16 (0xFE0F) from filename — Twemoji files generally don't include it */
-		char *p = filename_buf;
-		char *end = filename_buf + buf_size - 5;  /* room for ".png\0" */
-		gboolean first = TRUE;
-
-		for (int i = 0; i < cp_count; i++)
-		{
-			/* Skip VS16 in filenames — Twemoji convention */
-			if (codepoints[i] == 0xFE0F)
-				continue;
-
-			if (!first)
-			{
-				if (p >= end) break;
-				*p++ = '-';
-			}
-			first = FALSE;
-
-			int written = g_snprintf (p, end - p, "%x", codepoints[i]);
-			if (written <= 0 || p + written >= end)
-				break;
-			p += written;
-		}
-
-		g_snprintf (p, filename_buf + buf_size - p, ".png");
+		/* Build base name, then append ".png" */
+		xtext_emoji_build_filename (codepoints, cp_count,
+		                             filename_buf, buf_size - 4);
+		g_strlcat (filename_buf, ".png", buf_size);
 	}
 
 	return TRUE;
 }
+
+/* --- Public filename builder --- */
+
+void
+xtext_emoji_build_filename (const gunichar *codepoints, int count,
+                             char *buf, int buf_size)
+{
+	char *p = buf;
+	char *end = buf + buf_size - 1;  /* room for '\0' */
+	gboolean first = TRUE;
+	int i;
+
+	if (!buf || buf_size < 2)
+		return;
+
+	for (i = 0; i < count; i++)
+	{
+		/* Skip VS16 in filenames — Twemoji convention */
+		if (codepoints[i] == 0xFE0F)
+			continue;
+
+		if (!first)
+		{
+			if (p >= end) break;
+			*p++ = '-';
+		}
+		first = FALSE;
+
+		int written = g_snprintf (p, end - p, "%x", codepoints[i]);
+		if (written <= 0 || p + written >= end)
+			break;
+		p += written;
+	}
+
+	*p = '\0';
+}
+
+/* --- SVG rendering (optional) --- */
+
+#ifdef USE_LIBRSVG
+static cairo_surface_t *
+render_svg_to_surface (const char *path, int size)
+{
+	GFile *file = g_file_new_for_path (path);
+	RsvgHandle *handle = rsvg_handle_new_from_gfile_sync (file, 0, NULL, NULL);
+	cairo_surface_t *surface;
+	cairo_t *cr;
+	RsvgRectangle viewport = { 0, 0, size, size };
+
+	g_object_unref (file);
+	if (!handle)
+		return NULL;
+
+	surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, size, size);
+	cr = cairo_create (surface);
+	if (!rsvg_handle_render_document (handle, cr, &viewport, NULL))
+	{
+		cairo_destroy (cr);
+		cairo_surface_destroy (surface);
+		g_object_unref (handle);
+		return NULL;
+	}
+	cairo_destroy (cr);
+	g_object_unref (handle);
+	return surface;
+}
+#endif
 
 /* --- Cache implementation --- */
 
@@ -395,39 +443,66 @@ xtext_emoji_cache_get (xtext_emoji_cache *cache, const char *filename)
 	if (scaled)
 		return scaled;
 
-	/* Load the source PNG */
-	path = g_build_filename (cache->sprite_dir, filename, NULL);
-	source = cairo_image_surface_create_from_png (path);
-	g_free (path);
+	scaled = NULL;
 
-	if (cairo_surface_status (source) != CAIRO_STATUS_SUCCESS)
+#ifdef USE_LIBRSVG
+	/* Prefer SVG — renders at exact target size, no scaling artifacts */
 	{
+		char svg_name[256];
+		char *dot;
+
+		g_strlcpy (svg_name, filename, sizeof (svg_name));
+		dot = strrchr (svg_name, '.');
+		if (dot)
+			g_strlcpy (dot, ".svg", sizeof (svg_name) - (dot - svg_name));
+
+		path = g_build_filename (cache->sprite_dir, svg_name, NULL);
+		scaled = render_svg_to_surface (path, cache->target_size);
+		g_free (path);
+	}
+#endif
+
+	/* Fall back to PNG */
+	if (!scaled)
+	{
+		path = g_build_filename (cache->sprite_dir, filename, NULL);
+		source = cairo_image_surface_create_from_png (path);
+		g_free (path);
+
+		if (cairo_surface_status (source) != CAIRO_STATUS_SUCCESS)
+		{
+			cairo_surface_destroy (source);
+			g_hash_table_insert (cache->surfaces, g_strdup (filename), NULL);
+			return NULL;
+		}
+
+		src_w = cairo_image_surface_get_width (source);
+		src_h = cairo_image_surface_get_height (source);
+
+		if (src_w == 0 || src_h == 0)
+		{
+			cairo_surface_destroy (source);
+			g_hash_table_insert (cache->surfaces, g_strdup (filename), NULL);
+			return NULL;
+		}
+
+		/* Scale to target_size (square) */
+		scale = (double) cache->target_size / MAX (src_w, src_h);
+		scaled = cairo_image_surface_create (CAIRO_FORMAT_ARGB32,
+		                                      cache->target_size, cache->target_size);
+		cr = cairo_create (scaled);
+		cairo_scale (cr, scale, scale);
+		cairo_set_source_surface (cr, source, 0, 0);
+		cairo_paint (cr);
+		cairo_destroy (cr);
 		cairo_surface_destroy (source);
-		/* Cache a NULL sentinel so we don't retry missing files */
+	}
+
+	if (!scaled)
+	{
 		g_hash_table_insert (cache->surfaces, g_strdup (filename), NULL);
 		return NULL;
 	}
-
-	src_w = cairo_image_surface_get_width (source);
-	src_h = cairo_image_surface_get_height (source);
-
-	if (src_w == 0 || src_h == 0)
-	{
-		cairo_surface_destroy (source);
-		g_hash_table_insert (cache->surfaces, g_strdup (filename), NULL);
-		return NULL;
-	}
-
-	/* Scale to target_size (square) */
-	scale = (double) cache->target_size / MAX (src_w, src_h);
-	scaled = cairo_image_surface_create (CAIRO_FORMAT_ARGB32,
-										  cache->target_size, cache->target_size);
-	cr = cairo_create (scaled);
-	cairo_scale (cr, scale, scale);
-	cairo_set_source_surface (cr, source, 0, 0);
-	cairo_paint (cr);
-	cairo_destroy (cr);
-	cairo_surface_destroy (source);
 
 	g_hash_table_insert (cache->surfaces, g_strdup (filename), scaled);
 	return scaled;

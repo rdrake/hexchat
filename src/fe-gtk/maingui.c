@@ -49,6 +49,7 @@
 #include "menu.h"
 #include "fkeys.h"
 #include "userlistgui.h"
+#include "hex-emoji-chooser.h"
 #include "chanview.h"
 #include "pixmaps.h"
 #include "plugin-tray.h"
@@ -3780,6 +3781,21 @@ mg_create_search(session *sess, GtkWidget *box)
 }
 
 static void
+mg_emoji_picked (HexEmojiChooser *chooser, const char *text, session_gui *gui)
+{
+	int pos;
+	(void) chooser;
+
+	if (!gui || !gui->input_box || !text || !*text)
+		return;
+
+	pos = SPELL_ENTRY_GET_POS (gui->input_box);
+	SPELL_ENTRY_INSERT (gui->input_box, text, strlen (text), &pos);
+	SPELL_ENTRY_SET_POS (gui->input_box, pos);
+	gtk_widget_grab_focus (gui->input_box);
+}
+
+static void
 mg_create_entry (session *sess, GtkWidget *box)
 {
 	GtkWidget *hbox, *but, *entry;
@@ -3834,6 +3850,31 @@ mg_create_entry (session *sess, GtkWidget *box)
 	if (gui->xtext && GTK_XTEXT (gui->xtext)->emoji_cache)
 		hex_input_view_set_emoji_cache (HEX_INPUT_VIEW (entry),
 		                                 GTK_XTEXT (gui->xtext)->emoji_cache);
+
+	/* Emoji picker button */
+	{
+		GtkWidget *emoji_btn, *emoji_chooser;
+
+		emoji_btn = gtk_button_new_from_icon_name ("face-smile-symbolic");
+		gtk_button_set_has_frame (GTK_BUTTON (emoji_btn), FALSE);
+		gtk_widget_set_can_focus (emoji_btn, FALSE);
+		gtk_widget_set_tooltip_text (emoji_btn, _("Insert Emoji"));
+		gtk_widget_set_valign (emoji_btn, GTK_ALIGN_CENTER);
+		hc_box_add (hbox, emoji_btn);
+
+		emoji_chooser = hex_emoji_chooser_new ();
+		gtk_widget_set_parent (emoji_chooser, emoji_btn);
+
+		if (gui->xtext && GTK_XTEXT (gui->xtext)->emoji_cache)
+			hex_emoji_chooser_set_emoji_cache (HEX_EMOJI_CHOOSER (emoji_chooser),
+			                                    GTK_XTEXT (gui->xtext)->emoji_cache);
+
+		g_signal_connect_swapped (emoji_btn, "clicked",
+		                          G_CALLBACK (gtk_popover_popup),
+		                          emoji_chooser);
+		g_signal_connect (emoji_chooser, "emoji-picked",
+		                  G_CALLBACK (mg_emoji_picked), gui);
+	}
 
 	gtk_widget_grab_focus (entry);
 }
