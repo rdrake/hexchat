@@ -1064,10 +1064,20 @@ find_x (GtkXText *xtext, textentry *ent, int x, int subline, int indent, gboolea
 		{
 			PangoLayoutLine *pline = pango_layout_get_lines_readonly (xtext->layout)->data;
 			PangoRectangle line_logical;
+			gboolean inside;
 			pango_layout_line_get_extents (pline, NULL, &line_logical);
 			int layout_x = (x - indent) * PANGO_SCALE - line_logical.x;
-			pango_layout_line_x_to_index (pline, layout_x,
-			                               &index, &trailing);
+			inside = pango_layout_line_x_to_index (pline, layout_x,
+			                                        &index, &trailing);
+
+			/* x is past the end of text on this line — return str_len
+			 * so callers treat it as out-of-bounds (matching old SLP behavior) */
+			if (!inside && trailing > 0)
+			{
+				pango_attr_list_unref (attrs);
+				pango_layout_set_attributes (xtext->layout, NULL);
+				return ent->str_len;
+			}
 		}
 
 		pango_attr_list_unref (attrs);
@@ -2012,7 +2022,6 @@ gtk_xtext_get_word (GtkXText * xtext, int x, int y, textentry ** ret_ent,
 		if (is_del (*word))
 		{
 			word++;
-			len_to_offset--;
 			break;
 		}
 		len_to_offset += charlen (word);
