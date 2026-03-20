@@ -1102,178 +1102,7 @@ find_x (GtkXText *xtext, textentry *ent, int x, int subline, int indent, gboolea
 		                             ent->str_len, stripped_hit);
 	}
 
-	/* Fallback: old SLP-based hit testing */
-	{
-		int xx = indent;
-		int suboff;
-		GSList *list;
-		GSList *hid = NULL;
-		offlen_t *meta;
-		int off, len, mbl;
-
-		if (subline > 0)
-		{
-			suboff = GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, subline - 1));
-			for (list = ent->slp; list; list = g_slist_next (list))
-			{
-				meta = list->data;
-				if (meta->off + meta->len > suboff)
-					break;
-			}
-		}
-		else
-		{
-			suboff = 0;
-			list = ent->slp;
-		}
-		if (list == NULL)
-			return 0;
-		meta = list->data;
-		off = meta->off;
-		len = meta->len;
-		if (meta->emph & EMPH_HIDDEN)
-			hid = list;
-		while (len > 0)
-		{
-			if (off >= suboff)
-				break;
-			if (xtext->emoji_cache)
-			{
-				int emoji_bytes;
-				if (xtext_emoji_detect (ent->str + off, ent->str_len - off,
-				                         &emoji_bytes, NULL, 0))
-				{
-					len -= emoji_bytes;
-					off += emoji_bytes;
-					continue;
-				}
-			}
-			mbl = charlen (ent->str + off);
-			len -= mbl;
-			off += mbl;
-		}
-		if (len < 0)
-			return ent->str_len;
-
-		len = meta->len - (off - meta->off);
-		while (xx < x)
-		{
-			if (xtext->emoji_cache)
-			{
-				int emoji_bytes;
-				if (xtext_emoji_detect (ent->str + off, ent->str_len - off,
-				                         &emoji_bytes, NULL, 0))
-				{
-					xx += xtext->fontsize;
-					if (xx >= x)
-						return off;
-					len -= emoji_bytes;
-					off += emoji_bytes;
-					if (len <= 0)
-					{
-						if (meta->emph & EMPH_HIDDEN)
-							hid = list;
-						list = g_slist_next (list);
-						if (list == NULL)
-							return ent->str_len;
-						meta = list->data;
-						off = meta->off;
-						len = meta->len;
-					}
-					continue;
-				}
-			}
-
-			{
-				int text_start = off;
-				int scan = off;
-				int scan_len = len;
-				int text_bytes, emphasis, seg_width;
-
-				while (scan_len > 0)
-				{
-					int clen;
-					if (xtext->emoji_cache)
-					{
-						int eb;
-						if (xtext_emoji_detect (ent->str + scan, ent->str_len - scan,
-						                         &eb, NULL, 0))
-							break;
-					}
-					clen = charlen (ent->str + scan);
-					scan += clen;
-					scan_len -= clen;
-				}
-				text_bytes = scan - text_start;
-
-				if (text_bytes <= 0)
-					continue;
-
-				emphasis = meta->emph & (EMPH_ITAL | EMPH_BOLD);
-
-				if (meta->emph & EMPH_HIDDEN)
-				{
-					off += text_bytes;
-					len -= text_bytes;
-					if (len <= 0)
-					{
-						hid = list;
-						list = g_slist_next (list);
-						if (list == NULL)
-							return ent->str_len;
-						meta = list->data;
-						off = meta->off;
-						len = meta->len;
-					}
-					continue;
-				}
-
-				seg_width = backend_get_text_width_emph (xtext, ent->str + text_start,
-				                                          text_bytes, emphasis);
-				if (xx + seg_width < x)
-				{
-					xx += seg_width;
-					off += text_bytes;
-					len -= text_bytes;
-					if (len <= 0)
-					{
-						if (meta->emph & EMPH_HIDDEN)
-							hid = list;
-						list = g_slist_next (list);
-						if (list == NULL)
-							return ent->str_len;
-						meta = list->data;
-						off = meta->off;
-						len = meta->len;
-					}
-					continue;
-				}
-
-				pango_layout_set_attributes (xtext->layout, attr_lists[emphasis]);
-				pango_layout_set_text (xtext->layout, (char *)(ent->str + text_start),
-				                        text_bytes);
-				{
-					int index, trailing;
-					pango_layout_xy_to_index (xtext->layout, (x - xx) * PANGO_SCALE,
-					                           0, &index, &trailing);
-					off = text_start + index;
-				}
-				break;
-			}
-		}
-
-		if (hid && list && hid->next == list)
-		{
-			offlen_t *vis = list->data;
-			if (off == vis->off)
-			{
-				meta = hid->data;
-				off = meta->off;
-			}
-		}
-
-		return off;
-	}
+	return 0;  /* no parsed data available */
 }
 
 static int
@@ -3495,89 +3324,6 @@ gtk_xtext_text_width (GtkXText *xtext, unsigned char *text, int len)
 	return width;
 }
 
-/* actually draw text to screen (one run with the same color/attribs) */
-
-static int
-gtk_xtext_render_flush (GtkXText * xtext, int x, int y, unsigned char *str,
-								int len, int *emphasis)
-{
-	int str_width, dofill;
-	int dest_x, dest_y;
-
-	if (xtext->dont_render || len < 1 || xtext->hidden)
-	{
-		xtext->last_width_pango = 0;
-		return 0;
-	}
-
-	str_width = backend_get_text_width_emph (xtext, str, len, *emphasis);
-
-	if (xtext->dont_render2)
-		return str_width;
-
-	/* roll-your-own clipping (avoiding XftDrawString is always good!) */
-	if (x > xtext->clip_x2 || x + str_width < xtext->clip_x)
-		return str_width;
-	if (y - xtext->font->ascent > xtext->clip_y2 || (y - xtext->font->ascent) + xtext->fontsize < xtext->clip_y)
-		return str_width;
-
-	if (xtext->render_hilights_only)
-	{
-		if (!xtext->in_hilight)	/* is it a hilight prefix? */
-			return str_width;
-		if (!xtext->un_hilight)	/* doing a hilight? underline drawn as overlay */
-			return str_width;
-	}
-
-	dest_x = x;
-	dest_y = y - xtext->font->ascent;
-
-	/* In GTK3, we draw directly via Cairo - no intermediate pixmap needed */
-	cairo_save (xtext->cr);
-
-	/* Set clipping region */
-	cairo_rectangle (xtext->cr, xtext->clip_x, xtext->clip_y,
-						  xtext->clip_x2 - xtext->clip_x,
-						  xtext->clip_y2 - xtext->clip_y);
-	cairo_clip (xtext->cr);
-
-	dofill = TRUE;
-
-	/* backcolor is always handled by XDrawImageString */
-	if (!xtext->backcolor && xtext->pixmap)
-	{
-		/* draw the background pixmap behind the text */
-		xtext_draw_bg (xtext, x, y - xtext->font->ascent, str_width,
-							xtext->fontsize);
-		dofill = FALSE;	/* already drawn the background */
-	}
-
-	backend_draw_text_emph (xtext, dofill, x, y, str, len, str_width, *emphasis);
-
-	cairo_restore (xtext->cr);
-
-	if (xtext->strikethrough)
-	{
-		/* pango_attr_strikethrough_new does not render in the custom widget so we need to reinvent the wheel */
-		int strike_y = dest_y + (xtext->fontsize / 2);
-		xtext_set_source_color (xtext, xtext->col_fore);
-		cairo_move_to (xtext->cr, dest_x, strike_y + 0.5);
-		cairo_line_to (xtext->cr, dest_x + str_width - 1, strike_y + 0.5);
-		cairo_stroke (xtext->cr);
-	}
-
-	if (xtext->underline)
-	{
-		int under_y = y + 1;
-		xtext_set_source_color (xtext, xtext->col_fore);
-		cairo_move_to (xtext->cr, dest_x, under_y + 0.5);
-		cairo_line_to (xtext->cr, dest_x + str_width - 1, under_y + 0.5);
-		cairo_stroke (xtext->cr);
-	}
-
-	return str_width;
-}
-
 static void
 gtk_xtext_reset (GtkXText * xtext, int mark, int attribs)
 {
@@ -3597,9 +3343,6 @@ gtk_xtext_reset (GtkXText * xtext, int mark, int attribs)
 		xtext->col_fore = XTEXT_FG;
 		xtext->col_back = XTEXT_BG;
 	}
-	xtext->parsing_color = FALSE;
-	xtext->parsing_backcolor = FALSE;
-	xtext->nc = 0;
 }
 
 /*
@@ -3664,8 +3407,8 @@ gtk_xtext_search_offset (xtext_buffer *buf, textentry *ent, unsigned int off)
 /* --- New subline renderer ---
  *
  * Renders a single subline using one PangoLayout with a pre-computed
- * PangoAttrList from the entry's format spans. Replaces the old
- * character-by-character state machine in gtk_xtext_render_str.
+ * PangoAttrList from the entry's format spans. Replaces
+ * the old character-by-character renderer (removed).
  *
  * Returns: 1 normally, 0 if xtext->cr is NULL (GTK4 outside snapshot)
  */
@@ -3940,468 +3683,6 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 	return ret;
 }
 
-/* Sub-pixel X tracking: accumulate widths in Pango units (1/1024 px) to avoid
- * rounding errors at RENDER_FLUSH boundaries (e.g. selection mark edges).
- * The integer x (for drawing) is derived from x_pango via PANGO_PIXELS. */
-#define RENDER_FLUSH do { \
-	gtk_xtext_render_flush (xtext, x, y, pstr, j, emphasis); \
-	x_pango += xtext->last_width_pango; \
-	x = indent + PANGO_PIXELS (x_pango - indent_pango); \
-} while (0)
-
-static int
-gtk_xtext_render_str (GtkXText * xtext, int y, textentry * ent,
-							 unsigned char *str, int len, int win_width, int indent,
-							 int line, int left_only, int *x_size_ret, int *emphasis)
-{
-	int i = 0, x = indent, j = 0;
-	int x_pango = indent * PANGO_SCALE;
-	int indent_pango = indent * PANGO_SCALE;
-	unsigned char *pstr = str;
-	int col_num, tmp;
-	int offset;
-	int mark = FALSE;
-	int ret = 1;
-	int k;
-	int srch_underline = FALSE;
-	int srch_mark = FALSE;
-	/* URL underline overlay — drawn after text to avoid splitting Pango runs */
-	int hilight_x1 = -1, hilight_x2 = -1;
-	/* Selection mark overlay — drawn after text to avoid splitting Pango runs */
-	int mark_x1 = -1, mark_x2 = -1;
-
-	xtext->in_hilight = FALSE;
-
-	offset = str - ent->str;
-
-	/* In GTK3, colors are tracked via col_fore/col_back indices, not GdkGC */
-
-	if (ent->mark_start != -1 &&
-		 ent->mark_start <= i + offset && ent->mark_end > i + offset)
-	{
-		mark_x1 = indent;
-		mark = TRUE;
-	}
-	if (xtext->hilight_ent == ent &&
-		 xtext->hilight_start <= i + offset && xtext->hilight_end > i + offset)
-	{
-		/* URL hilight is already active (continued from previous subline).
-		 * Record x1 at indent position; underline drawn as overlay after text. */
-		hilight_x1 = indent;
-		xtext->in_hilight = TRUE;
-	}
-
-	if (!xtext->skip_border_fills && !xtext->dont_render)
-	{
-		/* draw background to the left of the text */
-		if (str == ent->str && indent > MARGIN && xtext->buffer->time_stamp)
-		{
-			/* don't overwrite the timestamp */
-			if (indent > xtext->stamp_width)
-			{
-				xtext_draw_bg (xtext, xtext->stamp_width, y - xtext->font->ascent,
-									indent - xtext->stamp_width, xtext->fontsize);
-			}
-		} else
-		{
-			/* fill the indent area with background gc */
-			if (indent >= xtext->clip_x)
-			{
-				xtext_draw_bg (xtext, 0, y - xtext->font->ascent,
-									MIN (indent, xtext->clip_x2), xtext->fontsize);
-			}
-		}
-	}
-
-	if (xtext->jump_in_offset > 0 && offset < xtext->jump_in_offset)
-		xtext->dont_render2 = TRUE;
-
-	while (i < len)
-	{
-		/* Selection mark boundary checks — run at every character position
-		 * (before emoji or text processing) so marks work uniformly for all
-		 * character types. Checks use <= so multi-byte jumps can't skip them. */
-		if (!mark && ent->mark_start != -1 &&
-		    ent->mark_start <= (i + offset) && ent->mark_end > (i + offset))
-		{
-			backend_get_text_width_emph (xtext, pstr, j, *emphasis);
-			mark_x1 = indent + PANGO_PIXELS (x_pango +
-			              xtext->last_width_pango - indent_pango);
-			mark = TRUE;
-		}
-		if (mark && ent->mark_end <= (i + offset))
-		{
-			backend_get_text_width_emph (xtext, pstr, j, *emphasis);
-			mark_x2 = indent + PANGO_PIXELS (x_pango +
-			              xtext->last_width_pango - indent_pango);
-			mark = FALSE;
-		}
-
-		/* Inline emoji sprite rendering */
-		if (xtext->emoji_cache)
-		{
-			int emoji_bytes;
-			char emoji_file[64];
-			if (xtext_emoji_detect (str + i, len - i, &emoji_bytes, emoji_file, sizeof (emoji_file)))
-			{
-				RENDER_FLUSH;
-				pstr += j;
-				j = 0;
-				if (!xtext->dont_render && !xtext->dont_render2)
-				{
-					cairo_surface_t *sprite = xtext_emoji_cache_get (xtext->emoji_cache, emoji_file);
-					if (sprite)
-					{
-						cairo_set_source_surface (xtext->cr, sprite, x, y - xtext->font->ascent);
-						cairo_paint (xtext->cr);
-					}
-				}
-				if (xtext->hilight_ent == ent && xtext->hilight_start == (i + offset))
-				{
-					hilight_x1 = x;
-					xtext->in_hilight = TRUE;
-				}
-
-				x_pango += xtext->fontsize * PANGO_SCALE;
-				x = indent + PANGO_PIXELS (x_pango - indent_pango);
-				i += emoji_bytes;
-				pstr = str + i;
-
-				if (xtext->hilight_ent == ent && xtext->hilight_end == (i + offset))
-				{
-					hilight_x2 = x;
-					xtext->in_hilight = FALSE;
-				}
-				continue;
-			}
-		}
-
-		if (xtext->hilight_ent == ent && xtext->hilight_start == (i + offset))
-		{
-			/* Record pixel X where underline starts, without flushing.
-			 * This avoids splitting the Pango layout into different chunks
-			 * which causes text to shift due to independent rounding. */
-			backend_get_text_width_emph (xtext, pstr, j, *emphasis);
-			hilight_x1 = indent + PANGO_PIXELS (x_pango +
-			              xtext->last_width_pango - indent_pango);
-			xtext->in_hilight = TRUE;
-		}
-
-		if ((xtext->parsing_color && isdigit (str[i]) && xtext->nc < 2) ||
-			 (xtext->parsing_color && str[i] == ',' && isdigit (str[i+1]) && xtext->nc < 3 && !xtext->parsing_backcolor))
-		{
-			pstr++;
-			if (str[i] == ',')
-			{
-				xtext->parsing_backcolor = TRUE;
-				if (xtext->nc)
-				{
-					xtext->num[xtext->nc] = 0;
-					xtext->nc = 0;
-					col_num = atoi (xtext->num);
-					if (col_num == 99)	/* mIRC lameness */
-						col_num = XTEXT_FG;
-					else
-					if (col_num > XTEXT_MAX_COLOR)
-						col_num = col_num % XTEXT_MIRC_COLS;
-					xtext->col_fore = col_num;
-					xtext_set_fg (xtext, col_num);
-				}
-			} else
-			{
-				xtext->num[xtext->nc] = str[i];
-				if (xtext->nc < 7)
-					xtext->nc++;
-			}
-		} else
-		{
-			if (xtext->parsing_color)
-			{
-				xtext->parsing_color = FALSE;
-				if (xtext->nc)
-				{
-					xtext->num[xtext->nc] = 0;
-					xtext->nc = 0;
-					col_num = atoi (xtext->num);
-					if (xtext->parsing_backcolor)
-					{
-						if (col_num == 99)	/* mIRC lameness */
-							col_num = XTEXT_BG;
-						else
-						if (col_num > XTEXT_MAX_COLOR)
-							col_num = col_num % XTEXT_MIRC_COLS;
-						if (col_num == XTEXT_BG)
-							xtext->backcolor = FALSE;
-						else
-							xtext->backcolor = TRUE;
-						xtext_set_bg (xtext, col_num);
-						xtext->col_back = col_num;
-					} else
-					{
-						if (col_num == 99)	/* mIRC lameness */
-							col_num = XTEXT_FG;
-						else
-						if (col_num > XTEXT_MAX_COLOR)
-							col_num = col_num % XTEXT_MIRC_COLS;
-						xtext_set_fg (xtext, col_num);
-						xtext->col_fore = col_num;
-					}
-					xtext->parsing_backcolor = FALSE;
-				} else
-				{
-					/* got a \003<non-digit>... i.e. reset colors */
-					RENDER_FLUSH;
-					pstr += j;
-					j = 0;
-					gtk_xtext_reset (xtext, FALSE, FALSE);
-				}
-			}
-
-			if (!left_only && !mark &&
-				 (k = gtk_xtext_search_offset (xtext->buffer, ent, offset + i)))
-			{
-				RENDER_FLUSH;
-				pstr += j;
-				j = 0;
-				if (!(xtext->buffer->search_flags & highlight))
-				{
-					if (k & GTK_MATCH_CUR)
-					{
-						xtext_set_bg (xtext, XTEXT_MARK_BG);
-						xtext_set_fg (xtext, XTEXT_MARK_FG);
-						xtext->backcolor = TRUE;
-						srch_mark = TRUE;
-					} else
-					{
-						xtext_set_bg (xtext, xtext->col_back);
-						xtext_set_fg (xtext, xtext->col_fore);
-						xtext->backcolor = (xtext->col_back != XTEXT_BG)? TRUE: FALSE;
-						srch_mark = FALSE;
-					}
-				}
-				else
-				{
-					xtext->underline = (k & GTK_MATCH_CUR)? TRUE: FALSE;
-					if (k & (GTK_MATCH_START | GTK_MATCH_MID))
-					{
-						xtext_set_bg (xtext, XTEXT_MARK_BG);
-						xtext_set_fg (xtext, XTEXT_MARK_FG);
-						xtext->backcolor = TRUE;
-						srch_mark = TRUE;
-					}
-					if (k & GTK_MATCH_END)
-					{
-						xtext_set_bg (xtext, xtext->col_back);
-						xtext_set_fg (xtext, xtext->col_fore);
-						xtext->backcolor = (xtext->col_back != XTEXT_BG)? TRUE: FALSE;
-						srch_mark = FALSE;
-						xtext->underline = FALSE;
-					}
-					srch_underline = xtext->underline;
-				}
-			}
-
-			switch (str[i])
-			{
-			case '\n':
-				/* IRCv3 multiline: newline in entry means hard line break.
-				 * Don't render the newline - it's a line separator, not content.
-				 * Flush what we have and skip past the newline. */
-				RENDER_FLUSH;
-				pstr += j + 1;
-				j = 0;
-				break;
-			/*case ATTR_BEEP:*/
-			case ATTR_REVERSE:
-				RENDER_FLUSH;
-				pstr += j + 1;
-				j = 0;
-				tmp = xtext->col_fore;
-				xtext->col_fore = xtext->col_back;
-				xtext->col_back = tmp;
-				xtext_set_fg (xtext, xtext->col_fore);
-				xtext_set_bg (xtext, xtext->col_back);
-				if (xtext->col_back != XTEXT_BG)
-					xtext->backcolor = TRUE;
-				else
-					xtext->backcolor = FALSE;
-				break;
-			case ATTR_BOLD:
-				RENDER_FLUSH;
-				*emphasis ^= EMPH_BOLD;
-				pstr += j + 1;
-				j = 0;
-				break;
-			case ATTR_UNDERLINE:
-				RENDER_FLUSH;
-				xtext->underline = !xtext->underline;
-				pstr += j + 1;
-				j = 0;
-				break;
-			case ATTR_STRIKETHROUGH:
-				RENDER_FLUSH;
-				xtext->strikethrough = !xtext->strikethrough;
-				pstr += j + 1;
-				j = 0;
-				break;
-			case ATTR_ITALICS:
-				RENDER_FLUSH;
-				*emphasis ^= EMPH_ITAL;
-				pstr += j + 1;
-				j = 0;
-				break;
-			case ATTR_HIDDEN:
-				RENDER_FLUSH;
-				xtext->hidden = (!xtext->hidden) & (!xtext->ignore_hidden);
-				pstr += j + 1;
-				j = 0;
-				break;
-			case ATTR_RESET:
-				RENDER_FLUSH;
-				*emphasis = 0;
-				pstr += j + 1;
-				j = 0;
-				gtk_xtext_reset (xtext, FALSE, !xtext->in_hilight);
-				break;
-			case ATTR_COLOR:
-				RENDER_FLUSH;
-				xtext->parsing_color = TRUE;
-				pstr += j + 1;
-				j = 0;
-				break;
-			default:
-				tmp = charlen (str + i);
-				/* invalid utf8 safe guard */
-				if (tmp + i > len)
-					tmp = len - i;
-				j += tmp;	/* move to the next utf8 char */
-			}
-		}
-		i += charlen (str + i);	/* move to the next utf8 char */
-		/* invalid utf8 safe guard */
-		if (i > len)
-			i = len;
-
-		/* Separate the left part, the space and the right part
-		   into separate runs, and reset bidi state inbetween.
-		   Perform this only on the first line of the message.
-                */
-		if (offset == 0)
-		{
-			/* we've reached the end of the left part? */
-			if ((pstr-str)+j == ent->left_len)
-			{
-				RENDER_FLUSH;
-				pstr += j;
-				j = 0;
-			}
-			else if ((pstr-str)+j == ent->left_len+1)
-			{
-				RENDER_FLUSH;
-				pstr += j;
-				j = 0;
-			}
-		}
-
-		/* have we been told to stop rendering at this point? */
-		if (xtext->jump_out_offset > 0 && xtext->jump_out_offset <= (i + offset))
-		{
-			gtk_xtext_render_flush (xtext, x, y, pstr, j, emphasis);
-			ret = 0;	/* skip the rest of the lines, we're done. */
-			j = 0;
-			break;
-		}
-
-		if (xtext->jump_in_offset > 0 && xtext->jump_in_offset == (i + offset))
-		{
-			RENDER_FLUSH;
-			pstr += j;
-			j = 0;
-			xtext->dont_render2 = FALSE;
-		}
-
-		if (xtext->hilight_ent == ent && xtext->hilight_end == (i + offset))
-		{
-			/* Record pixel X where underline ends, without flushing. */
-			backend_get_text_width_emph (xtext, pstr, j, *emphasis);
-			hilight_x2 = indent + PANGO_PIXELS (x_pango +
-			              xtext->last_width_pango - indent_pango);
-			xtext->in_hilight = FALSE;
-			if (xtext->render_hilights_only)
-			{
-				/* stop drawing this ent */
-				ret = 0;
-				break;
-			}
-		}
-
-	}
-
-	if (j)
-	{
-		RENDER_FLUSH;
-	}
-
-	if (srch_mark)
-	{
-		xtext_set_bg (xtext, xtext->col_back);
-		xtext_set_fg (xtext, xtext->col_fore);
-		xtext->backcolor = (xtext->col_back != XTEXT_BG);
-	}
-
-	/* Draw selection mark as a translucent overlay after all text is rendered.
-	 * This avoids splitting Pango runs at mark boundaries, which causes
-	 * glyph jitter from independent per-chunk font hinting. */
-	if (mark_x1 >= 0 && !xtext->dont_render && !xtext->render_hilights_only)
-	{
-		int mx2 = mark_x2 >= 0 ? mark_x2 : x;
-		GdkRGBA mark_color = xtext->palette[XTEXT_MARK_BG];
-		mark_color.alpha = 0.5;
-		gdk_cairo_set_source_rgba (xtext->cr, &mark_color);
-		cairo_rectangle (xtext->cr, mark_x1, y - xtext->font->ascent,
-		                 mx2 - mark_x1, xtext->fontsize);
-		cairo_fill (xtext->cr);
-	}
-
-	/* Draw URL underline as an overlay after all text is rendered.
-	 * This avoids splitting text into different Pango chunks at the hilight
-	 * boundaries, which caused text to shift due to independent rounding. */
-	if (hilight_x1 >= 0 && !xtext->dont_render && !xtext->un_hilight)
-	{
-		int under_x2 = hilight_x2 >= 0 ? hilight_x2 : x;
-		int under_y = y + 1;
-		xtext_set_source_color (xtext, xtext->col_fore);
-		cairo_move_to (xtext->cr, hilight_x1, under_y + 0.5);
-		cairo_line_to (xtext->cr, under_x2 - 1, under_y + 0.5);
-		cairo_stroke (xtext->cr);
-	}
-
-	/* draw background to the right of the text */
-	if (!left_only && !xtext->dont_render)
-	{
-		/* draw separator now so it doesn't appear to flicker */
-		gtk_xtext_draw_sep (xtext, y - xtext->font->ascent);
-		if (!xtext->skip_border_fills && xtext->clip_x2 >= x)
-		{
-			int xx = MAX (x, xtext->clip_x);
-
-			xtext_draw_bg (xtext,
-								xx,	/* x */
-								y - xtext->font->ascent, /* y */
-				MIN (xtext->clip_x2 - xx, (win_width + MARGIN) - xx), /* width */
-								xtext->fontsize);		/* height */
-		}
-	}
-
-	xtext->dont_render2 = FALSE;
-
-	/* return how much we drew in the x direction */
-	if (x_size_ret)
-		*x_size_ret = x - indent;
-
-	return ret;
-}
-
 /* Walk stripped text to find the next line wrap point.
  * Uses pre-computed format spans for emphasis (affects character width)
  * and U+FFFC placeholders for emoji (fontsize width).
@@ -4546,165 +3827,10 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 		}
 
 		ret = ent->str_len - raw_offset;
-		goto done;
 	}
-
-	/* Fallback: no parsed data — use raw text with mIRC code parsing */
-	{
-		unsigned char *last_space = str;
-		unsigned char *orig_str = str;
-		int str_width = indent;
-		int rcol = 0, bgcol = 0;
-		int hidden = FALSE;
-		int mbl;
-		int char_width;
-		int limit_offset = 0;
-		int emphasis = 0;
-		GSList *lp;
-
-		if (!xtext->emoji_cache &&
-		    win_width >= ent->str_width + ent->indent && !memchr (ent->str, '\n', ent->str_len))
-			return ent->str_len;
-
-		if (win_width < 1)
-		{
-			ret = ent->str_len - (str - ent->str);
-			goto done;
-		}
-
-		for (lp = ent->slp; lp; lp = g_slist_next (lp))
-		{
-			offlen_t *meta = lp->data;
-			unsigned char *start, *end;
-			start = ent->str + meta->off;
-			end = start + meta->len;
-			if (str >= start && str < end)
-			{
-				emphasis = meta->emph;
-				break;
-			}
-		}
-
-		while (1)
-		{
-			if (rcol > 0 && (isdigit (*str) || (*str == ',' && isdigit (str[1]) && !bgcol)))
-			{
-				if (str[1] != ',') rcol--;
-				if (*str == ',')
-				{
-					rcol = 2;
-					bgcol = 1;
-				}
-				limit_offset++;
-				str++;
-			} else
-			{
-				rcol = bgcol = 0;
-				switch (*str)
-				{
-				case ATTR_COLOR:
-					rcol = 2;
-				case ATTR_BEEP:
-				case ATTR_RESET:
-				case ATTR_REVERSE:
-				case ATTR_BOLD:
-				case ATTR_UNDERLINE:
-				case ATTR_STRIKETHROUGH:
-				case ATTR_ITALICS:
-					if (*str == ATTR_RESET)
-						emphasis = 0;
-					if (*str == ATTR_ITALICS)
-						emphasis ^= EMPH_ITAL;
-					if (*str == ATTR_BOLD)
-						emphasis ^= EMPH_BOLD;
-					limit_offset++;
-					str++;
-					break;
-				case ATTR_HIDDEN:
-					if (xtext->ignore_hidden)
-						goto def;
-					hidden = !hidden;
-					limit_offset++;
-					str++;
-					break;
-				case '\n':
-					str++;
-					ret = str - orig_str;
-					goto done;
-				default:
-				def:
-					if (xtext->emoji_cache)
-					{
-						int emoji_bytes;
-						if (xtext_emoji_detect (str, orig_str + ent->str_len - str, &emoji_bytes, NULL, 0))
-						{
-							if (!hidden) str_width += xtext->fontsize;
-							if (str_width > win_width)
-							{
-								if (xtext->wordwrap)
-								{
-									if (str - last_space > WORDWRAP_LIMIT + limit_offset)
-										ret = str - orig_str;
-									else
-									{
-										if (*last_space == ' ')
-											last_space++;
-										ret = last_space - orig_str;
-										if (ret == 0)
-											ret = str - orig_str;
-									}
-									goto done;
-								}
-								ret = str - orig_str;
-								goto done;
-							}
-							str += emoji_bytes;
-							if (is_del (*str))
-							{
-								last_space = str;
-								limit_offset = 0;
-							}
-							break;
-						}
-					}
-					mbl = charlen (str);
-					char_width = backend_get_text_width_emph (xtext, str, mbl, emphasis);
-					if (!hidden) str_width += char_width;
-					if (str_width > win_width)
-					{
-						if (xtext->wordwrap)
-						{
-							if (str - last_space > WORDWRAP_LIMIT + limit_offset)
-								ret = str - orig_str;
-							else
-							{
-								if (*last_space == ' ')
-									last_space++;
-								ret = last_space - orig_str;
-								if (ret == 0)
-									ret = str - orig_str;
-							}
-							goto done;
-						}
-						ret = str - orig_str;
-						goto done;
-					}
-					if (is_del (*str))
-					{
-						last_space = str;
-						limit_offset = 0;
-					}
-					str += mbl;
-				}
-			}
-
-			if (str >= ent->str + ent->str_len)
-			{
-				ret = str - orig_str;
-				goto done;
-			}
-		}
-	}
+	/* no parsed data — shouldn't happen, all entries are parsed */
+	else
+		ret = ent->str_len;
 
 done:
 
@@ -4737,75 +3863,111 @@ static void
 gtk_xtext_render_stamp (GtkXText * xtext, textentry * ent,
 								char *text, int len, int line, int win_width)
 {
-	textentry tmp_ent;
-	int jo, ji, hs;
-	int xsize, y, emphasis;
-	/* Save color state that gtk_xtext_render_str may modify */
-	int saved_col_fore, saved_col_back;
-	gboolean saved_backcolor;
+	unsigned char *stripped;
+	xtext_fmt_span *spans;
+	guint16 *r2s;
+	int stripped_len, span_count;
+	int y, x, text_width;
+	PangoAttrList *attrs;
+	PangoRectangle logical;
+	PangoLayoutLine *pango_line;
+	gboolean is_marked;
 
-	/* trashing ent here, so make a backup first */
-	memcpy (&tmp_ent, ent, sizeof (tmp_ent));
-	jo = xtext->jump_out_offset;	/* back these up */
-	ji = xtext->jump_in_offset;
-	hs = xtext->hilight_start;
-	saved_col_fore = xtext->col_fore;
-	saved_col_back = xtext->col_back;
-	saved_backcolor = xtext->backcolor;
-	xtext->jump_out_offset = 0;
-	xtext->jump_in_offset = 0;
-	xtext->hilight_start = 0xffff;	/* temp disable */
-	emphasis = 0;
+	if (xtext->cr == NULL)
+		return;
 
-	if (xtext->mark_stamp)
+	/* Parse format codes in timestamp text (supports mIRC colors etc.) */
+	xtext_parse_formats ((unsigned char *) text, len,
+	                     &stripped, &stripped_len,
+	                     &spans, &span_count,
+	                     NULL, NULL,  /* no emoji in timestamps */
+	                     &r2s, FALSE);
+
+	/* Build PangoAttrList from format spans using a temporary entry */
 	{
-		/* if this line is marked, mark this stamp too */
-		if (ent->mark_start == 0)
-		{
-			ent->mark_start = 0;
-			ent->mark_end = len;
-		}
-		else
-		{
-			ent->mark_start = -1;
-			ent->mark_end = -1;
-		}
-		ent->str = text;
+		textentry tmp;
+		memset (&tmp, 0, sizeof (tmp));
+		tmp.stripped_str = stripped;
+		tmp.stripped_len = stripped_len;
+		tmp.fmt_spans = spans;
+		tmp.fmt_span_count = span_count;
+		tmp.emoji_count = 0;
+
+		attrs = xtext_build_attrlist (&tmp, 0, stripped_len,
+		                              xtext->palette,
+		                              xtext->fontsize,
+		                              xtext->font->ascent);
 	}
-	else
-	{
-		/* When not marking timestamps, explicitly disable mark for timestamp rendering
-		 * to prevent the entry's mark values (which are offsets into ent->str) from
-		 * being misinterpreted as offsets into the timestamp string */
-		ent->mark_start = -1;
-		ent->mark_end = -1;
-	}
+
+	/* Set up layout */
+	pango_layout_set_text (xtext->layout, (char *) stripped, stripped_len);
+	pango_layout_set_attributes (xtext->layout, attrs);
+	pango_layout_get_extents (xtext->layout, NULL, &logical);
+	text_width = PANGO_PIXELS (logical.width);
 
 	y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
-	gtk_xtext_render_str (xtext, y, ent, text, len,
-								 win_width, 2, line, TRUE, &xsize, &emphasis);
+	x = MARGIN;
 
-	/* restore everything back to how it was */
-	memcpy (ent, &tmp_ent, sizeof (tmp_ent));
-	xtext->jump_out_offset = jo;
-	xtext->jump_in_offset = ji;
-	xtext->hilight_start = hs;
-	xtext->col_fore = saved_col_fore;
-	xtext->col_back = saved_col_back;
-	xtext->backcolor = saved_backcolor;
+	/* Draw background */
+	xtext_set_source_color (xtext, XTEXT_BG);
+	cairo_rectangle (xtext->cr, x, y - xtext->font->ascent,
+	                 text_width, xtext->fontsize);
+	cairo_fill (xtext->cr);
 
-	/* with a non-fixed-width font, sometimes we don't draw enough
-		background i.e. when this stamp is shorter than xtext->stamp_width */
-	xsize += MARGIN;
-	if (xsize < xtext->stamp_width)
+	if (xtext->pixmap)
+		xtext_draw_bg (xtext, x, y - xtext->font->ascent,
+		               text_width, xtext->fontsize);
+
+	/* Draw text */
+	xtext_set_source_color (xtext, xtext->col_fore);
+	pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
+	xtext_draw_layout_line (xtext, x, y, pango_line);
+
+	/* Selection highlight on timestamp */
+	is_marked = xtext->mark_stamp && ent->mark_start == 0;
+	if (is_marked)
 	{
-		y -= xtext->font->ascent;
-		xtext_draw_bg (xtext,
-							xsize,	/* x */
-							y,			/* y */
-							xtext->stamp_width - xsize,	/* width */
-							xtext->fontsize					/* height */);
+		GdkRGBA mark_bg = xtext->palette[XTEXT_MARK_BG];
+		GdkRGBA mark_fg = xtext->palette[XTEXT_MARK_FG];
+		PangoAttrList *sel_attrs;
+		PangoAttribute *fg_override;
+
+		/* Solid selection background */
+		gdk_cairo_set_source_rgba (xtext->cr, &mark_bg);
+		cairo_rectangle (xtext->cr, x, y - xtext->font->ascent,
+		                 text_width, xtext->fontsize);
+		cairo_fill (xtext->cr);
+
+		/* Re-render text with selection foreground */
+		sel_attrs = pango_attr_list_copy (attrs);
+		fg_override = pango_attr_foreground_new (
+			(guint16)(mark_fg.red * 65535),
+			(guint16)(mark_fg.green * 65535),
+			(guint16)(mark_fg.blue * 65535));
+		fg_override->start_index = 0;
+		fg_override->end_index = (guint) stripped_len;
+		pango_attr_list_change (sel_attrs, fg_override);
+
+		pango_layout_set_attributes (xtext->layout, sel_attrs);
+		gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+		xtext_draw_layout_line (xtext, x, y, pango_line);
+		pango_attr_list_unref (sel_attrs);
 	}
+
+	pango_attr_list_unref (attrs);
+	pango_layout_set_attributes (xtext->layout, NULL);
+
+	/* Fill remaining stamp area with background */
+	text_width += MARGIN;
+	if (text_width < xtext->stamp_width)
+	{
+		xtext_draw_bg (xtext, text_width, y - xtext->font->ascent,
+		               xtext->stamp_width - text_width, xtext->fontsize);
+	}
+
+	g_free (stripped);
+	g_free (spans);
+	g_free (r2s);
 }
 
 /* render a single line, which may wrap to more lines */
