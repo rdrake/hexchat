@@ -3772,9 +3772,8 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 					                            ent->str_len, si) - raw_offset;
 					goto done;
 				}
+				last_space_si = si;  /* treat emoji as wrap opportunity */
 				si += 3;
-				if (si < slen && is_del (sstr[si]))
-					last_space_si = si;
 				continue;
 			}
 
