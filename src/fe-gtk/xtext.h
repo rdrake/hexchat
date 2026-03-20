@@ -218,6 +218,7 @@ struct _GtkXText
 	GdkRGBA thin_color;
 
 	int pixel_offset;					/* amount of pixels the top line is chopped by */
+	int last_width_pango;				/* last width from backend_get_text_width_emph in Pango units */
 
 	int last_win_x;
 	int last_win_y;

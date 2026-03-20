@@ -1815,5 +1815,14 @@ hex_emoji_chooser_set_emoji_cache (HexEmojiChooser   *chooser,
 		if (chooser->chooser_cache)
 			xtext_emoji_cache_free (chooser->chooser_cache);
 		chooser->chooser_cache = xtext_emoji_cache_new (cache->sprite_dir, 32);
+
+		/* Re-populate recent section now that sprites are available —
+		 * it was initially populated before the cache was set. */
+		{
+			GtkWidget *child;
+			while ((child = gtk_widget_get_first_child (chooser->recent.box)))
+				gtk_flow_box_remove (GTK_FLOW_BOX (chooser->recent.box), child);
+			populate_recent_section (chooser);
+		}
 	}
 }
