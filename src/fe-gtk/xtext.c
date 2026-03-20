@@ -191,7 +191,7 @@ struct offlen_s {
 };
 typedef struct offlen_s offlen_t;
 
-/* Forward declaration */
+/* Forward declarations */
 static void
 xtext_parse_formats (const unsigned char *raw, int raw_len,
                      unsigned char **stripped_out, int *stripped_len_out,
@@ -199,6 +199,10 @@ xtext_parse_formats (const unsigned char *raw, int raw_len,
                      xtext_emoji_info **emoji_out, int *emoji_count_out,
                      guint16 **raw_to_stripped_out,
                      gboolean detect_emoji);
+
+static PangoAttrList *
+xtext_build_attrlist (textentry *ent, int sub_start, int sub_len,
+                      const GdkRGBA *palette, int fontsize, int ascent);
 
 static unsigned char *
 gtk_xtext_strip_color (unsigned char *text, int len, unsigned char *outbuf,
@@ -1010,194 +1014,256 @@ gtk_xtext_selection_clear (xtext_buffer *buf)
 }
 
 static int
-find_x (GtkXText *xtext, textentry *ent, int x, int subline, int indent)
+find_x (GtkXText *xtext, textentry *ent, int x, int subline, int indent, gboolean use_trailing)
 {
-	int xx = indent;
-	int suboff;
-	GSList *list;
-	GSList *hid = NULL;
-	offlen_t *meta;
-	int off, len, mbl;
-
-	/* Skip to the first chunk of stuff for the subline */
-	if (subline > 0)
+	/* New path: use same PangoLayout as renderer for pixel-identical hit testing */
+	if (ent->stripped_str && ent->raw_to_stripped_map)
 	{
-		suboff = GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, subline - 1));
-		for (list = ent->slp; list; list = g_slist_next (list))
+		int raw_offset, raw_len;
+		int sub_start, sub_end, sub_len;
+		int index, trailing;
+		int stripped_hit;
+		PangoAttrList *attrs;
+
+		/* Get raw subline boundaries */
+		if (subline > 0)
+			raw_offset = GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, subline - 1));
+		else
+			raw_offset = 0;
+
+		if (ent->sublines)
 		{
-			meta = list->data;
-			if (meta->off + meta->len > suboff)
+			int cumulative = GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, subline));
+			raw_len = cumulative - raw_offset;
+		}
+		else
+			raw_len = ent->str_len - raw_offset;
+
+		/* Convert to stripped offsets */
+		sub_start = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+		                                   ent->str_len, raw_offset);
+		sub_end = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+		                                 ent->str_len, raw_offset + raw_len);
+		sub_len = sub_end - sub_start;
+
+		if (sub_len <= 0)
+			return raw_offset;
+
+		/* Build same layout as renderer */
+		attrs = xtext_build_attrlist (ent, sub_start, sub_len,
+		                              xtext->palette,
+		                              xtext->fontsize,
+		                              xtext->font->ascent);
+		pango_layout_set_text (xtext->layout,
+		                        (char *)(ent->stripped_str + sub_start), sub_len);
+		pango_layout_set_attributes (xtext->layout, attrs);
+
+		/* Hit test — x is relative to widget, subtract indent to get layout-relative.
+		 * Use pango_layout_line_x_to_index for direct single-line hit testing.
+		 * Account for layout logical x offset (e.g. left-side bearing). */
+		{
+			PangoLayoutLine *pline = pango_layout_get_lines_readonly (xtext->layout)->data;
+			PangoRectangle line_logical;
+			pango_layout_line_get_extents (pline, NULL, &line_logical);
+			int layout_x = (x - indent) * PANGO_SCALE - line_logical.x;
+			pango_layout_line_x_to_index (pline, layout_x,
+			                               &index, &trailing);
+		}
+
+		pango_attr_list_unref (attrs);
+		pango_layout_set_attributes (xtext->layout, NULL);
+
+		/* Advance past character when click is on its right half.
+		 * Used for selection (include the character) but not for
+		 * URL hit testing (need to be "on" the character). */
+		if (use_trailing && trailing > 0 && index >= 0 && index < sub_len)
+		{
+			int mbl = charlen (ent->stripped_str + sub_start + index);
+			index += mbl;
+		}
+
+		/* Clamp index to valid range */
+		if (index < 0) index = 0;
+		if (index > sub_len) index = sub_len;
+
+		/* Convert stripped offset back to raw */
+		stripped_hit = sub_start + index;
+		return xtext_stripped_to_raw (ent->raw_to_stripped_map,
+		                             ent->str_len, stripped_hit);
+	}
+
+	/* Fallback: old SLP-based hit testing */
+	{
+		int xx = indent;
+		int suboff;
+		GSList *list;
+		GSList *hid = NULL;
+		offlen_t *meta;
+		int off, len, mbl;
+
+		if (subline > 0)
+		{
+			suboff = GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, subline - 1));
+			for (list = ent->slp; list; list = g_slist_next (list))
+			{
+				meta = list->data;
+				if (meta->off + meta->len > suboff)
+					break;
+			}
+		}
+		else
+		{
+			suboff = 0;
+			list = ent->slp;
+		}
+		if (list == NULL)
+			return 0;
+		meta = list->data;
+		off = meta->off;
+		len = meta->len;
+		if (meta->emph & EMPH_HIDDEN)
+			hid = list;
+		while (len > 0)
+		{
+			if (off >= suboff)
 				break;
-		}
-	}
-	else
-	{
-		suboff = 0;
-		list = ent->slp;
-	} 
-	/* Step to the first character of the subline */
-	if (list == NULL)
-		return 0;
-	meta = list->data;
-	off = meta->off;
-	len = meta->len;
-	if (meta->emph & EMPH_HIDDEN)
-		hid = list;
-	while (len > 0)
-	{
-		if (off >= suboff)
-			break;
-		/* Skip full emoji sequences, not just one codepoint */
-		if (xtext->emoji_cache)
-		{
-			int emoji_bytes;
-			if (xtext_emoji_detect (ent->str + off, ent->str_len - off,
-			                         &emoji_bytes, NULL, 0))
+			if (xtext->emoji_cache)
 			{
-				len -= emoji_bytes;
-				off += emoji_bytes;
-				continue;
+				int emoji_bytes;
+				if (xtext_emoji_detect (ent->str + off, ent->str_len - off,
+				                         &emoji_bytes, NULL, 0))
+				{
+					len -= emoji_bytes;
+					off += emoji_bytes;
+					continue;
+				}
 			}
+			mbl = charlen (ent->str + off);
+			len -= mbl;
+			off += mbl;
 		}
-		mbl = charlen (ent->str + off);
-		len -= mbl;
-		off += mbl;
-	}
-	if (len < 0)
-		return ent->str_len;		/* Bad char -- return max offset. */
+		if (len < 0)
+			return ent->str_len;
 
-	/* Step through text segments to find the character at the x position.
-	 * Use Pango's pango_layout_xy_to_index for accurate hit-testing within
-	 * each text run, rather than summing per-character widths which
-	 * accumulates rounding errors (~0.65 px/char). */
-	len = meta->len - (off - meta->off);
-	while (xx < x)
-	{
-		/* Handle emoji sequences as single units with fontsize width */
-		if (xtext->emoji_cache)
+		len = meta->len - (off - meta->off);
+		while (xx < x)
 		{
-			int emoji_bytes;
-			if (xtext_emoji_detect (ent->str + off, ent->str_len - off,
-			                         &emoji_bytes, NULL, 0))
+			if (xtext->emoji_cache)
 			{
+				int emoji_bytes;
+				if (xtext_emoji_detect (ent->str + off, ent->str_len - off,
+				                         &emoji_bytes, NULL, 0))
+				{
 					xx += xtext->fontsize;
-				if (xx >= x)
-					return off;
-				len -= emoji_bytes;
-				off += emoji_bytes;
-				if (len <= 0)
+					if (xx >= x)
+						return off;
+					len -= emoji_bytes;
+					off += emoji_bytes;
+					if (len <= 0)
+					{
+						if (meta->emph & EMPH_HIDDEN)
+							hid = list;
+						list = g_slist_next (list);
+						if (list == NULL)
+							return ent->str_len;
+						meta = list->data;
+						off = meta->off;
+						len = meta->len;
+					}
+					continue;
+				}
+			}
+
+			{
+				int text_start = off;
+				int scan = off;
+				int scan_len = len;
+				int text_bytes, emphasis, seg_width;
+
+				while (scan_len > 0)
 				{
-					if (meta->emph & EMPH_HIDDEN)
+					int clen;
+					if (xtext->emoji_cache)
+					{
+						int eb;
+						if (xtext_emoji_detect (ent->str + scan, ent->str_len - scan,
+						                         &eb, NULL, 0))
+							break;
+					}
+					clen = charlen (ent->str + scan);
+					scan += clen;
+					scan_len -= clen;
+				}
+				text_bytes = scan - text_start;
+
+				if (text_bytes <= 0)
+					continue;
+
+				emphasis = meta->emph & (EMPH_ITAL | EMPH_BOLD);
+
+				if (meta->emph & EMPH_HIDDEN)
+				{
+					off += text_bytes;
+					len -= text_bytes;
+					if (len <= 0)
+					{
 						hid = list;
-					list = g_slist_next (list);
-					if (list == NULL)
-						return ent->str_len;
-					meta = list->data;
-					off = meta->off;
-					len = meta->len;
+						list = g_slist_next (list);
+						if (list == NULL)
+							return ent->str_len;
+						meta = list->data;
+						off = meta->off;
+						len = meta->len;
+					}
+					continue;
 				}
-				continue;
+
+				seg_width = backend_get_text_width_emph (xtext, ent->str + text_start,
+				                                          text_bytes, emphasis);
+				if (xx + seg_width < x)
+				{
+					xx += seg_width;
+					off += text_bytes;
+					len -= text_bytes;
+					if (len <= 0)
+					{
+						if (meta->emph & EMPH_HIDDEN)
+							hid = list;
+						list = g_slist_next (list);
+						if (list == NULL)
+							return ent->str_len;
+						meta = list->data;
+						off = meta->off;
+						len = meta->len;
+					}
+					continue;
+				}
+
+				pango_layout_set_attributes (xtext->layout, attr_lists[emphasis]);
+				pango_layout_set_text (xtext->layout, (char *)(ent->str + text_start),
+				                        text_bytes);
+				{
+					int index, trailing;
+					pango_layout_xy_to_index (xtext->layout, (x - xx) * PANGO_SCALE,
+					                           0, &index, &trailing);
+					off = text_start + index;
+				}
+				break;
 			}
 		}
 
+		if (hid && list && hid->next == list)
 		{
-			/* Find contiguous non-emoji text within current chunk */
-			int text_start = off;
-			int scan = off;
-			int scan_len = len;
-			int text_bytes, emphasis, seg_width;
-
-			while (scan_len > 0)
+			offlen_t *vis = list->data;
+			if (off == vis->off)
 			{
-				int clen;
-				if (xtext->emoji_cache)
-				{
-					int eb;
-					if (xtext_emoji_detect (ent->str + scan, ent->str_len - scan,
-					                         &eb, NULL, 0))
-						break;
-				}
-				clen = charlen (ent->str + scan);
-				scan += clen;
-				scan_len -= clen;
+				meta = hid->data;
+				off = meta->off;
 			}
-			text_bytes = scan - text_start;
-
-			if (text_bytes <= 0)
-				continue;
-
-			emphasis = meta->emph & (EMPH_ITAL | EMPH_BOLD);
-
-			if (meta->emph & EMPH_HIDDEN)
-			{
-				/* Hidden text has zero width */
-				off += text_bytes;
-				len -= text_bytes;
-				if (len <= 0)
-				{
-					hid = list;
-					list = g_slist_next (list);
-					if (list == NULL)
-						return ent->str_len;
-					meta = list->data;
-					off = meta->off;
-					len = meta->len;
-				}
-				continue;
-			}
-
-			seg_width = backend_get_text_width_emph (xtext, ent->str + text_start,
-			                                          text_bytes, emphasis);
-			if (xx + seg_width < x)
-			{
-				/* Mouse is past this segment, skip entirely */
-				xx += seg_width;
-				off += text_bytes;
-				len -= text_bytes;
-				if (len <= 0)
-				{
-					if (meta->emph & EMPH_HIDDEN)
-						hid = list;
-					list = g_slist_next (list);
-					if (list == NULL)
-						return ent->str_len;
-					meta = list->data;
-					off = meta->off;
-					len = meta->len;
-				}
-				continue;
-			}
-
-			/* Mouse is within this text segment — Pango hit-test */
-			pango_layout_set_attributes (xtext->layout, attr_lists[emphasis]);
-			pango_layout_set_text (xtext->layout, (char *)(ent->str + text_start),
-			                        text_bytes);
-			{
-				int index, trailing;
-				pango_layout_xy_to_index (xtext->layout, (x - xx) * PANGO_SCALE,
-				                           0, &index, &trailing);
-				off = text_start + index;
-			}
-			break;
 		}
-	}
 
-	/* If previous chunk exists and is marked hidden, regard it as unhidden —
-	 * but only when the cursor is right at the boundary (off equals the start
-	 * of the visible chunk). If Pango hit-testing placed the cursor deeper
-	 * into visible text, don't snap back to the hidden chunk. */
-	if (hid && list && hid->next == list)
-	{
-		offlen_t *vis = list->data;
-		if (off == vis->off)
-		{
-			meta = hid->data;
-			off = meta->off;
-		}
+		return off;
 	}
-
-	/* Return offset of character at x within subline */
-	return off;
 }
 
 static int
@@ -1231,7 +1297,7 @@ gtk_xtext_find_x (GtkXText * xtext, int x, textentry * ent, int subline,
 
 	*out_of_bounds = 0;
 
-	return find_x (xtext, ent, x, subline, indent);
+	return find_x (xtext, ent, x, subline, indent, TRUE);
 }
 
 static textentry *
