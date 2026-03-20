@@ -4327,177 +4327,307 @@ gtk_xtext_render_str (GtkXText * xtext, int y, textentry * ent,
 	return ret;
 }
 
-/* walk through str until this line doesn't fit anymore */
+/* Walk stripped text to find the next line wrap point.
+ * Uses pre-computed format spans for emphasis (affects character width)
+ * and U+FFFC placeholders for emoji (fontsize width).
+ * Returns raw byte count for compatibility with sublines storage. */
 
 static int
 find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 					 int win_width, int indent)
 {
-	unsigned char *last_space = str;
-	unsigned char *orig_str = str;
-	int str_width = indent;
-	int rcol = 0, bgcol = 0;
-	int hidden = FALSE;
-	int mbl;
-	int char_width;
+	int raw_offset = str - ent->str;
 	int ret;
-	int limit_offset = 0;
-	int emphasis = 0;
-	GSList *lp;
 
-	/* single liners - but only if no embedded newlines (multiline messages)
-	 * Skip this fast-path when emoji sprites are active since str_width from
-	 * Pango won't account for emoji sprite widths. */
-	if (!xtext->emoji_cache &&
-		 win_width >= ent->str_width + ent->indent && !memchr (ent->str, '\n', ent->str_len))
-		return ent->str_len;
-
-	/* it does happen! */
-	if (win_width < 1)
+	/* If entry has parsed format data, use the fast stripped-text path */
+	if (ent->stripped_str && ent->raw_to_stripped_map)
 	{
-		ret = ent->str_len - (str - ent->str);
+		int stripped_start = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+		                                           ent->str_len, raw_offset);
+		const unsigned char *sstr = ent->stripped_str;
+		int slen = ent->stripped_len;
+		int si = stripped_start;
+		int last_space_si = stripped_start;
+		int line_width = indent;
+		int mbl, char_width;
+		int emphasis = 0;
+		int span_idx = 0;
+
+		/* Single-liner fast path */
+		if (win_width >= ent->str_width + ent->indent &&
+		    !memchr (sstr + stripped_start, '\n', slen - stripped_start))
+			return ent->str_len - raw_offset;
+
+		if (win_width < 1)
+		{
+			ret = ent->str_len - raw_offset;
+			goto done;
+		}
+
+		/* Find the current emphasis from format spans */
+		for (int s = 0; s < ent->fmt_span_count; s++)
+		{
+			if (s + 1 < ent->fmt_span_count &&
+			    ent->fmt_spans[s + 1].stripped_off <= (guint16) stripped_start)
+				continue;
+			if (ent->fmt_spans[s].stripped_off <= (guint16) stripped_start)
+			{
+				emphasis = 0;
+				if (ent->fmt_spans[s].emph & EMPH_BOLD)
+					emphasis |= EMPH_BOLD;
+				if (ent->fmt_spans[s].emph & EMPH_ITAL)
+					emphasis |= EMPH_ITAL;
+				span_idx = s;
+			}
+			break;
+		}
+
+		while (si < slen)
+		{
+			/* Update emphasis when we cross a span boundary */
+			while (span_idx + 1 < ent->fmt_span_count &&
+			       ent->fmt_spans[span_idx + 1].stripped_off <= (guint16) si)
+			{
+				span_idx++;
+				emphasis = 0;
+				if (ent->fmt_spans[span_idx].emph & EMPH_BOLD)
+					emphasis |= EMPH_BOLD;
+				if (ent->fmt_spans[span_idx].emph & EMPH_ITAL)
+					emphasis |= EMPH_ITAL;
+			}
+
+			/* Hard newline */
+			if (sstr[si] == '\n')
+			{
+				si++;
+				ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
+				                            ent->str_len, si) - raw_offset;
+				goto done;
+			}
+
+			/* U+FFFC emoji placeholder (3 bytes: 0xEF 0xBF 0xBC) */
+			if (si + 2 < slen &&
+			    sstr[si] == 0xEF && sstr[si+1] == 0xBF && sstr[si+2] == 0xBC)
+			{
+				line_width += xtext->fontsize;
+				if (line_width > win_width)
+				{
+					if (xtext->wordwrap && si - last_space_si <= WORDWRAP_LIMIT)
+					{
+						int wrap_si = last_space_si;
+						if (wrap_si < slen && sstr[wrap_si] == ' ')
+							wrap_si++;
+						if (wrap_si <= stripped_start)
+							wrap_si = si;
+						ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
+						                            ent->str_len, wrap_si) - raw_offset;
+						goto done;
+					}
+					ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
+					                            ent->str_len, si) - raw_offset;
+					goto done;
+				}
+				si += 3;
+				if (si < slen && is_del (sstr[si]))
+					last_space_si = si;
+				continue;
+			}
+
+			mbl = charlen (sstr + si);
+			char_width = backend_get_text_width_emph (xtext, (guchar *)(sstr + si), mbl, emphasis);
+			line_width += char_width;
+
+			if (line_width > win_width)
+			{
+				if (xtext->wordwrap)
+				{
+					if (si - last_space_si > WORDWRAP_LIMIT)
+					{
+						/* Fall back to character wrap */
+						ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
+						                            ent->str_len, si) - raw_offset;
+					}
+					else
+					{
+						int wrap_si = last_space_si;
+						if (wrap_si < slen && sstr[wrap_si] == ' ')
+							wrap_si++;
+						if (wrap_si <= stripped_start)
+							wrap_si = si;
+						ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
+						                            ent->str_len, wrap_si) - raw_offset;
+					}
+					goto done;
+				}
+				ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
+				                            ent->str_len, si) - raw_offset;
+				goto done;
+			}
+
+			if (is_del (sstr[si]))
+				last_space_si = si;
+
+			si += mbl;
+		}
+
+		ret = ent->str_len - raw_offset;
 		goto done;
 	}
 
-	/* Find emphasis value for the offset that is the first byte of our string */
-	for (lp = ent->slp; lp; lp = g_slist_next (lp))
+	/* Fallback: no parsed data — use raw text with mIRC code parsing */
 	{
-		offlen_t *meta = lp->data;
-		unsigned char *start, *end;
+		unsigned char *last_space = str;
+		unsigned char *orig_str = str;
+		int str_width = indent;
+		int rcol = 0, bgcol = 0;
+		int hidden = FALSE;
+		int mbl;
+		int char_width;
+		int limit_offset = 0;
+		int emphasis = 0;
+		GSList *lp;
 
-		start = ent->str + meta->off;
-		end = start + meta->len;
-		if (str >= start && str < end)
+		if (!xtext->emoji_cache &&
+		    win_width >= ent->str_width + ent->indent && !memchr (ent->str, '\n', ent->str_len))
+			return ent->str_len;
+
+		if (win_width < 1)
 		{
-			emphasis = meta->emph;
-			break;
+			ret = ent->str_len - (str - ent->str);
+			goto done;
 		}
-	}
 
-	while (1)
-	{
-		if (rcol > 0 && (isdigit (*str) || (*str == ',' && isdigit (str[1]) && !bgcol)))
+		for (lp = ent->slp; lp; lp = g_slist_next (lp))
 		{
-			if (str[1] != ',') rcol--;
-			if (*str == ',')
+			offlen_t *meta = lp->data;
+			unsigned char *start, *end;
+			start = ent->str + meta->off;
+			end = start + meta->len;
+			if (str >= start && str < end)
 			{
-				rcol = 2;
-				bgcol = 1;
+				emphasis = meta->emph;
+				break;
 			}
-			limit_offset++;
-			str++;
-		} else
+		}
+
+		while (1)
 		{
-			rcol = bgcol = 0;
-			switch (*str)
+			if (rcol > 0 && (isdigit (*str) || (*str == ',' && isdigit (str[1]) && !bgcol)))
 			{
-			case ATTR_COLOR:
-				rcol = 2;
-			case ATTR_BEEP:
-			case ATTR_RESET:
-			case ATTR_REVERSE:
-			case ATTR_BOLD:
-			case ATTR_UNDERLINE:
-			case ATTR_STRIKETHROUGH:
-			case ATTR_ITALICS:
-				if (*str == ATTR_RESET)
-					emphasis = 0;
-				if (*str == ATTR_ITALICS)
-					emphasis ^= EMPH_ITAL;
-				if (*str == ATTR_BOLD)
-					emphasis ^= EMPH_BOLD;
-				limit_offset++;
-				str++;
-				break;
-			case ATTR_HIDDEN:
-				if (xtext->ignore_hidden)
-					goto def;
-				hidden = !hidden;
-				limit_offset++;
-				str++;
-				break;
-			case '\n':
-				/* IRCv3 multiline: embedded newline forces a hard line break */
-				str++;  /* consume the newline */
-				ret = str - orig_str;
-				goto done;
-			default:
-			def:
-				/* Check for emoji sprite — use fontsize as width instead of Pango */
-				if (xtext->emoji_cache)
+				if (str[1] != ',') rcol--;
+				if (*str == ',')
 				{
-					int emoji_bytes;
-					if (xtext_emoji_detect (str, orig_str + ent->str_len - str, &emoji_bytes, NULL, 0))
-					{
-						if (!hidden) str_width += xtext->fontsize;
-						if (str_width > win_width)
-						{
-							if (xtext->wordwrap)
-							{
-								if (str - last_space > WORDWRAP_LIMIT + limit_offset)
-									ret = str - orig_str;
-								else
-								{
-									if (*last_space == ' ')
-										last_space++;
-									ret = last_space - orig_str;
-									if (ret == 0)
-										ret = str - orig_str;
-								}
-								goto done;
-							}
-							ret = str - orig_str;
-							goto done;
-						}
-						str += emoji_bytes;
-						if (is_del (*str))
-						{
-							last_space = str;
-							limit_offset = 0;
-						}
-						break;
-					}
+					rcol = 2;
+					bgcol = 1;
 				}
-				mbl = charlen (str);
-				char_width = backend_get_text_width_emph (xtext, str, mbl, emphasis);
-				if (!hidden) str_width += char_width;
-				if (str_width > win_width)
+				limit_offset++;
+				str++;
+			} else
+			{
+				rcol = bgcol = 0;
+				switch (*str)
 				{
-					if (xtext->wordwrap)
-					{
-						if (str - last_space > WORDWRAP_LIMIT + limit_offset)
-							ret = str - orig_str; /* fall back to character wrap */
-						else
-						{
-							if (*last_space == ' ')
-								last_space++;
-							ret = last_space - orig_str;
-							if (ret == 0) /* fall back to character wrap */
-								ret = str - orig_str;
-						}
-						goto done;
-					}
+				case ATTR_COLOR:
+					rcol = 2;
+				case ATTR_BEEP:
+				case ATTR_RESET:
+				case ATTR_REVERSE:
+				case ATTR_BOLD:
+				case ATTR_UNDERLINE:
+				case ATTR_STRIKETHROUGH:
+				case ATTR_ITALICS:
+					if (*str == ATTR_RESET)
+						emphasis = 0;
+					if (*str == ATTR_ITALICS)
+						emphasis ^= EMPH_ITAL;
+					if (*str == ATTR_BOLD)
+						emphasis ^= EMPH_BOLD;
+					limit_offset++;
+					str++;
+					break;
+				case ATTR_HIDDEN:
+					if (xtext->ignore_hidden)
+						goto def;
+					hidden = !hidden;
+					limit_offset++;
+					str++;
+					break;
+				case '\n':
+					str++;
 					ret = str - orig_str;
 					goto done;
+				default:
+				def:
+					if (xtext->emoji_cache)
+					{
+						int emoji_bytes;
+						if (xtext_emoji_detect (str, orig_str + ent->str_len - str, &emoji_bytes, NULL, 0))
+						{
+							if (!hidden) str_width += xtext->fontsize;
+							if (str_width > win_width)
+							{
+								if (xtext->wordwrap)
+								{
+									if (str - last_space > WORDWRAP_LIMIT + limit_offset)
+										ret = str - orig_str;
+									else
+									{
+										if (*last_space == ' ')
+											last_space++;
+										ret = last_space - orig_str;
+										if (ret == 0)
+											ret = str - orig_str;
+									}
+									goto done;
+								}
+								ret = str - orig_str;
+								goto done;
+							}
+							str += emoji_bytes;
+							if (is_del (*str))
+							{
+								last_space = str;
+								limit_offset = 0;
+							}
+							break;
+						}
+					}
+					mbl = charlen (str);
+					char_width = backend_get_text_width_emph (xtext, str, mbl, emphasis);
+					if (!hidden) str_width += char_width;
+					if (str_width > win_width)
+					{
+						if (xtext->wordwrap)
+						{
+							if (str - last_space > WORDWRAP_LIMIT + limit_offset)
+								ret = str - orig_str;
+							else
+							{
+								if (*last_space == ' ')
+									last_space++;
+								ret = last_space - orig_str;
+								if (ret == 0)
+									ret = str - orig_str;
+							}
+							goto done;
+						}
+						ret = str - orig_str;
+						goto done;
+					}
+					if (is_del (*str))
+					{
+						last_space = str;
+						limit_offset = 0;
+					}
+					str += mbl;
 				}
-
-				/* keep a record of the last space, for wordwrapping */
-				if (is_del (*str))
-				{
-					last_space = str;
-					limit_offset = 0;
-				}
-
-				/* progress to the next char */
-				str += mbl;
-
 			}
-		}
 
-		if (str >= ent->str + ent->str_len)
-		{
-			ret = str - orig_str;
-			goto done;
+			if (str >= ent->str + ent->str_len)
+			{
+				ret = str - orig_str;
+				goto done;
+			}
 		}
 	}
 
