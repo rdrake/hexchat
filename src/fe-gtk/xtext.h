@@ -248,9 +248,6 @@ struct _GtkXText
 
 	int depth;						  /* gdk window depth */
 
-	char num[8];					  /* for parsing mirc color */
-	int nc;							  /* offset into xtext->num */
-
 	textentry *hilight_ent;
 	int hilight_start;
 	int hilight_end;
@@ -286,16 +283,6 @@ struct _GtkXText
 
 	int clip_y;			/* clipping (y directions) */
 	int clip_y2;		/* from y to y2 */
-
-	/* current text states */
-	unsigned int underline:1;
-	unsigned int strikethrough:1;
-	unsigned int hidden:1;
-
-	/* text parsing states */
-	unsigned int parsing_backcolor:1;
-	unsigned int parsing_color:1;
-	unsigned int backcolor:1;
 
 	/* various state information */
 	unsigned int moving_separator:1;

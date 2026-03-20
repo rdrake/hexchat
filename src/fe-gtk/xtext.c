@@ -548,11 +548,7 @@ gtk_xtext_init (GtkXText * xtext)
 	xtext->col_back = XTEXT_BG;
 	xtext->col_fore = XTEXT_FG;
 	xtext->render_alpha = 1.0;
-	xtext->nc = 0;
 	xtext->pixel_offset = 0;
-	xtext->underline = FALSE;
-	xtext->strikethrough = FALSE;
-	xtext->hidden = FALSE;
 	xtext->font = NULL;
 	xtext->layout = NULL;
 	xtext->jump_out_offset = 0;
@@ -3325,17 +3321,10 @@ gtk_xtext_text_width (GtkXText *xtext, unsigned char *text, int len)
 }
 
 static void
-gtk_xtext_reset (GtkXText * xtext, int mark, int attribs)
+gtk_xtext_reset (GtkXText * xtext, int mark)
 {
-	if (attribs)
-	{
-		xtext->underline = FALSE;
-		xtext->strikethrough = FALSE;
-		xtext->hidden = FALSE;
-	}
 	if (!mark)
 	{
-		xtext->backcolor = FALSE;
 		if (xtext->col_fore != XTEXT_FG)
 			xtext_set_fg (xtext, XTEXT_FG);
 		if (xtext->col_back != XTEXT_BG)
@@ -4406,7 +4395,7 @@ gtk_xtext_render_ents (GtkXText * xtext, textentry * enta, textentry * entb)
 
 		if (drawing || ent == entb || ent == enta)
 		{
-			gtk_xtext_reset (xtext, FALSE, TRUE);
+			gtk_xtext_reset (xtext, FALSE);
 			/* Phase 4: state-based rendering */
 			if (ent->state == XTEXT_STATE_REDACTED)
 				xtext->col_fore = XTEXT_REDACTED_FG;
@@ -4516,7 +4505,7 @@ gtk_xtext_render_page (GtkXText * xtext)
 
 	while (ent)
 	{
-		gtk_xtext_reset (xtext, FALSE, TRUE);
+		gtk_xtext_reset (xtext, FALSE);
 		/* Phase 4: state-based rendering */
 		if (ent->state == XTEXT_STATE_REDACTED)
 			xtext->col_fore = XTEXT_REDACTED_FG;
