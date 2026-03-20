@@ -85,6 +85,29 @@ typedef struct xtext_redaction_info {
 	time_t redaction_time;
 } xtext_redaction_info;
 
+/* --- New format span system (replaces character-by-character rendering) --- */
+
+/* Flags for xtext_fmt_span.flags */
+#define FMT_FLAG_UNDERLINE     (1 << 0)
+#define FMT_FLAG_STRIKETHROUGH (1 << 1)
+#define FMT_FLAG_HIDDEN        (1 << 2)
+#define FMT_FLAG_REVERSE       (1 << 3)
+
+/* Compact format change record — one per formatting transition in a message */
+typedef struct {
+	guint16 stripped_off;   /* byte offset in stripped text where this span starts */
+	guint16 fg;             /* foreground palette index (XTEXT_FG = default) */
+	guint16 bg;             /* background palette index (XTEXT_BG = default) */
+	guint8  emph;           /* EMPH_BOLD | EMPH_ITAL */
+	guint8  flags;          /* FMT_FLAG_* bits */
+} xtext_fmt_span;
+
+/* Emoji placeholder info — one per emoji sequence in the message */
+typedef struct {
+	guint16 stripped_off;   /* byte offset of U+FFFC in stripped text */
+	char    filename[48];   /* twemoji sprite filename (e.g. "1f600.png") */
+} xtext_emoji_info;
+
 struct textentry
 {
 	struct textentry *next;
@@ -110,6 +133,15 @@ struct textentry
 
 	/* Phase 4: redaction accountability (lazy-allocated, NULL for most entries) */
 	struct xtext_redaction_info *redaction;
+
+	/* Pre-parsed rendering data (built once at entry creation) */
+	unsigned char *stripped_str;       /* text with format codes removed, emoji → U+FFFC */
+	guint16 stripped_len;              /* byte length of stripped_str */
+	xtext_fmt_span *fmt_spans;        /* array of format transition records */
+	guint16 fmt_span_count;            /* number of spans */
+	xtext_emoji_info *emoji_list;     /* emoji placeholder info, NULL if none */
+	guint16 emoji_count;               /* number of emoji */
+	guint16 *raw_to_stripped_map;     /* raw_len+1 entries mapping raw→stripped offsets */
 };
 
 enum
@@ -158,6 +190,16 @@ struct offlen_s {
 	guint16 width;
 };
 typedef struct offlen_s offlen_t;
+
+/* Forward declaration */
+static void
+xtext_parse_formats (const unsigned char *raw, int raw_len,
+                     unsigned char **stripped_out, int *stripped_len_out,
+                     xtext_fmt_span **spans_out, int *span_count_out,
+                     xtext_emoji_info **emoji_out, int *emoji_count_out,
+                     guint16 **raw_to_stripped_out,
+                     gboolean detect_emoji);
+
 static unsigned char *
 gtk_xtext_strip_color (unsigned char *text, int len, unsigned char *outbuf,
 							  int *newlen, GSList **slp, int strip_hidden);
@@ -2862,6 +2904,474 @@ bad_utf8:		/* Normal ending sequence, and give up if bad utf8 */
 	return new_str;
 }
 
+/* --- New format span parser ---
+ *
+ * Parses raw mIRC-formatted text into:
+ *   1. Stripped text (format codes removed, emoji sequences → U+FFFC)
+ *   2. Format span array (color/style at each transition point)
+ *   3. Emoji info array (sprite filenames for each U+FFFC placeholder)
+ *   4. Raw-to-stripped offset map (for converting selection/search offsets)
+ *
+ * This replaces the duplicated parsing in render_str, find_next_wrap, and
+ * strip_color with a single pass at entry creation time.
+ */
+
+/* U+FFFC OBJECT REPLACEMENT CHARACTER in UTF-8 */
+#define UFFFC_BYTE0 0xEF
+#define UFFFC_BYTE1 0xBF
+#define UFFFC_BYTE2 0xBC
+#define UFFFC_UTF8_LEN 3
+
+static void
+xtext_parse_formats (const unsigned char *raw, int raw_len,
+                     unsigned char **stripped_out, int *stripped_len_out,
+                     xtext_fmt_span **spans_out, int *span_count_out,
+                     xtext_emoji_info **emoji_out, int *emoji_count_out,
+                     guint16 **raw_to_stripped_out,
+                     gboolean detect_emoji)
+{
+	unsigned char *stripped;
+	xtext_fmt_span *spans;
+	xtext_emoji_info *emojis;
+	guint16 *r2s;
+	int stripped_pos = 0;
+	int span_count = 0, span_alloc = 8;
+	int emoji_count = 0, emoji_alloc = 4;
+	int ri = 0;  /* raw index */
+	int mbl;
+
+	/* Current formatting state */
+	guint16 cur_fg = XTEXT_FG;
+	guint16 cur_bg = XTEXT_BG;
+	guint8  cur_emph = 0;
+	guint8  cur_flags = 0;
+
+	/* Color parsing state */
+	gboolean parsing_color = FALSE;
+	gboolean parsing_backcolor = FALSE;
+	char num_buf[8];
+	int nc = 0;
+
+	stripped = g_malloc (raw_len + 2);  /* worst case: same size as raw */
+	spans = g_new (xtext_fmt_span, span_alloc);
+	emojis = detect_emoji ? g_new (xtext_emoji_info, emoji_alloc) : NULL;
+	r2s = g_new (guint16, raw_len + 1);
+
+	/* Emit first span (initial state) */
+	spans[0].stripped_off = 0;
+	spans[0].fg = cur_fg;
+	spans[0].bg = cur_bg;
+	spans[0].emph = cur_emph;
+	spans[0].flags = cur_flags;
+	span_count = 1;
+
+	/* Helper macro: emit a new span if state changed */
+#define EMIT_SPAN_IF_CHANGED() do { \
+	xtext_fmt_span *_prev = &spans[span_count - 1]; \
+	if (_prev->fg != cur_fg || _prev->bg != cur_bg || \
+	    _prev->emph != cur_emph || _prev->flags != cur_flags) \
+	{ \
+		if (span_count >= span_alloc) { \
+			span_alloc *= 2; \
+			spans = g_renew (xtext_fmt_span, spans, span_alloc); \
+		} \
+		spans[span_count].stripped_off = (guint16) stripped_pos; \
+		spans[span_count].fg = cur_fg; \
+		spans[span_count].bg = cur_bg; \
+		spans[span_count].emph = cur_emph; \
+		spans[span_count].flags = cur_flags; \
+		span_count++; \
+	} \
+} while (0)
+
+	while (ri < raw_len)
+	{
+		mbl = charlen (raw + ri);
+		if (mbl + ri > raw_len)
+			break;  /* bad utf8 */
+
+		/* --- Color digit/comma parsing (after ATTR_COLOR) --- */
+		if (parsing_color &&
+		    ((isdigit (raw[ri]) && nc < 2) ||
+		     (raw[ri] == ',' && ri + 1 < raw_len &&
+		      isdigit (raw[ri + 1]) && nc < 3 && !parsing_backcolor)))
+		{
+			r2s[ri] = (guint16) stripped_pos;
+			if (raw[ri] == ',')
+			{
+				parsing_backcolor = TRUE;
+				if (nc)
+				{
+					int col_num;
+					num_buf[nc] = 0;
+					nc = 0;
+					col_num = atoi (num_buf);
+					if (col_num == 99)
+						col_num = XTEXT_FG;
+					else if (col_num > XTEXT_MAX_COLOR)
+						col_num = col_num % XTEXT_MIRC_COLS;
+					cur_fg = (guint16) col_num;
+				}
+			}
+			else
+			{
+				num_buf[nc] = raw[ri];
+				if (nc < 7)
+					nc++;
+			}
+			ri++;
+			continue;
+		}
+
+		/* --- End of color digit sequence --- */
+		if (parsing_color)
+		{
+			parsing_color = FALSE;
+			if (nc)
+			{
+				int col_num;
+				num_buf[nc] = 0;
+				nc = 0;
+				col_num = atoi (num_buf);
+				if (parsing_backcolor)
+				{
+					if (col_num == 99)
+						col_num = XTEXT_BG;
+					else if (col_num > XTEXT_MAX_COLOR)
+						col_num = col_num % XTEXT_MIRC_COLS;
+					cur_bg = (guint16) col_num;
+				}
+				else
+				{
+					if (col_num == 99)
+						col_num = XTEXT_FG;
+					else if (col_num > XTEXT_MAX_COLOR)
+						col_num = col_num % XTEXT_MIRC_COLS;
+					cur_fg = (guint16) col_num;
+				}
+				parsing_backcolor = FALSE;
+			}
+			else
+			{
+				/* \003 followed by non-digit: reset colors */
+				cur_fg = XTEXT_FG;
+				cur_bg = XTEXT_BG;
+			}
+			EMIT_SPAN_IF_CHANGED ();
+			/* Don't consume this byte — fall through to handle it */
+		}
+
+		/* --- Emoji detection --- */
+		if (detect_emoji)
+		{
+			int emoji_bytes;
+			char emoji_file[64];
+			if (xtext_emoji_detect (raw + ri, raw_len - ri, &emoji_bytes, emoji_file, sizeof (emoji_file)))
+			{
+				EMIT_SPAN_IF_CHANGED ();
+				/* Map all raw emoji bytes to this stripped position */
+				for (int eb = 0; eb < emoji_bytes && ri + eb < raw_len; eb++)
+					r2s[ri + eb] = (guint16) stripped_pos;
+
+				/* Store emoji info */
+				if (emoji_count >= emoji_alloc)
+				{
+					emoji_alloc *= 2;
+					emojis = g_renew (xtext_emoji_info, emojis, emoji_alloc);
+				}
+				emojis[emoji_count].stripped_off = (guint16) stripped_pos;
+				g_strlcpy (emojis[emoji_count].filename, emoji_file,
+				           sizeof (emojis[emoji_count].filename));
+				emoji_count++;
+
+				/* Write U+FFFC placeholder */
+				stripped[stripped_pos++] = UFFFC_BYTE0;
+				stripped[stripped_pos++] = UFFFC_BYTE1;
+				stripped[stripped_pos++] = UFFFC_BYTE2;
+
+				ri += emoji_bytes;
+				continue;
+			}
+		}
+
+		/* --- Format control codes --- */
+		switch (raw[ri])
+		{
+		case ATTR_COLOR:
+			r2s[ri] = (guint16) stripped_pos;
+			parsing_color = TRUE;
+			parsing_backcolor = FALSE;
+			nc = 0;
+			ri++;
+			continue;
+
+		case ATTR_BOLD:
+			r2s[ri] = (guint16) stripped_pos;
+			cur_emph ^= EMPH_BOLD;
+			EMIT_SPAN_IF_CHANGED ();
+			ri++;
+			continue;
+
+		case ATTR_ITALICS:
+			r2s[ri] = (guint16) stripped_pos;
+			cur_emph ^= EMPH_ITAL;
+			EMIT_SPAN_IF_CHANGED ();
+			ri++;
+			continue;
+
+		case ATTR_UNDERLINE:
+			r2s[ri] = (guint16) stripped_pos;
+			cur_flags ^= FMT_FLAG_UNDERLINE;
+			EMIT_SPAN_IF_CHANGED ();
+			ri++;
+			continue;
+
+		case ATTR_STRIKETHROUGH:
+			r2s[ri] = (guint16) stripped_pos;
+			cur_flags ^= FMT_FLAG_STRIKETHROUGH;
+			EMIT_SPAN_IF_CHANGED ();
+			ri++;
+			continue;
+
+		case ATTR_HIDDEN:
+			r2s[ri] = (guint16) stripped_pos;
+			cur_flags ^= FMT_FLAG_HIDDEN;
+			EMIT_SPAN_IF_CHANGED ();
+			ri++;
+			continue;
+
+		case ATTR_REVERSE:
+		{
+			guint16 tmp;
+			r2s[ri] = (guint16) stripped_pos;
+			tmp = cur_fg;
+			cur_fg = cur_bg;
+			cur_bg = tmp;
+			cur_flags ^= FMT_FLAG_REVERSE;
+			EMIT_SPAN_IF_CHANGED ();
+			ri++;
+			continue;
+		}
+
+		case ATTR_RESET:
+			r2s[ri] = (guint16) stripped_pos;
+			cur_fg = XTEXT_FG;
+			cur_bg = XTEXT_BG;
+			cur_emph = 0;
+			cur_flags = 0;
+			EMIT_SPAN_IF_CHANGED ();
+			ri++;
+			continue;
+
+		case ATTR_BEEP:
+		case ATTR_ITALICS2:
+			/* Consume but don't output */
+			r2s[ri] = (guint16) stripped_pos;
+			ri++;
+			continue;
+
+		default:
+			break;
+		}
+
+		/* --- Regular character (or newline) --- */
+		if (!(cur_flags & FMT_FLAG_HIDDEN))
+		{
+			/* Map raw byte(s) to stripped position */
+			for (int b = 0; b < mbl; b++)
+			{
+				r2s[ri + b] = (guint16) stripped_pos;
+				stripped[stripped_pos++] = raw[ri + b];
+			}
+		}
+		else
+		{
+			/* Hidden text: map to current stripped pos but don't output */
+			for (int b = 0; b < mbl; b++)
+				r2s[ri + b] = (guint16) stripped_pos;
+		}
+		ri += mbl;
+	}
+
+	/* Map any remaining bytes (shouldn't happen, but be safe) */
+	while (ri <= raw_len)
+	{
+		r2s[ri] = (guint16) stripped_pos;
+		ri++;
+	}
+
+#undef EMIT_SPAN_IF_CHANGED
+
+	stripped[stripped_pos] = 0;
+
+	*stripped_out = stripped;
+	*stripped_len_out = stripped_pos;
+	*spans_out = spans;
+	*span_count_out = span_count;
+	if (emoji_out)
+		*emoji_out = emojis;
+	else
+		g_free (emojis);
+	if (emoji_count_out)
+		*emoji_count_out = emoji_count;
+	if (raw_to_stripped_out)
+		*raw_to_stripped_out = r2s;
+	else
+		g_free (r2s);
+}
+
+/* Convert a stripped-text offset to a raw-text offset by scanning
+ * the raw_to_stripped_map. Returns the first raw byte that maps to
+ * the given stripped offset, or raw_len if not found. */
+static int
+xtext_stripped_to_raw (const guint16 *r2s_map, int raw_len, int stripped_off)
+{
+	for (int ri = 0; ri < raw_len; ri++)
+	{
+		if (r2s_map[ri] >= (guint16) stripped_off)
+			return ri;
+	}
+	return raw_len;
+}
+
+/* Convert a raw-text offset to a stripped-text offset using the map. */
+static int
+xtext_raw_to_stripped (const guint16 *r2s_map, int raw_len, int raw_off)
+{
+	if (raw_off >= raw_len)
+		return r2s_map[raw_len];  /* one past end */
+	return r2s_map[raw_off];
+}
+
+/* --- PangoAttrList builder ---
+ *
+ * Builds a PangoAttrList from an entry's format spans for a subline slice.
+ * This is used by the new renderer to set all colors/styles on a single
+ * PangoLayout per subline, replacing the old character-by-character state
+ * machine that split text into many separate Pango chunks.
+ *
+ * Parameters:
+ *   ent         - the textentry (must have fmt_spans and emoji_list populated)
+ *   sub_start   - byte offset into ent->stripped_str where this subline begins
+ *   sub_len     - byte length of this subline in stripped text
+ *   palette     - GdkRGBA palette array (xtext->palette)
+ *   fontsize    - pixel size for emoji shape attributes
+ *   ascent      - font ascent in pixels
+ *
+ * Returns: a new PangoAttrList (caller must unref). The attribute byte indices
+ *          are relative to the subline slice (0-based), not the full stripped text.
+ */
+static PangoAttrList *
+xtext_build_attrlist (textentry *ent, int sub_start, int sub_len,
+                      const GdkRGBA *palette, int fontsize, int ascent)
+{
+	PangoAttrList *list = pango_attr_list_new ();
+	int sub_end = sub_start + sub_len;
+
+	/* Walk format spans and create Pango attributes for the subline range */
+	for (int si = 0; si < ent->fmt_span_count; si++)
+	{
+		xtext_fmt_span *span = &ent->fmt_spans[si];
+		int span_end = (si + 1 < ent->fmt_span_count)
+		               ? ent->fmt_spans[si + 1].stripped_off
+		               : ent->stripped_len;
+		PangoAttribute *attr;
+
+		/* Clip span to subline range */
+		int start = MAX (span->stripped_off, sub_start) - sub_start;
+		int end   = MIN (span_end, sub_end) - sub_start;
+
+		if (start >= end)
+			continue;  /* span doesn't overlap this subline */
+
+		if (span->flags & FMT_FLAG_HIDDEN)
+			continue;  /* hidden text isn't in stripped_str */
+
+		/* Foreground color */
+		if (span->fg != XTEXT_FG)
+		{
+			const GdkRGBA *c = &palette[span->fg];
+			attr = pango_attr_foreground_new (
+				(guint16)(c->red * 65535),
+				(guint16)(c->green * 65535),
+				(guint16)(c->blue * 65535));
+			attr->start_index = start;
+			attr->end_index = end;
+			pango_attr_list_insert (list, attr);
+		}
+
+		/* Background color */
+		if (span->bg != XTEXT_BG)
+		{
+			const GdkRGBA *c = &palette[span->bg];
+			attr = pango_attr_background_new (
+				(guint16)(c->red * 65535),
+				(guint16)(c->green * 65535),
+				(guint16)(c->blue * 65535));
+			attr->start_index = start;
+			attr->end_index = end;
+			pango_attr_list_insert (list, attr);
+		}
+
+		/* Bold */
+		if (span->emph & EMPH_BOLD)
+		{
+			attr = pango_attr_weight_new (PANGO_WEIGHT_BOLD);
+			attr->start_index = start;
+			attr->end_index = end;
+			pango_attr_list_insert (list, attr);
+		}
+
+		/* Italic */
+		if (span->emph & EMPH_ITAL)
+		{
+			attr = pango_attr_style_new (PANGO_STYLE_ITALIC);
+			attr->start_index = start;
+			attr->end_index = end;
+			pango_attr_list_insert (list, attr);
+		}
+
+		/* Underline */
+		if (span->flags & FMT_FLAG_UNDERLINE)
+		{
+			attr = pango_attr_underline_new (PANGO_UNDERLINE_SINGLE);
+			attr->start_index = start;
+			attr->end_index = end;
+			pango_attr_list_insert (list, attr);
+		}
+
+		/* Strikethrough */
+		if (span->flags & FMT_FLAG_STRIKETHROUGH)
+		{
+			attr = pango_attr_strikethrough_new (TRUE);
+			attr->start_index = start;
+			attr->end_index = end;
+			pango_attr_list_insert (list, attr);
+		}
+	}
+
+	/* Add shape attributes for emoji placeholders (U+FFFC) so Pango
+	 * reserves the correct width without trying to render the glyph */
+	for (int ei = 0; ei < ent->emoji_count; ei++)
+	{
+		xtext_emoji_info *em = &ent->emoji_list[ei];
+		int em_start = em->stripped_off - sub_start;
+		int em_end = em_start + UFFFC_UTF8_LEN;
+
+		if (em_start < 0 || em_start >= sub_len)
+			continue;  /* emoji not in this subline */
+
+		PangoRectangle ink = { 0, -ascent * PANGO_SCALE, fontsize * PANGO_SCALE, fontsize * PANGO_SCALE };
+		PangoRectangle logical = ink;
+		PangoAttribute *attr = pango_attr_shape_new (&ink, &logical);
+		attr->start_index = em_start;
+		attr->end_index = em_end;
+		pango_attr_list_insert (list, attr);
+	}
+
+	return list;
+}
+
 /* gives width of a string, excluding the mIRC codes */
 
 static int
@@ -3075,6 +3585,285 @@ gtk_xtext_search_offset (xtext_buffer *buf, textentry *ent, unsigned int off)
 }
 
 /* render a single line, which WONT wrap, and parse mIRC colors */
+
+/* --- New subline renderer ---
+ *
+ * Renders a single subline using one PangoLayout with a pre-computed
+ * PangoAttrList from the entry's format spans. Replaces the old
+ * character-by-character state machine in gtk_xtext_render_str.
+ *
+ * Returns: 1 normally, 0 if xtext->cr is NULL (GTK4 outside snapshot)
+ */
+static int
+gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
+                          int raw_offset, int raw_len,
+                          int win_width, int indent, int line,
+                          int left_only, int *x_size_ret)
+{
+	int ret = 1;
+	int x;
+	PangoLayoutLine *pango_line;
+	PangoRectangle logical;
+
+	/* Entry not yet parsed — fall back to old renderer */
+	if (!ent->stripped_str || !ent->raw_to_stripped_map)
+		return 1;
+
+	/* Convert raw subline boundaries to stripped offsets */
+	int sub_start = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+	                                       ent->str_len, raw_offset);
+	int sub_end = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+	                                     ent->str_len, raw_offset + raw_len);
+	int sub_len = sub_end - sub_start;
+
+	if (sub_len <= 0)
+		return 1;
+
+	if (xtext->cr == NULL)
+		return 0;
+
+	if (xtext->dont_render)
+		return 1;
+
+	/* --- Background fills (left margin) --- */
+	if (!xtext->skip_border_fills)
+	{
+		if (raw_offset == 0 && indent > MARGIN && xtext->buffer->time_stamp)
+		{
+			/* Don't overwrite the timestamp */
+			if (indent > xtext->stamp_width)
+				xtext_draw_bg (xtext, xtext->stamp_width, y - xtext->font->ascent,
+				               indent - xtext->stamp_width, xtext->fontsize);
+		}
+		else
+		{
+			if (indent >= xtext->clip_x)
+				xtext_draw_bg (xtext, 0, y - xtext->font->ascent,
+				               MIN (indent, xtext->clip_x2), xtext->fontsize);
+		}
+	}
+
+	/* --- Build PangoLayout with attributes --- */
+	PangoAttrList *attrs = xtext_build_attrlist (ent, sub_start, sub_len,
+	                                              xtext->palette,
+	                                              xtext->fontsize,
+	                                              xtext->font->ascent);
+
+	pango_layout_set_text (xtext->layout,
+	                        (char *)(ent->stripped_str + sub_start), sub_len);
+	pango_layout_set_attributes (xtext->layout, attrs);
+
+	/* Measure the layout */
+	pango_layout_get_extents (xtext->layout, NULL, &logical);
+	int text_width = PANGO_PIXELS (logical.width);
+
+	/* --- Draw background --- */
+	x = indent;
+	if (!xtext->dont_render2)
+	{
+		/* Default background */
+		xtext_set_source_color (xtext, XTEXT_BG);
+		cairo_rectangle (xtext->cr, x, y - xtext->font->ascent,
+		                 text_width, xtext->fontsize);
+		cairo_fill (xtext->cr);
+
+		/* Draw background image if set */
+		if (xtext->pixmap)
+			xtext_draw_bg (xtext, x, y - xtext->font->ascent,
+			               text_width, xtext->fontsize);
+
+		/* --- Draw text --- */
+		/* Default foreground (Pango attrs override per-span) */
+		xtext_set_source_color (xtext, xtext->col_fore);
+
+		pango_line = pango_layout_get_lines (xtext->layout)->data;
+		xtext_draw_layout_line (xtext, x, y, pango_line);
+
+		/* --- Draw emoji sprites over U+FFFC placeholders --- */
+		for (int ei = 0; ei < ent->emoji_count; ei++)
+		{
+			xtext_emoji_info *em = &ent->emoji_list[ei];
+			int em_off = em->stripped_off;
+
+			if (em_off < sub_start || em_off >= sub_end)
+				continue;
+
+			/* Get position from Pango layout */
+			PangoRectangle pos;
+			pango_layout_index_to_pos (xtext->layout, em_off - sub_start, &pos);
+			int sprite_x = x + PANGO_PIXELS (pos.x);
+			int sprite_y = y - xtext->font->ascent;
+
+			cairo_surface_t *sprite = xtext_emoji_cache_get (
+				xtext->emoji_cache, em->filename);
+			if (sprite)
+			{
+				/* Clear the U+FFFC glyph area first (it may have rendered a box) */
+				xtext_set_source_color (xtext, XTEXT_BG);
+				cairo_rectangle (xtext->cr, sprite_x, sprite_y,
+				                 xtext->fontsize, xtext->fontsize);
+				cairo_fill (xtext->cr);
+
+				cairo_set_source_surface (xtext->cr, sprite, sprite_x, sprite_y);
+				cairo_paint (xtext->cr);
+			}
+		}
+
+		/* --- Selection highlight (solid BG + clipped FG re-render) --- */
+		if (ent->mark_start != -1)
+		{
+			int mark_s = ent->mark_start;  /* raw offset */
+			int mark_e = ent->mark_end;    /* raw offset */
+			int raw_end = raw_offset + raw_len;
+
+			/* Clip mark to this subline's raw range */
+			if (mark_s < raw_offset) mark_s = raw_offset;
+			if (mark_e > raw_end) mark_e = raw_end;
+
+			if (mark_s < mark_e)
+			{
+				/* Convert clipped raw mark offsets to stripped offsets */
+				int ms = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+				                                ent->str_len, mark_s);
+				int me = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+				                                ent->str_len, mark_e);
+				int ms_local = ms - sub_start;
+				int me_local = me - sub_start;
+
+				/* Get pixel positions from Pango */
+				PangoRectangle r1, r2;
+				pango_layout_index_to_pos (xtext->layout, ms_local, &r1);
+				pango_layout_index_to_pos (xtext->layout, me_local, &r2);
+				int sel_x1 = x + PANGO_PIXELS (r1.x);
+				int sel_x2 = (me_local >= sub_len)
+				             ? x + text_width
+				             : x + PANGO_PIXELS (r2.x);
+
+				/* Draw solid selection background */
+				GdkRGBA mark_bg = xtext->palette[XTEXT_MARK_BG];
+				gdk_cairo_set_source_rgba (xtext->cr, &mark_bg);
+				cairo_rectangle (xtext->cr, sel_x1, y - xtext->font->ascent,
+				                 sel_x2 - sel_x1, xtext->fontsize);
+				cairo_fill (xtext->cr);
+
+				/* Re-render text with MARK_FG, overriding per-span colors.
+				 * Build a new attrlist with a blanket foreground override so
+				 * colored text also gets the contrast selection FG. */
+				{
+					GdkRGBA mark_fg = xtext->palette[XTEXT_MARK_FG];
+					PangoAttrList *sel_attrs = pango_attr_list_copy (attrs);
+					PangoAttribute *fg_override = pango_attr_foreground_new (
+						(guint16)(mark_fg.red * 65535),
+						(guint16)(mark_fg.green * 65535),
+						(guint16)(mark_fg.blue * 65535));
+					fg_override->start_index = 0;
+					fg_override->end_index = (guint) sub_len;
+					pango_attr_list_change (sel_attrs, fg_override);
+
+					pango_layout_set_attributes (xtext->layout, sel_attrs);
+
+					cairo_save (xtext->cr);
+					cairo_rectangle (xtext->cr, sel_x1, y - xtext->font->ascent,
+					                 sel_x2 - sel_x1, xtext->fontsize);
+					cairo_clip (xtext->cr);
+
+					gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+					pango_line = pango_layout_get_lines (xtext->layout)->data;
+					xtext_draw_layout_line (xtext, x, y, pango_line);
+
+					/* Redraw emoji sprites within selection */
+					for (int ei = 0; ei < ent->emoji_count; ei++)
+					{
+						xtext_emoji_info *em = &ent->emoji_list[ei];
+						int em_off = em->stripped_off;
+
+						if (em_off < sub_start || em_off >= sub_end)
+							continue;
+
+						PangoRectangle pos;
+						pango_layout_index_to_pos (xtext->layout,
+						                           em_off - sub_start, &pos);
+						int sprite_x = x + PANGO_PIXELS (pos.x);
+						int sprite_y = y - xtext->font->ascent;
+
+						cairo_surface_t *sprite = xtext_emoji_cache_get (
+							xtext->emoji_cache, em->filename);
+						if (sprite)
+						{
+							cairo_set_source_surface (xtext->cr, sprite,
+							                          sprite_x, sprite_y);
+							cairo_paint_with_alpha (xtext->cr, 0.7);
+						}
+					}
+
+					cairo_restore (xtext->cr);
+					pango_attr_list_unref (sel_attrs);
+
+					/* Restore original attrs for subsequent use */
+					pango_layout_set_attributes (xtext->layout, attrs);
+				}
+			}
+		}
+
+		/* --- URL underline overlay --- */
+		if (xtext->hilight_ent == ent)
+		{
+			int hl_start = xtext->hilight_start;  /* raw offset */
+			int hl_end = xtext->hilight_end;       /* raw offset */
+			int raw_end = raw_offset + raw_len;
+
+			/* Clip to subline */
+			if (hl_start < raw_offset) hl_start = raw_offset;
+			if (hl_end > raw_end) hl_end = raw_end;
+
+			if (hl_start < hl_end)
+			{
+				int hs = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+				                                ent->str_len, hl_start);
+				int he = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+				                                ent->str_len, hl_end);
+				PangoRectangle r1, r2;
+				pango_layout_index_to_pos (xtext->layout, hs - sub_start, &r1);
+				pango_layout_index_to_pos (xtext->layout, he - sub_start, &r2);
+				int ul_x1 = x + PANGO_PIXELS (r1.x);
+				int ul_x2 = (he - sub_start >= sub_len)
+				            ? x + text_width
+				            : x + PANGO_PIXELS (r2.x);
+				int under_y = y + 1;
+
+				xtext_set_source_color (xtext, xtext->col_fore);
+				cairo_move_to (xtext->cr, ul_x1, under_y + 0.5);
+				cairo_line_to (xtext->cr, ul_x2 - 1, under_y + 0.5);
+				cairo_stroke (xtext->cr);
+			}
+		}
+	}
+
+	x = indent + text_width;
+
+	/* --- Right-side background fill and separator --- */
+	if (!left_only && !xtext->dont_render)
+	{
+		gtk_xtext_draw_sep (xtext, y - xtext->font->ascent);
+		if (!xtext->skip_border_fills && xtext->clip_x2 >= x)
+		{
+			int xx = MAX (x, xtext->clip_x);
+			xtext_draw_bg (xtext, xx, y - xtext->font->ascent,
+			               MIN (xtext->clip_x2 - xx, (win_width + MARGIN) - xx),
+			               xtext->fontsize);
+		}
+	}
+
+	pango_attr_list_unref (attrs);
+
+	/* Reset layout attributes so we don't leak into other callers */
+	pango_layout_set_attributes (xtext->layout, NULL);
+
+	if (x_size_ret)
+		*x_size_ret = x - indent;
+
+	return ret;
+}
 
 /* Sub-pixel X tracking: accumulate widths in Pango units (1/1024 px) to avoid
  * rounding errors at RENDER_FLUSH boundaries (e.g. selection mark edges).
@@ -3822,10 +4611,11 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 {
 	unsigned char *str;
 	int indent, taken, entline, len, y, start_subline;
-	int emphasis = 0;
+	int raw_offset;
 
 	entline = taken = 0;
 	str = ent->str;
+	raw_offset = 0;
 	indent = ent->indent;
 	start_subline = subline;
 
@@ -3863,8 +4653,8 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 		y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
 		if (!subline)
 		{
-			if (!gtk_xtext_render_str (xtext, y, ent, str, len, win_width,
-												indent, line, FALSE, NULL, &emphasis))
+			if (!gtk_xtext_render_subline (xtext, y, ent, raw_offset, len,
+			                               win_width, indent, line, FALSE, NULL))
 			{
 				/* small optimization */
 				gtk_xtext_draw_marker (xtext, ent, y - xtext->fontsize * (taken + start_subline + 1));
@@ -3872,10 +4662,10 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 			}
 		} else
 		{
-			xtext->dont_render = TRUE;
-			gtk_xtext_render_str (xtext, y, ent, str, len, win_width,
-										 indent, line, FALSE, NULL, &emphasis);
-			xtext->dont_render = FALSE;
+			/* Skipping sublines before the visible region — no rendering needed.
+			 * The old code used dont_render to advance emphasis state through
+			 * render_str, but the new renderer uses pre-computed format spans
+			 * so there's no state to advance. */
 			subline--;
 			line--;
 			taken--;
@@ -3885,6 +4675,7 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 		line++;
 		taken++;
 		str += len;
+		raw_offset += len;
 
 		if (line >= lines_max)
 			break;
@@ -4988,6 +5779,11 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 	g_slist_free_full (ent->slp, g_free);
 	g_slist_free (ent->sublines);
 
+	g_free (ent->stripped_str);
+	g_free (ent->fmt_spans);
+	g_free (ent->emoji_list);
+	g_free (ent->raw_to_stripped_map);
+
 	g_free (ent);
 	return visible;
 }
@@ -5646,6 +6442,29 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	ent->next = NULL;
 	ent->marks = NULL;
 
+	/* Parse format spans, stripped text, emoji placeholders */
+	{
+		unsigned char *stripped;
+		int stripped_len, span_count, emoji_count;
+		xtext_fmt_span *spans;
+		xtext_emoji_info *emojis;
+		guint16 *r2s;
+
+		xtext_parse_formats (ent->str, ent->str_len,
+		                     &stripped, &stripped_len,
+		                     &spans, &span_count,
+		                     &emojis, &emoji_count,
+		                     &r2s,
+		                     buf->xtext->emoji_cache != NULL);
+		ent->stripped_str = stripped;
+		ent->stripped_len = (guint16) stripped_len;
+		ent->fmt_spans = spans;
+		ent->fmt_span_count = (guint16) span_count;
+		ent->emoji_list = emojis;
+		ent->emoji_count = (guint16) emoji_count;
+		ent->raw_to_stripped_map = r2s;
+	}
+
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	ent->msgid = NULL;	/* Will be set later via gtk_xtext_set_msgid() if available */
 	ent->entry_id = buf->next_entry_id++;
@@ -5756,6 +6575,29 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	ent->prev = NULL;
 	ent->marks = NULL;
 
+	/* Parse format spans, stripped text, emoji placeholders */
+	{
+		unsigned char *stripped;
+		int stripped_len, span_count, emoji_count;
+		xtext_fmt_span *spans;
+		xtext_emoji_info *emojis;
+		guint16 *r2s;
+
+		xtext_parse_formats (ent->str, ent->str_len,
+		                     &stripped, &stripped_len,
+		                     &spans, &span_count,
+		                     &emojis, &emoji_count,
+		                     &r2s,
+		                     buf->xtext->emoji_cache != NULL);
+		ent->stripped_str = stripped;
+		ent->stripped_len = (guint16) stripped_len;
+		ent->fmt_spans = spans;
+		ent->fmt_span_count = (guint16) span_count;
+		ent->emoji_list = emojis;
+		ent->emoji_count = (guint16) emoji_count;
+		ent->raw_to_stripped_map = r2s;
+	}
+
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	ent->msgid = NULL;	/* Will be set later via gtk_xtext_set_msgid() if available */
 	ent->entry_id = buf->next_entry_id++;
@@ -5861,6 +6703,29 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	ent->mark_start = -1;
 	ent->mark_end = -1;
 	ent->marks = NULL;
+
+	/* Parse format spans, stripped text, emoji placeholders */
+	{
+		unsigned char *stripped;
+		int stripped_len, span_count, emoji_count;
+		xtext_fmt_span *spans;
+		xtext_emoji_info *emojis;
+		guint16 *r2s;
+
+		xtext_parse_formats (ent->str, ent->str_len,
+		                     &stripped, &stripped_len,
+		                     &spans, &span_count,
+		                     &emojis, &emoji_count,
+		                     &r2s,
+		                     buf->xtext->emoji_cache != NULL);
+		ent->stripped_str = stripped;
+		ent->stripped_len = (guint16) stripped_len;
+		ent->fmt_spans = spans;
+		ent->fmt_span_count = (guint16) span_count;
+		ent->emoji_list = emojis;
+		ent->emoji_count = (guint16) emoji_count;
+		ent->raw_to_stripped_map = r2s;
+	}
 
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	ent->msgid = NULL;
@@ -6011,7 +6876,7 @@ gtk_xtext_append_indent (xtext_buffer *buf,
 	if (right_text[right_len-1] == '\n')
 		right_len--;
 
-	ent = g_malloc (left_len + right_len + 2 + sizeof (textentry));
+	ent = g_malloc0 (left_len + right_len + 2 + sizeof (textentry));
 	str = (unsigned char *) ent + sizeof (textentry);
 
 	if (left_len)
@@ -6077,7 +6942,7 @@ gtk_xtext_append (xtext_buffer *buf, unsigned char *text, int len, time_t stamp)
 		truncate = TRUE;
 	}
 
-	ent = g_malloc (len + 1 + sizeof (textentry));
+	ent = g_malloc0 (len + 1 + sizeof (textentry));
 	ent->str = (unsigned char *) ent + sizeof (textentry);
 	ent->str_len = len;
 	if (len)
@@ -6127,7 +6992,7 @@ gtk_xtext_prepend_indent (xtext_buffer *buf,
 	if (right_text[right_len-1] == '\n')
 		right_len--;
 
-	ent = g_malloc (left_len + right_len + 2 + sizeof (textentry));
+	ent = g_malloc0 (left_len + right_len + 2 + sizeof (textentry));
 	str = (unsigned char *) ent + sizeof (textentry);
 
 	if (left_len)
@@ -6193,7 +7058,7 @@ gtk_xtext_prepend (xtext_buffer *buf, unsigned char *text, int len, time_t stamp
 		truncate = TRUE;
 	}
 
-	ent = g_malloc (len + 1 + sizeof (textentry));
+	ent = g_malloc0 (len + 1 + sizeof (textentry));
 	ent->str = (unsigned char *) ent + sizeof (textentry);
 	ent->str_len = len;
 	if (len)
@@ -6243,7 +7108,7 @@ gtk_xtext_insert_sorted_indent (xtext_buffer *buf,
 	if (right_text[right_len-1] == '\n')
 		right_len--;
 
-	ent = g_malloc (left_len + right_len + 2 + sizeof (textentry));
+	ent = g_malloc0 (left_len + right_len + 2 + sizeof (textentry));
 	str = (unsigned char *) ent + sizeof (textentry);
 
 	if (left_len)
@@ -6307,7 +7172,7 @@ gtk_xtext_insert_sorted (xtext_buffer *buf, unsigned char *text, int len, time_t
 		truncate = TRUE;
 	}
 
-	ent = g_malloc (len + 1 + sizeof (textentry));
+	ent = g_malloc0 (len + 1 + sizeof (textentry));
 	ent->str = (unsigned char *) ent + sizeof (textentry);
 	ent->str_len = len;
 	if (len)
@@ -6713,6 +7578,10 @@ gtk_xtext_buffer_free (xtext_buffer *buf)
 			g_free (ent->redaction->redaction_reason);
 			g_free (ent->redaction);
 		}
+		g_free (ent->stripped_str);
+		g_free (ent->fmt_spans);
+		g_free (ent->emoji_list);
+		g_free (ent->raw_to_stripped_map);
 		g_free (ent);
 		ent = next;
 	}
@@ -6852,12 +7721,41 @@ gtk_xtext_entry_set_text (xtext_buffer *buf, textentry *ent,
 	if (ent->flags & TEXTENTRY_FLAG_SEPARATE_STR)
 		g_free (ent->str);
 
+	/* Free old parsed format data */
+	g_free (ent->stripped_str);
+	g_free (ent->fmt_spans);
+	g_free (ent->emoji_list);
+	g_free (ent->raw_to_stripped_map);
+
 	/* Allocate new separate buffer */
 	ent->str = g_malloc (new_len + 1);
 	memcpy (ent->str, new_text, new_len);
 	ent->str[new_len] = '\0';
 	ent->str_len = new_len;
 	ent->flags |= TEXTENTRY_FLAG_SEPARATE_STR;
+
+	/* Rebuild parsed format data */
+	{
+		unsigned char *stripped;
+		int stripped_len, span_count, emoji_count;
+		xtext_fmt_span *spans;
+		xtext_emoji_info *emojis;
+		guint16 *r2s;
+
+		xtext_parse_formats (ent->str, ent->str_len,
+		                     &stripped, &stripped_len,
+		                     &spans, &span_count,
+		                     &emojis, &emoji_count,
+		                     &r2s,
+		                     buf->xtext->emoji_cache != NULL);
+		ent->stripped_str = stripped;
+		ent->stripped_len = (guint16) stripped_len;
+		ent->fmt_spans = spans;
+		ent->fmt_span_count = (guint16) span_count;
+		ent->emoji_list = emojis;
+		ent->emoji_count = (guint16) emoji_count;
+		ent->raw_to_stripped_map = r2s;
+	}
 
 	/* Recalculate derived data */
 	ent->str_width = gtk_xtext_text_width_ent (buf->xtext, ent);
