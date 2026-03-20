@@ -341,7 +341,12 @@ hex_input_view_buffer_changed (GtkTextBuffer *buf, HexInputView *view)
 	view->priv->cached_text = NULL;
 
 	hex_input_view_recheck_all (view);
-	hex_input_view_tag_emojis (view);
+
+	/* Only apply emoji tag when sprites are disabled (for rise correction).
+	 * When sprites are active, skip tagging to avoid creating separate
+	 * Pango layout runs that affect inter-character spacing. */
+	if (!view->priv->emoji_cache)
+		hex_input_view_tag_emojis (view);
 
 	/* Queue resize for auto-grow. The immediate call handles typed input;
 	 * the idle callback catches pastes where GtkTextView's internal layout
@@ -414,35 +419,38 @@ hex_input_view_draw_emoji_sprites (HexInputView *view, GtkSnapshot *snapshot)
 				                                        rect.x, rect.y, &wx, &wy);
 
 				{
-					int draw_size = MIN (size, rect.height);
-					double scale = (double) draw_size / size;
-					double sx = wx + (rect.width - draw_size) / 2.0;
-					double sy = wy + (rect.height - draw_size) / 2.0;
-					graphene_rect_t sprite_bounds = GRAPHENE_RECT_INIT (sx, sy, draw_size, draw_size);
+					double y = wy + (rect.height - size) / 2.0;
+					graphene_rect_t sprite_bounds = GRAPHENE_RECT_INIT (wx, y, size, size);
 					cairo_t *cr;
 
-					/* Color emoji fonts ignore foreground-rgba, so paint
-					 * opaque background to cover the font glyph.  Always
-					 * cover the full overflow area with COL_BG first,
-					 * then layer mark background at sprite bounds when
-					 * selected so selection height matches text. */
+					/* Cover only the vertical overflow areas above/below
+					 * the sprite where the font glyph peeks out.  Always
+					 * use COL_BG (these areas are outside the content). */
+					if (y > wy - 3)
 					{
-						graphene_rect_t bg = GRAPHENE_RECT_INIT (
-							wx, wy - 3, rect.width, rect.height + 4);
+						graphene_rect_t top = GRAPHENE_RECT_INIT (
+							wx, wy - 3, rect.width, (y - (wy - 3)));
 						gtk_snapshot_append_color (snapshot,
-							&colors[COL_BG], &bg);
+							&colors[COL_BG], &top);
+					}
+					if (y + size < wy + rect.height + 1)
+					{
+						graphene_rect_t bot = GRAPHENE_RECT_INIT (
+							wx, y + size, rect.width,
+							(wy + rect.height + 1) - (y + size));
+						gtk_snapshot_append_color (snapshot,
+							&colors[COL_BG], &bot);
 					}
 					if (in_selection)
 					{
 						graphene_rect_t sel = GRAPHENE_RECT_INIT (
-							wx, sy, rect.width, draw_size);
+							wx, wy, rect.width, rect.height);
 						gtk_snapshot_append_color (snapshot,
 							&colors[COL_MARK_BG], &sel);
 					}
 
 					cr = gtk_snapshot_append_cairo (snapshot, &sprite_bounds);
-					cairo_scale (cr, scale, scale);
-					cairo_set_source_surface (cr, sprite, sx / scale, sy / scale);
+					cairo_set_source_surface (cr, sprite, wx, y);
 					cairo_paint_with_alpha (cr, in_selection ? 0.7 : 1.0);
 					cairo_destroy (cr);
 				}
