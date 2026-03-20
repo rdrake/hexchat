@@ -249,7 +249,7 @@ fe_set_tab_color (struct session *sess, tabcolor col)
 static void
 mg_set_myself_away (session_gui *gui, gboolean away)
 {
-	GtkWidget *label = gtk_button_get_child (GTK_BUTTON (gui->nick_label));
+	GtkWidget *label = g_object_get_data (G_OBJECT (gui->nick_label), "nick-label");
 	if (label && GTK_IS_LABEL (label))
 		gtk_label_set_attributes (GTK_LABEL (label), away ? away_list : NULL);
 }
@@ -259,6 +259,8 @@ mg_set_myself_away (session_gui *gui, gboolean away)
 void
 mg_set_access_icon (session_gui *gui, GdkPixbuf *pix, gboolean away)
 {
+	GtkWidget *btn_box;
+
 	if (gui->op_xpm)
 	{
 		if (pix == gtk_image_get_pixbuf (GTK_IMAGE (gui->op_xpm))) /* no change? */
@@ -271,11 +273,11 @@ mg_set_access_icon (session_gui *gui, GdkPixbuf *pix, gboolean away)
 		gui->op_xpm = NULL;
 	}
 
-	if (pix && prefs.hex_gui_input_icon)
+	btn_box = gtk_button_get_child (GTK_BUTTON (gui->nick_label));
+	if (pix && prefs.hex_gui_input_icon && btn_box)
 	{
 		gui->op_xpm = gtk_image_new_from_pixbuf (pix);
-		hc_box_pack_start (gui->nick_box, gui->op_xpm, 0, 0, 0);
-		gtk_widget_show (gui->op_xpm);
+		gtk_box_prepend (GTK_BOX (btn_box), gui->op_xpm);
 	}
 
 	mg_set_myself_away (gui, away);
@@ -842,39 +844,64 @@ mg_restore_vpane_position (gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
+static void mg_rightpane_cb (GtkPaned *pane, GParamSpec *param, session_gui *gui);
+
+/* Idle callback: restore right pane position and unblock the notify::position
+ * signal that was blocked in mg_userlist_showhide.  Runs after layout has
+ * settled so pane_width reflects the actual (possibly resized) window. */
+static gboolean
+mg_showhide_restore_idle (gpointer user_data)
+{
+	session_gui *gui = (session_gui *)user_data;
+	int pane_width, right_size;
+
+	if (!gui || !gui->hpane_right)
+		return G_SOURCE_REMOVE;
+
+	pane_width = gtk_widget_get_width (gui->hpane_right);
+	right_size = MAX (prefs.hex_gui_pane_right_size, prefs.hex_gui_pane_right_size_min);
+
+	if (pane_width <= 0)
+		return G_SOURCE_CONTINUE;  /* window not yet laid out, retry */
+
+	/* Block signal around set_position so the restore itself doesn't
+	 * get picked up as a user-initiated pane drag. */
+	if (!gui->ul_hidden && pane_width > 0 && right_size > 0)
+		gtk_paned_set_position (GTK_PANED (gui->hpane_right), pane_width - right_size);
+
+	g_signal_handlers_unblock_by_func (gui->hpane_right, mg_rightpane_cb, gui);
+	return G_SOURCE_REMOVE;
+}
+
 static void
 mg_userlist_showhide (session *sess, int show)
 {
 	session_gui *gui = sess->gui;
-	int right_size;
 
-	right_size = MAX (prefs.hex_gui_pane_right_size, prefs.hex_gui_pane_right_size_min);
+	/* Block notify::position during show/hide to prevent spurious saves.
+	 * GTK4 internally adjusts the pane position when children are shown/hidden
+	 * and when the window resizes to meet minimum size — those intermediate
+	 * positions must not overwrite the user's preferred right_size.
+	 * The signal stays blocked until the idle callback restores the position. */
+	g_signal_handlers_block_by_func (gui->hpane_right, mg_rightpane_cb, gui);
 
 	if (show)
 	{
 		gtk_widget_show (gui->user_box);
 		gui->ul_hidden = 0;
-
-		/* GTK4: Use gtk_widget_get_width() - no handle size needed in GTK4 */
-		{
-			int pane_width = gtk_widget_get_width (gui->hpane_right);
-			if (pane_width > 0)
-				gtk_paned_set_position (GTK_PANED (gui->hpane_right), pane_width - right_size);
-			else
-			{
-				/* Defer position setting if window not yet realized */
-				g_idle_add (mg_restore_right_pane_position, gui);
-			}
-		}
 	}
 	else
 	{
-		gtk_widget_hide (gui->user_box);
 		gui->ul_hidden = 1;
+		gtk_widget_hide (gui->user_box);
 	}
 
 	mg_hide_empty_boxes (gui);
 	mg_update_window_minimum (gui);
+
+	/* Defer position restore + signal unblock to idle so layout settles first.
+	 * For hide, the idle still runs to unblock the signal (position is moot). */
+	g_idle_add (mg_showhide_restore_idle, gui);
 }
 
 static gboolean
@@ -1045,8 +1072,11 @@ mg_populate (session *sess)
 	fe_set_title (sess);
 
 	/* this one flickers, so only change if necessary */
-	if (strcmp (sess->server->nick, gtk_button_get_label (GTK_BUTTON (gui->nick_label))) != 0)
-		gtk_button_set_label (GTK_BUTTON (gui->nick_label), sess->server->nick);
+	{
+		GtkWidget *lbl = g_object_get_data (G_OBJECT (gui->nick_label), "nick-label");
+		if (lbl && strcmp (sess->server->nick, gtk_label_get_text (GTK_LABEL (lbl))) != 0)
+			gtk_label_set_text (GTK_LABEL (lbl), sess->server->nick);
+	}
 
 	/* this is slow, so make it a timeout event */
 	if (!gui->is_tab)
@@ -3201,42 +3231,26 @@ mg_leftpane_cb (GtkPaned *pane, GParamSpec *param, session_gui *gui)
 	}
 }
 
-/* Data structure for deferred right pane size calculation */
-typedef struct {
-	GtkPaned *pane;
-	session_gui *gui;
-} RightPaneData;
-
+/* Deferred right pane size save — only fires from user-initiated pane drags
+ * (the signal is blocked during programmatic show/hide/restore). */
 static gboolean
 mg_rightpane_idle_cb (gpointer user_data)
 {
-	RightPaneData *data = (RightPaneData *)user_data;
-	GtkPaned *pane = data->pane;
-	session_gui *gui = data->gui;
+	session_gui *gui = (session_gui *)user_data;
+	GtkPaned *pane = GTK_PANED (gui->hpane_right);
 	int pane_width, position, right_size;
 
 	/* Get dimensions after layout is complete */
 	pane_width = gtk_widget_get_width (GTK_WIDGET (pane));
 	position = gtk_paned_get_position (pane);
-
-	/* GTK4 panes typically have no visible handle, so we don't subtract handle size */
 	right_size = pane_width - position;
 
-	hc_debug_log ("mg_rightpane_idle_cb: pane_width=%d position=%d -> right_size=%d",
-	              pane_width, position, right_size);
-
-	/* Only update if we got valid values and userlist is actually visible */
-	if (pane_width > 0 && right_size > 0 && right_size < 2000 && !gui->ul_hidden)
+	if (pane_width > 0 && right_size > 0 && right_size < 2000)
 	{
 		prefs.hex_gui_pane_right_size = right_size;
 		mg_update_window_minimum (gui);
 	}
-	else
-	{
-		hc_debug_log ("  SKIPPED: invalid values (pane_width=%d, right_size=%d)", pane_width, right_size);
-	}
 
-	g_free (data);
 	return G_SOURCE_REMOVE;
 }
 
@@ -3244,11 +3258,8 @@ static void
 mg_rightpane_cb (GtkPaned *pane, GParamSpec *param, session_gui *gui)
 {
 	/* GTK4: Defer the size calculation to an idle callback because
-	 * gtk_widget_get_width() returns invalid values during notify::position */
-	RightPaneData *data = g_new (RightPaneData, 1);
-	data->pane = pane;
-	data->gui = gui;
-	g_idle_add (mg_rightpane_idle_cb, data);
+	 * gtk_widget_get_width() returns invalid values during notify::position. */
+	g_idle_add (mg_rightpane_idle_cb, gui);
 }
 
 static gboolean
@@ -3792,7 +3803,6 @@ mg_emoji_picked (HexEmojiChooser *chooser, const char *text, session_gui *gui)
 	pos = SPELL_ENTRY_GET_POS (gui->input_box);
 	SPELL_ENTRY_INSERT (gui->input_box, text, strlen (text), &pos);
 	SPELL_ENTRY_SET_POS (gui->input_box, pos);
-	gtk_widget_grab_focus (gui->input_box);
 }
 
 static void
@@ -3807,10 +3817,17 @@ mg_create_entry (session *sess, GtkWidget *box)
 	gui->nick_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	hc_box_pack_start (hbox, gui->nick_box, 0, 0, 0);
 
-	gui->nick_label = but = gtk_button_new_with_label (sess->server->nick);
+	gui->nick_label = but = gtk_button_new ();
 	gtk_button_set_relief (GTK_BUTTON (but), GTK_RELIEF_NONE);
 	gtk_widget_set_can_focus (but, FALSE);
-	hc_box_pack_end (gui->nick_box, but, 0, 0, 0);
+	{
+		GtkWidget *btn_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
+		GtkWidget *label = gtk_label_new (sess->server->nick);
+		gtk_box_append (GTK_BOX (btn_box), label);
+		gtk_button_set_child (GTK_BUTTON (but), btn_box);
+		g_object_set_data (G_OBJECT (but), "nick-label", label);
+	}
+	hc_box_pack_start (gui->nick_box, but, 0, 0, 0);
 	g_signal_connect (G_OBJECT (but), "clicked",
 							G_CALLBACK (mg_nickclick_cb), NULL);
 
@@ -4379,7 +4396,11 @@ fe_set_nick (server *serv, char *newnick)
 		if (sess->server == serv)
 		{
 			if (current_tab == sess || !sess->gui->is_tab)
-				gtk_button_set_label (GTK_BUTTON (sess->gui->nick_label), newnick);
+			{
+				GtkWidget *lbl = g_object_get_data (G_OBJECT (sess->gui->nick_label), "nick-label");
+				if (lbl)
+					gtk_label_set_text (GTK_LABEL (lbl), newnick);
+			}
 		}
 		list = list->next;
 	}

@@ -125,6 +125,7 @@ struct _HexInputViewPriv
 	xtext_emoji_cache    *emoji_cache;
 
 	GtkTextTag           *misspelled_tag;
+	GtkTextTag           *emoji_tag;
 
 	/* Auto-grow */
 	int                   max_lines;
@@ -282,6 +283,54 @@ hex_input_view_idle_resize (gpointer data)
 	return G_SOURCE_REMOVE;
 }
 
+/* Apply rise-correction tag to emoji character ranges so GtkTextView
+ * positions them at the same baseline as a raw PangoLayout would. */
+static void
+hex_input_view_tag_emojis (HexInputView *view)
+{
+	GtkTextBuffer *buf = gtk_text_view_get_buffer (GTK_TEXT_VIEW (view));
+	GtkTextIter start, end;
+	char *text;
+	int text_len, pos;
+
+	gtk_text_buffer_get_bounds (buf, &start, &end);
+	gtk_text_buffer_remove_tag (buf, view->priv->emoji_tag, &start, &end);
+
+	text = gtk_text_buffer_get_text (buf, &start, &end, FALSE);
+	if (!text || !*text)
+	{
+		g_free (text);
+		return;
+	}
+
+	text_len = strlen (text);
+	pos = 0;
+	while (pos < text_len)
+	{
+		int emoji_bytes;
+
+		if (xtext_emoji_detect ((const unsigned char *) text + pos,
+		                         text_len - pos, &emoji_bytes, NULL, 0))
+		{
+			int char_start = g_utf8_pointer_to_offset (text, text + pos);
+			int char_end = g_utf8_pointer_to_offset (text, text + pos + emoji_bytes);
+			GtkTextIter ei_start, ei_end;
+
+			gtk_text_buffer_get_iter_at_offset (buf, &ei_start, char_start);
+			gtk_text_buffer_get_iter_at_offset (buf, &ei_end, char_end);
+			gtk_text_buffer_apply_tag (buf, view->priv->emoji_tag,
+			                           &ei_start, &ei_end);
+			pos += emoji_bytes;
+		}
+		else
+		{
+			pos += g_utf8_skip[((const unsigned char *) text)[pos]];
+		}
+	}
+
+	g_free (text);
+}
+
 static void
 hex_input_view_buffer_changed (GtkTextBuffer *buf, HexInputView *view)
 {
@@ -292,6 +341,7 @@ hex_input_view_buffer_changed (GtkTextBuffer *buf, HexInputView *view)
 	view->priv->cached_text = NULL;
 
 	hex_input_view_recheck_all (view);
+	hex_input_view_tag_emojis (view);
 
 	/* Queue resize for auto-grow. The immediate call handles typed input;
 	 * the idle callback catches pastes where GtkTextView's internal layout
@@ -306,10 +356,10 @@ static void
 hex_input_view_draw_emoji_sprites (HexInputView *view, GtkSnapshot *snapshot)
 {
 	GtkTextBuffer *buf = gtk_text_view_get_buffer (GTK_TEXT_VIEW (view));
-	GtkTextIter start, end;
+	GtkTextIter start, end, sel_start, sel_end;
 	char *text;
 	int text_len, pos, size;
-	PangoLayout *layout;
+	gboolean has_selection;
 
 	gtk_text_buffer_get_bounds (buf, &start, &end);
 	text = gtk_text_buffer_get_text (buf, &start, &end, FALSE);
@@ -321,6 +371,7 @@ hex_input_view_draw_emoji_sprites (HexInputView *view, GtkSnapshot *snapshot)
 
 	text_len = strlen (text);
 	size = view->priv->emoji_cache->target_size;
+	has_selection = gtk_text_buffer_get_selection_bounds (buf, &sel_start, &sel_end);
 
 	/* Iterate through text looking for emoji sequences */
 	pos = 0;
@@ -338,27 +389,63 @@ hex_input_view_draw_emoji_sprites (HexInputView *view, GtkSnapshot *snapshot)
 			sprite = xtext_emoji_cache_get (view->priv->emoji_cache, filename);
 			if (sprite)
 			{
-				/* Convert byte offset to char offset for GtkTextIter */
-				int char_offset = g_utf8_pointer_to_offset (text, text + pos);
+				/* Get char offsets for emoji start and end to compute
+				 * the full rect spanning multi-codepoint sequences. */
+				int char_start = g_utf8_pointer_to_offset (text, text + pos);
 				GtkTextIter emoji_iter;
 				GdkRectangle rect;
+				gboolean in_selection;
+				int wx, wy;
 
-				gtk_text_buffer_get_iter_at_offset (buf, &emoji_iter, char_offset);
+				gtk_text_buffer_get_iter_at_offset (buf, &emoji_iter, char_start);
 				gtk_text_view_get_iter_location (GTK_TEXT_VIEW (view),
 				                                  &emoji_iter, &rect);
 
-				/* Convert buffer coordinates to widget coordinates */
-				int wx, wy;
+				/* Check if this emoji falls within the selection */
+				in_selection = has_selection
+					&& gtk_text_iter_compare (&emoji_iter, &sel_start) >= 0
+					&& gtk_text_iter_compare (&emoji_iter, &sel_end) < 0;
+
+				/* Convert buffer coordinates to widget coordinates.
+				 * Rise is disabled when sprites are active, so
+				 * get_iter_location returns the true position. */
 				gtk_text_view_buffer_to_window_coords (GTK_TEXT_VIEW (view),
 				                                        GTK_TEXT_WINDOW_WIDGET,
 				                                        rect.x, rect.y, &wx, &wy);
 
-				double y = wy + (rect.height - size) / 2.0 - 2;
-				graphene_rect_t bounds = GRAPHENE_RECT_INIT (wx, y, size, size);
-				cairo_t *cr = gtk_snapshot_append_cairo (snapshot, &bounds);
-				cairo_set_source_surface (cr, sprite, wx, y);
-				cairo_paint (cr);
-				cairo_destroy (cr);
+				{
+					int draw_size = MIN (size, rect.height);
+					double scale = (double) draw_size / size;
+					double sx = wx + (rect.width - draw_size) / 2.0;
+					double sy = wy + (rect.height - draw_size) / 2.0;
+					graphene_rect_t sprite_bounds = GRAPHENE_RECT_INIT (sx, sy, draw_size, draw_size);
+					cairo_t *cr;
+
+					/* Color emoji fonts ignore foreground-rgba, so paint
+					 * opaque background to cover the font glyph.  Always
+					 * cover the full overflow area with COL_BG first,
+					 * then layer mark background at sprite bounds when
+					 * selected so selection height matches text. */
+					{
+						graphene_rect_t bg = GRAPHENE_RECT_INIT (
+							wx, wy - 3, rect.width, rect.height + 4);
+						gtk_snapshot_append_color (snapshot,
+							&colors[COL_BG], &bg);
+					}
+					if (in_selection)
+					{
+						graphene_rect_t sel = GRAPHENE_RECT_INIT (
+							wx, sy, rect.width, draw_size);
+						gtk_snapshot_append_color (snapshot,
+							&colors[COL_MARK_BG], &sel);
+					}
+
+					cr = gtk_snapshot_append_cairo (snapshot, &sprite_bounds);
+					cairo_scale (cr, scale, scale);
+					cairo_set_source_surface (cr, sprite, sx / scale, sy / scale);
+					cairo_paint_with_alpha (cr, in_selection ? 0.7 : 1.0);
+					cairo_destroy (cr);
+				}
 			}
 
 			pos += emoji_bytes;
@@ -460,7 +547,7 @@ hex_input_view_init (HexInputView *view)
 	/* Text view setup */
 	gtk_text_view_set_wrap_mode (GTK_TEXT_VIEW (view), GTK_WRAP_WORD_CHAR);
 	gtk_text_view_set_accepts_tab (GTK_TEXT_VIEW (view), FALSE);
-	gtk_text_view_set_top_margin (GTK_TEXT_VIEW (view), 9);
+	gtk_text_view_set_top_margin (GTK_TEXT_VIEW (view), 7);
 	//gtk_text_view_set_bottom_margin (GTK_TEXT_VIEW (view), 6);
 
 	/* Style like GtkEntry: border, padding, and focus highlight.
@@ -484,12 +571,20 @@ hex_input_view_init (HexInputView *view)
 	}
 	gtk_widget_add_css_class (GTK_WIDGET (view), "hex-input-view");
 
-	/* Create misspelled tag */
+	/* Create tags */
 	buf = gtk_text_view_get_buffer (GTK_TEXT_VIEW (view));
 	view->priv->misspelled_tag = gtk_text_buffer_create_tag (
 		buf, "misspelled",
 		"underline", PANGO_UNDERLINE_ERROR,
 		"underline-rgba", &colors[COL_SPELL],
+		NULL);
+
+	/* GtkTextView positions emoji font glyphs a few pixels too high
+	 * compared to a raw PangoLayout (as xtext uses).  A small negative
+	 * rise nudges them back to the correct baseline. */
+	view->priv->emoji_tag = gtk_text_buffer_create_tag (
+		buf, "emoji-rise",
+		"rise", -3 * PANGO_SCALE,
 		NULL);
 
 	g_signal_connect (buf, "changed",
@@ -779,6 +874,15 @@ hex_input_view_set_emoji_cache (HexInputView *view, xtext_emoji_cache *cache)
 	GtkInputHints hints;
 
 	view->priv->emoji_cache = cache;
+
+	/* Sprites enabled: disable rise (sprite positioning handles alignment,
+	 * background cover hides the font glyph).  Sprites disabled: rise
+	 * correction compensates for emoji font overflow. */
+	if (cache)
+		g_object_set (view->priv->emoji_tag, "rise", 0, NULL);
+	else
+		g_object_set (view->priv->emoji_tag,
+			"rise", -3 * PANGO_SCALE, NULL);
 
 	/* Suppress GTK's "Insert Emoji" when we provide our own sprites */
 	g_object_get (view, "input-hints", &hints, NULL);

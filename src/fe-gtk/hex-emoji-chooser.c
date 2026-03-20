@@ -810,24 +810,6 @@ add_recent_item (HexEmojiChooser *chooser,
 	g_variant_unref (item);
 }
 
-/* --- should_close: check if Ctrl is held --- */
-
-static gboolean
-should_close (HexEmojiChooser *chooser)
-{
-	GdkDisplay *display;
-	GdkSeat *seat;
-	GdkDevice *device;
-	GdkModifierType state;
-
-	display = gtk_widget_get_display (GTK_WIDGET (chooser));
-	seat = gdk_display_get_default_seat (display);
-	device = gdk_seat_get_keyboard (seat);
-	state = gdk_device_get_modifier_state (device);
-
-	return (state & GDK_CONTROL_MASK) == 0;
-}
-
 /* --- emoji_activated: handle click/activation on an emoji child --- */
 
 static void
@@ -851,9 +833,8 @@ emoji_activated (GtkFlowBox      *box,
 
 	g_signal_emit (data, signals[EMOJI_PICKED], 0, text);
 
-	if (should_close (chooser))
-		gtk_popover_popdown (GTK_POPOVER (chooser));
-	else
+	/* Close any variations sub-popover, but keep the main chooser open.
+	 * The main popover dismisses via autohide (click outside) or typing. */
 	{
 		GtkWidget *popover;
 

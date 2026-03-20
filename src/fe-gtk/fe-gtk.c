@@ -382,6 +382,10 @@ create_input_style (InputStyle *style)
 			"  color: rgb(%d, %d, %d); "
 			"  font-family: \"%s\"; "
 			"  font-size: %dpt; "
+			"} "
+			"#hexchat-inputbox selection { "
+			"  background-color: rgb(%d, %d, %d); "
+			"  color: rgb(%d, %d, %d); "
 			"}",
 			(int)(colors[COL_FG].red * 255),
 			(int)(colors[COL_FG].green * 255),
@@ -393,7 +397,13 @@ create_input_style (InputStyle *style)
 			(int)(colors[COL_FG].green * 255),
 			(int)(colors[COL_FG].blue * 255),
 			font_family ? font_family : "sans",
-			font_size > 0 ? font_size : 11);
+			font_size > 0 ? font_size : 11,
+			(int)(colors[COL_MARK_BG].red * 255),
+			(int)(colors[COL_MARK_BG].green * 255),
+			(int)(colors[COL_MARK_BG].blue * 255),
+			(int)(colors[COL_MARK_FG].red * 255),
+			(int)(colors[COL_MARK_FG].green * 255),
+			(int)(colors[COL_MARK_FG].blue * 255));
 	}
 	else
 	{
