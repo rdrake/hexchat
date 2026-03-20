@@ -24,7 +24,6 @@
 #define GDK_MULTIHEAD_SAFE
 #define MARGIN 2						/* dont touch. */
 #define REFRESH_TIMEOUT 20
-#define WORDWRAP_LIMIT 24
 
 #include <string.h>
 #include <ctype.h>
@@ -3691,12 +3690,7 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 		                                           ent->str_len, raw_offset);
 		const unsigned char *sstr = ent->stripped_str;
 		int slen = ent->stripped_len;
-		int si = stripped_start;
-		int last_space_si = stripped_start;
-		int line_width = indent;
-		int mbl, char_width;
-		int emphasis = 0;
-		int span_idx = 0;
+		int si;
 
 		/* Single-liner fast path */
 		if (win_width >= ent->str_width + ent->indent &&
@@ -3709,112 +3703,52 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 			goto done;
 		}
 
-		/* Find the current emphasis from format spans */
-		for (int s = 0; s < ent->fmt_span_count; s++)
+		/* Check for hard newline first */
 		{
-			if (s + 1 < ent->fmt_span_count &&
-			    ent->fmt_spans[s + 1].stripped_off <= (guint16) stripped_start)
-				continue;
-			if (ent->fmt_spans[s].stripped_off <= (guint16) stripped_start)
+			const unsigned char *nl = memchr (sstr + stripped_start, '\n',
+			                                  slen - stripped_start);
+			int sub_end = nl ? (int)(nl - sstr) + 1 : slen;
+			int sub_len = sub_end - stripped_start;
+			int avail = win_width - indent;
+			PangoLayoutLine *pline;
+			int consumed;
+
+			if (avail < 1)
+				avail = 1;
+
+			/* Build attributes and set up layout for Pango-based wrapping */
+			PangoAttrList *attrs = xtext_build_attrlist (ent, stripped_start,
+			                           sub_len, xtext->palette, xtext->fontsize,
+			                           xtext->font->ascent);
+
+			pango_layout_set_text (xtext->layout,
+			                       (char *)(sstr + stripped_start), sub_len);
+			pango_layout_set_attributes (xtext->layout, attrs);
+			pango_layout_set_width (xtext->layout, avail * PANGO_SCALE);
+			pango_layout_set_wrap (xtext->layout, PANGO_WRAP_WORD_CHAR);
+
+			/* Read back where Pango broke the first line */
+			pline = pango_layout_get_line_readonly (xtext->layout, 0);
+			consumed = pline->length;
+
+			/* Reset layout state */
+			pango_layout_set_width (xtext->layout, -1);
+			pango_layout_set_attributes (xtext->layout, NULL);
+			pango_attr_list_unref (attrs);
+
+			if (consumed >= sub_len)
 			{
-				emphasis = 0;
-				if (ent->fmt_spans[s].emph & EMPH_BOLD)
-					emphasis |= EMPH_BOLD;
-				if (ent->fmt_spans[s].emph & EMPH_ITAL)
-					emphasis |= EMPH_ITAL;
-				span_idx = s;
+				/* Everything fits (including newline if present) */
+				si = sub_end;
 			}
-			break;
+			else
+			{
+				si = stripped_start + consumed;
+			}
+
+			ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
+			                            ent->str_len, si) - raw_offset;
 		}
-
-		while (si < slen)
-		{
-			/* Update emphasis when we cross a span boundary */
-			while (span_idx + 1 < ent->fmt_span_count &&
-			       ent->fmt_spans[span_idx + 1].stripped_off <= (guint16) si)
-			{
-				span_idx++;
-				emphasis = 0;
-				if (ent->fmt_spans[span_idx].emph & EMPH_BOLD)
-					emphasis |= EMPH_BOLD;
-				if (ent->fmt_spans[span_idx].emph & EMPH_ITAL)
-					emphasis |= EMPH_ITAL;
-			}
-
-			/* Hard newline */
-			if (sstr[si] == '\n')
-			{
-				si++;
-				ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
-				                            ent->str_len, si) - raw_offset;
-				goto done;
-			}
-
-			/* U+FFFC emoji placeholder (3 bytes: 0xEF 0xBF 0xBC) */
-			if (si + 2 < slen &&
-			    sstr[si] == 0xEF && sstr[si+1] == 0xBF && sstr[si+2] == 0xBC)
-			{
-				line_width += xtext->fontsize;
-				if (line_width > win_width)
-				{
-					if (xtext->wordwrap && si - last_space_si <= WORDWRAP_LIMIT)
-					{
-						int wrap_si = last_space_si;
-						if (wrap_si < slen && sstr[wrap_si] == ' ')
-							wrap_si++;
-						if (wrap_si <= stripped_start)
-							wrap_si = si;
-						ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
-						                            ent->str_len, wrap_si) - raw_offset;
-						goto done;
-					}
-					ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
-					                            ent->str_len, si) - raw_offset;
-					goto done;
-				}
-				last_space_si = si;  /* treat emoji as wrap opportunity */
-				si += 3;
-				continue;
-			}
-
-			mbl = charlen (sstr + si);
-			char_width = backend_get_text_width_emph (xtext, (guchar *)(sstr + si), mbl, emphasis);
-			line_width += char_width;
-
-			if (line_width > win_width)
-			{
-				if (xtext->wordwrap)
-				{
-					if (si - last_space_si > WORDWRAP_LIMIT)
-					{
-						/* Fall back to character wrap */
-						ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
-						                            ent->str_len, si) - raw_offset;
-					}
-					else
-					{
-						int wrap_si = last_space_si;
-						if (wrap_si < slen && sstr[wrap_si] == ' ')
-							wrap_si++;
-						if (wrap_si <= stripped_start)
-							wrap_si = si;
-						ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
-						                            ent->str_len, wrap_si) - raw_offset;
-					}
-					goto done;
-				}
-				ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
-				                            ent->str_len, si) - raw_offset;
-				goto done;
-			}
-
-			if (is_del (sstr[si]))
-				last_space_si = si;
-
-			si += mbl;
-		}
-
-		ret = ent->str_len - raw_offset;
 	}
 	/* no parsed data — shouldn't happen, all entries are parsed */
 	else

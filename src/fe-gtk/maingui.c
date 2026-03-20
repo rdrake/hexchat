@@ -3225,8 +3225,8 @@ mg_rightpane_idle_cb (gpointer user_data)
 	hc_debug_log ("mg_rightpane_idle_cb: pane_width=%d position=%d -> right_size=%d",
 	              pane_width, position, right_size);
 
-	/* Only update if we got valid values */
-	if (pane_width > 0 && right_size > 0 && right_size < 2000)
+	/* Only update if we got valid values and userlist is actually visible */
+	if (pane_width > 0 && right_size > 0 && right_size < 2000 && !gui->ul_hidden)
 	{
 		prefs.hex_gui_pane_right_size = right_size;
 		mg_update_window_minimum (gui);
