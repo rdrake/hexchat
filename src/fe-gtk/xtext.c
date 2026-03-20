@@ -4698,6 +4698,10 @@ xtext_status_expire_tick (gpointer data)
 	}
 
 	gtk_xtext_adjustment_set (xtext->buffer, TRUE);
+	if (xtext->buffer->scrollbar_down)
+		gtk_adjustment_set_value (xtext->adj,
+			gtk_adjustment_get_upper (xtext->adj) -
+			gtk_adjustment_get_page_size (xtext->adj));
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	return G_SOURCE_REMOVE;
 }
@@ -4750,7 +4754,13 @@ gtk_xtext_status_set (GtkXText *xtext, const char *key, const char *text,
 		}
 
 		if (was_visible != xtext->status_strip_visible)
+		{
 			gtk_xtext_adjustment_set (xtext->buffer, TRUE);
+			if (xtext->buffer->scrollbar_down)
+				gtk_adjustment_set_value (xtext->adj,
+					gtk_adjustment_get_upper (xtext->adj) -
+					gtk_adjustment_get_page_size (xtext->adj));
+		}
 		gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	}
 }
@@ -4774,7 +4784,13 @@ gtk_xtext_status_remove (GtkXText *xtext, const char *key)
 		gboolean was_visible = xtext->status_strip_visible;
 		xtext->status_strip_visible = (xtext->status_item_count > 0);
 		if (was_visible != xtext->status_strip_visible)
+		{
 			gtk_xtext_adjustment_set (xtext->buffer, TRUE);
+			if (xtext->buffer->scrollbar_down)
+				gtk_adjustment_set_value (xtext->adj,
+					gtk_adjustment_get_upper (xtext->adj) -
+					gtk_adjustment_get_page_size (xtext->adj));
+		}
 	}
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 }
