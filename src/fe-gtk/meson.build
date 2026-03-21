@@ -21,13 +21,13 @@ hexchat_gtk_sources = [
   'rawlog.c',
   'servlistgui.c',
   'setup.c',
-  'sexy-spell-entry.c',
   'textgui.c',
   'urlgrab.c',
   'userlistgui.c',
   'xtext.c',
   'xtext-render.c',
-  'xtext-emoji.c'
+  'xtext-emoji.c',
+  'hex-input-edit.c'
 ]
 
 # GTK4 dependency (GTK3 no longer supported)
@@ -70,14 +70,6 @@ else
   hexchat_gtk_sources += 'notifications/notification-freedesktop.c'
 endif
 
-iso_codes = dependency('iso-codes', required: false)
-if iso_codes.found()
-  hexchat_gtk_sources += 'sexy-iso-codes.c'
-  iso_codes_prefix = iso_codes.get_variable(pkgconfig: 'prefix')
-  hexchat_gtk_cflags += '-DISO_CODES_PREFIX="@0@"'.format(iso_codes_prefix)
-  hexchat_gtk_cflags += '-DISO_CODES_LOCALEDIR="@0@"'.format(
-                        join_paths(iso_codes_prefix, 'share/locale'))
-endif
 
 if get_option('plugin')
   hexchat_gtk_sources += 'plugingui.c'

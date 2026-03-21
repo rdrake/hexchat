@@ -49,8 +49,7 @@
 #include "../common/fe.h"
 
 /* ── Enchant runtime loading ────────────────────────────────────────── */
-/* File-scoped copies — g_module_open returns the already-loaded handle,
- * so these coexist safely with hex-input-view.c / sexy-spell-entry.c. */
+/* File-scoped copies via g_module_open — loaded at runtime. */
 
 struct EnchantDict;
 struct EnchantBroker;

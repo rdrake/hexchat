@@ -92,14 +92,11 @@ powershell "Get-Content -Encoding UTF8 '$(HexChatLib)hexchat.rc.utf8' | Out-File
     <ClInclude Include="rawlog.h" />
     <ClInclude Include="servlistgui.h" />
     <ClInclude Include="setup.h" />
-    <ClInclude Include="sexy-iso-codes.h" />
-    <ClInclude Include="sexy-spell-entry.h" />
     <ClInclude Include="textgui.h" />
     <ClInclude Include="urlgrab.h" />
     <ClInclude Include="userlistgui.h" />
     <ClInclude Include="xtext.h" />
     <ClInclude Include="xtext-emoji.h" />
-    <ClInclude Include="hex-input-view.h" />
     <ClInclude Include="hex-emoji-chooser.h" />
   </ItemGroup>
   <ItemGroup>
@@ -129,15 +126,12 @@ powershell "Get-Content -Encoding UTF8 '$(HexChatLib)hexchat.rc.utf8' | Out-File
     <ClCompile Include="$(HexChatLib)resources.c" />
     <ClCompile Include="servlistgui.c" />
     <ClCompile Include="setup.c" />
-    <ClCompile Include="sexy-iso-codes.c" />
-    <ClCompile Include="sexy-spell-entry.c" />
     <ClCompile Include="textgui.c" />
     <ClCompile Include="urlgrab.c" />
     <ClCompile Include="userlistgui.c" />
     <ClCompile Include="xtext.c" />
     <ClCompile Include="xtext-render.c" />
     <ClCompile Include="xtext-emoji.c" />
-    <ClCompile Include="hex-input-view.c" />
     <ClCompile Include="hex-input-edit.c" />
     <ClCompile Include="hex-emoji-chooser.c" />
   </ItemGroup>

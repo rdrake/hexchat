@@ -40,7 +40,6 @@
 #include "../common/chathistory.h"
 
 #include "fe-gtk.h"
-#include "hex-input-view.h"
 #include "hex-input-edit.h"
 #include "banlist.h"
 #include "gtkutil.h"
@@ -56,7 +55,6 @@
 #include "plugin-tray.h"
 #include "servlistgui.h"
 #include "xtext.h"
-#include "sexy-spell-entry.h"
 
 #ifdef G_OS_WIN32
 #include <windows.h>
@@ -352,20 +350,6 @@ mg_inputbox_cb (GtkWidget *igad, session_gui *gui)
 		handle_multiline (sess, cmd, TRUE, FALSE);
 
 	g_free (cmd);
-}
-
-static gboolean
-mg_spellcheck_cb (SexySpellEntry *entry, gchar *word, gpointer data)
-{
-	/* This can cause freezes on long words, nicks arn't very long anyway. */
-	if (strlen (word) > 20)
-		return TRUE;
-
-	/* Ignore anything we think is a valid url */
-	if (url_check_word (word) != 0)
-		return FALSE;
-
-	return TRUE;
 }
 
 #if 0
