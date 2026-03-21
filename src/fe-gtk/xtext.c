@@ -84,28 +84,8 @@ typedef struct xtext_redaction_info {
 	time_t redaction_time;
 } xtext_redaction_info;
 
-/* --- New format span system (replaces character-by-character rendering) --- */
-
-/* Flags for xtext_fmt_span.flags */
-#define FMT_FLAG_UNDERLINE     (1 << 0)
-#define FMT_FLAG_STRIKETHROUGH (1 << 1)
-#define FMT_FLAG_HIDDEN        (1 << 2)
-#define FMT_FLAG_REVERSE       (1 << 3)
-
-/* Compact format change record — one per formatting transition in a message */
-typedef struct {
-	guint16 stripped_off;   /* byte offset in stripped text where this span starts */
-	guint16 fg;             /* foreground palette index (XTEXT_FG = default) */
-	guint16 bg;             /* background palette index (XTEXT_BG = default) */
-	guint8  emph;           /* EMPH_BOLD | EMPH_ITAL */
-	guint8  flags;          /* FMT_FLAG_* bits */
-} xtext_fmt_span;
-
-/* Emoji placeholder info — one per emoji sequence in the message */
-typedef struct {
-	guint16 stripped_off;   /* byte offset of U+FFFC in stripped text */
-	char    filename[48];   /* twemoji sprite filename (e.g. "1f600.png") */
-} xtext_emoji_info;
+/* Format span types and rendering functions shared with hex-input-edit */
+#include "xtext-render.h"
 
 struct textentry
 {
@@ -190,18 +170,22 @@ struct offlen_s {
 };
 typedef struct offlen_s offlen_t;
 
-/* Forward declarations */
-static void
-xtext_parse_formats (const unsigned char *raw, int raw_len,
-                     unsigned char **stripped_out, int *stripped_len_out,
-                     xtext_fmt_span **spans_out, int *span_count_out,
-                     xtext_emoji_info **emoji_out, int *emoji_count_out,
-                     guint16 **raw_to_stripped_out,
-                     gboolean detect_emoji);
+/* xtext_parse_formats, xtext_build_attrlist, xtext_raw_to_stripped,
+ * xtext_stripped_to_raw are now in xtext-render.c/h */
 
-static PangoAttrList *
-xtext_build_attrlist (textentry *ent, int sub_start, int sub_len,
-                      const GdkRGBA *palette, int fontsize, int ascent);
+/* Helper to build xtext_format_data from a textentry */
+static inline xtext_format_data
+xtext_fdata_from_entry (textentry *ent)
+{
+	xtext_format_data fd;
+	fd.stripped_str = ent->stripped_str;
+	fd.stripped_len = ent->stripped_len;
+	fd.fmt_spans = ent->fmt_spans;
+	fd.fmt_span_count = ent->fmt_span_count;
+	fd.emoji_list = ent->emoji_list;
+	fd.emoji_count = ent->emoji_count;
+	return fd;
+}
 
 static unsigned char *
 gtk_xtext_strip_color (unsigned char *text, int len, unsigned char *outbuf,
@@ -240,9 +224,7 @@ static gboolean gtk_xtext_scroll (GtkEventControllerScroll *controller, double d
 /* ============ PANGO BACKEND ============ */
 /* ======================================= */
 
-#define EMPH_ITAL 1
-#define EMPH_BOLD 2
-#define EMPH_HIDDEN 4
+/* EMPH_ITAL, EMPH_BOLD, EMPH_HIDDEN are now in xtext-render.h */
 static PangoAttrList *attr_lists[4];
 static int fontwidths[4][128];
 static int fontwidths_pango[4][128];	/* widths in Pango units (1/1024 px) */
@@ -1045,10 +1027,13 @@ find_x (GtkXText *xtext, textentry *ent, int x, int subline, int indent, gboolea
 			return raw_offset;
 
 		/* Build same layout as renderer */
-		attrs = xtext_build_attrlist (ent, sub_start, sub_len,
-		                              xtext->palette,
-		                              xtext->fontsize,
-		                              xtext->font->ascent);
+		{
+			xtext_format_data fd = xtext_fdata_from_entry (ent);
+			attrs = xtext_build_attrlist (&fd, sub_start, sub_len,
+			                              xtext->palette,
+			                              xtext->fontsize,
+			                              xtext->font->ascent);
+		}
 		pango_layout_set_text (xtext->layout,
 		                        (char *)(ent->stripped_str + sub_start), sub_len);
 		pango_layout_set_attributes (xtext->layout, attrs);
@@ -2803,473 +2788,10 @@ bad_utf8:		/* Normal ending sequence, and give up if bad utf8 */
 	return new_str;
 }
 
-/* --- New format span parser ---
- *
- * Parses raw mIRC-formatted text into:
- *   1. Stripped text (format codes removed, emoji sequences → U+FFFC)
- *   2. Format span array (color/style at each transition point)
- *   3. Emoji info array (sprite filenames for each U+FFFC placeholder)
- *   4. Raw-to-stripped offset map (for converting selection/search offsets)
- *
- * This replaces the duplicated parsing in render_str, find_next_wrap, and
- * strip_color with a single pass at entry creation time.
- */
+/* xtext_parse_formats, xtext_stripped_to_raw, xtext_raw_to_stripped,
+ * and xtext_build_attrlist have been moved to xtext-render.c */
 
-/* U+FFFC OBJECT REPLACEMENT CHARACTER in UTF-8 */
-#define UFFFC_BYTE0 0xEF
-#define UFFFC_BYTE1 0xBF
-#define UFFFC_BYTE2 0xBC
-#define UFFFC_UTF8_LEN 3
-
-static void
-xtext_parse_formats (const unsigned char *raw, int raw_len,
-                     unsigned char **stripped_out, int *stripped_len_out,
-                     xtext_fmt_span **spans_out, int *span_count_out,
-                     xtext_emoji_info **emoji_out, int *emoji_count_out,
-                     guint16 **raw_to_stripped_out,
-                     gboolean detect_emoji)
-{
-	unsigned char *stripped;
-	xtext_fmt_span *spans;
-	xtext_emoji_info *emojis;
-	guint16 *r2s;
-	int stripped_pos = 0;
-	int span_count = 0, span_alloc = 8;
-	int emoji_count = 0, emoji_alloc = 4;
-	int ri = 0;  /* raw index */
-	int mbl;
-
-	/* Current formatting state */
-	guint16 cur_fg = XTEXT_FG;
-	guint16 cur_bg = XTEXT_BG;
-	guint8  cur_emph = 0;
-	guint8  cur_flags = 0;
-
-	/* Color parsing state */
-	gboolean parsing_color = FALSE;
-	gboolean parsing_backcolor = FALSE;
-	char num_buf[8];
-	int nc = 0;
-
-	stripped = g_malloc (raw_len + 2);  /* worst case: same size as raw */
-	spans = g_new (xtext_fmt_span, span_alloc);
-	emojis = detect_emoji ? g_new (xtext_emoji_info, emoji_alloc) : NULL;
-	r2s = g_new (guint16, raw_len + 1);
-
-	/* Emit first span (initial state) */
-	spans[0].stripped_off = 0;
-	spans[0].fg = cur_fg;
-	spans[0].bg = cur_bg;
-	spans[0].emph = cur_emph;
-	spans[0].flags = cur_flags;
-	span_count = 1;
-
-	/* Helper macro: emit a new span if state changed */
-#define EMIT_SPAN_IF_CHANGED() do { \
-	xtext_fmt_span *_prev = &spans[span_count - 1]; \
-	if (_prev->fg != cur_fg || _prev->bg != cur_bg || \
-	    _prev->emph != cur_emph || _prev->flags != cur_flags) \
-	{ \
-		if (span_count >= span_alloc) { \
-			span_alloc *= 2; \
-			spans = g_renew (xtext_fmt_span, spans, span_alloc); \
-		} \
-		spans[span_count].stripped_off = (guint16) stripped_pos; \
-		spans[span_count].fg = cur_fg; \
-		spans[span_count].bg = cur_bg; \
-		spans[span_count].emph = cur_emph; \
-		spans[span_count].flags = cur_flags; \
-		span_count++; \
-	} \
-} while (0)
-
-	while (ri < raw_len)
-	{
-		mbl = charlen (raw + ri);
-		if (mbl + ri > raw_len)
-			break;  /* bad utf8 */
-
-		/* --- Color digit/comma parsing (after ATTR_COLOR) --- */
-		if (parsing_color &&
-		    ((isdigit (raw[ri]) && nc < 2) ||
-		     (raw[ri] == ',' && ri + 1 < raw_len &&
-		      isdigit (raw[ri + 1]) && nc < 3 && !parsing_backcolor)))
-		{
-			r2s[ri] = (guint16) stripped_pos;
-			if (raw[ri] == ',')
-			{
-				parsing_backcolor = TRUE;
-				if (nc)
-				{
-					int col_num;
-					num_buf[nc] = 0;
-					nc = 0;
-					col_num = atoi (num_buf);
-					if (col_num == 99)
-						col_num = XTEXT_FG;
-					else if (col_num > XTEXT_MAX_COLOR)
-						col_num = col_num % XTEXT_MIRC_COLS;
-					cur_fg = (guint16) col_num;
-				}
-			}
-			else
-			{
-				num_buf[nc] = raw[ri];
-				if (nc < 7)
-					nc++;
-			}
-			ri++;
-			continue;
-		}
-
-		/* --- End of color digit sequence --- */
-		if (parsing_color)
-		{
-			parsing_color = FALSE;
-			if (nc)
-			{
-				int col_num;
-				num_buf[nc] = 0;
-				nc = 0;
-				col_num = atoi (num_buf);
-				if (parsing_backcolor)
-				{
-					if (col_num == 99)
-						col_num = XTEXT_BG;
-					else if (col_num > XTEXT_MAX_COLOR)
-						col_num = col_num % XTEXT_MIRC_COLS;
-					cur_bg = (guint16) col_num;
-				}
-				else
-				{
-					if (col_num == 99)
-						col_num = XTEXT_FG;
-					else if (col_num > XTEXT_MAX_COLOR)
-						col_num = col_num % XTEXT_MIRC_COLS;
-					cur_fg = (guint16) col_num;
-				}
-				parsing_backcolor = FALSE;
-			}
-			else
-			{
-				/* \003 followed by non-digit: reset colors */
-				cur_fg = XTEXT_FG;
-				cur_bg = XTEXT_BG;
-			}
-			EMIT_SPAN_IF_CHANGED ();
-			/* Don't consume this byte — fall through to handle it */
-		}
-
-		/* --- Emoji detection --- */
-		if (detect_emoji)
-		{
-			int emoji_bytes;
-			char emoji_file[64];
-			if (xtext_emoji_detect (raw + ri, raw_len - ri, &emoji_bytes, emoji_file, sizeof (emoji_file)))
-			{
-				EMIT_SPAN_IF_CHANGED ();
-				/* Map all raw emoji bytes to this stripped position */
-				for (int eb = 0; eb < emoji_bytes && ri + eb < raw_len; eb++)
-					r2s[ri + eb] = (guint16) stripped_pos;
-
-				/* Store emoji info */
-				if (emoji_count >= emoji_alloc)
-				{
-					emoji_alloc *= 2;
-					emojis = g_renew (xtext_emoji_info, emojis, emoji_alloc);
-				}
-				emojis[emoji_count].stripped_off = (guint16) stripped_pos;
-				g_strlcpy (emojis[emoji_count].filename, emoji_file,
-				           sizeof (emojis[emoji_count].filename));
-				emoji_count++;
-
-				/* Write U+FFFC placeholder */
-				stripped[stripped_pos++] = UFFFC_BYTE0;
-				stripped[stripped_pos++] = UFFFC_BYTE1;
-				stripped[stripped_pos++] = UFFFC_BYTE2;
-
-				ri += emoji_bytes;
-				continue;
-			}
-		}
-
-		/* --- Format control codes --- */
-		switch (raw[ri])
-		{
-		case ATTR_COLOR:
-			r2s[ri] = (guint16) stripped_pos;
-			parsing_color = TRUE;
-			parsing_backcolor = FALSE;
-			nc = 0;
-			ri++;
-			continue;
-
-		case ATTR_BOLD:
-			r2s[ri] = (guint16) stripped_pos;
-			cur_emph ^= EMPH_BOLD;
-			EMIT_SPAN_IF_CHANGED ();
-			ri++;
-			continue;
-
-		case ATTR_ITALICS:
-			r2s[ri] = (guint16) stripped_pos;
-			cur_emph ^= EMPH_ITAL;
-			EMIT_SPAN_IF_CHANGED ();
-			ri++;
-			continue;
-
-		case ATTR_UNDERLINE:
-			r2s[ri] = (guint16) stripped_pos;
-			cur_flags ^= FMT_FLAG_UNDERLINE;
-			EMIT_SPAN_IF_CHANGED ();
-			ri++;
-			continue;
-
-		case ATTR_STRIKETHROUGH:
-			r2s[ri] = (guint16) stripped_pos;
-			cur_flags ^= FMT_FLAG_STRIKETHROUGH;
-			EMIT_SPAN_IF_CHANGED ();
-			ri++;
-			continue;
-
-		case ATTR_HIDDEN:
-			r2s[ri] = (guint16) stripped_pos;
-			cur_flags ^= FMT_FLAG_HIDDEN;
-			EMIT_SPAN_IF_CHANGED ();
-			ri++;
-			continue;
-
-		case ATTR_REVERSE:
-		{
-			guint16 tmp;
-			r2s[ri] = (guint16) stripped_pos;
-			tmp = cur_fg;
-			cur_fg = cur_bg;
-			cur_bg = tmp;
-			cur_flags ^= FMT_FLAG_REVERSE;
-			EMIT_SPAN_IF_CHANGED ();
-			ri++;
-			continue;
-		}
-
-		case ATTR_RESET:
-			r2s[ri] = (guint16) stripped_pos;
-			cur_fg = XTEXT_FG;
-			cur_bg = XTEXT_BG;
-			cur_emph = 0;
-			cur_flags = 0;
-			EMIT_SPAN_IF_CHANGED ();
-			ri++;
-			continue;
-
-		case ATTR_BEEP:
-		case ATTR_ITALICS2:
-			/* Consume but don't output */
-			r2s[ri] = (guint16) stripped_pos;
-			ri++;
-			continue;
-
-		default:
-			break;
-		}
-
-		/* --- Regular character (or newline) --- */
-		if (!(cur_flags & FMT_FLAG_HIDDEN))
-		{
-			/* Map raw byte(s) to stripped position */
-			for (int b = 0; b < mbl; b++)
-			{
-				r2s[ri + b] = (guint16) stripped_pos;
-				stripped[stripped_pos++] = raw[ri + b];
-			}
-		}
-		else
-		{
-			/* Hidden text: map to current stripped pos but don't output */
-			for (int b = 0; b < mbl; b++)
-				r2s[ri + b] = (guint16) stripped_pos;
-		}
-		ri += mbl;
-	}
-
-	/* Map any remaining bytes (shouldn't happen, but be safe) */
-	while (ri <= raw_len)
-	{
-		r2s[ri] = (guint16) stripped_pos;
-		ri++;
-	}
-
-#undef EMIT_SPAN_IF_CHANGED
-
-	stripped[stripped_pos] = 0;
-
-	*stripped_out = stripped;
-	*stripped_len_out = stripped_pos;
-	*spans_out = spans;
-	*span_count_out = span_count;
-	if (emoji_out)
-		*emoji_out = emojis;
-	else
-		g_free (emojis);
-	if (emoji_count_out)
-		*emoji_count_out = emoji_count;
-	if (raw_to_stripped_out)
-		*raw_to_stripped_out = r2s;
-	else
-		g_free (r2s);
-}
-
-/* Convert a stripped-text offset to a raw-text offset by scanning
- * the raw_to_stripped_map. Returns the first raw byte that maps to
- * the given stripped offset, or raw_len if not found. */
-static int
-xtext_stripped_to_raw (const guint16 *r2s_map, int raw_len, int stripped_off)
-{
-	for (int ri = 0; ri < raw_len; ri++)
-	{
-		if (r2s_map[ri] >= (guint16) stripped_off)
-			return ri;
-	}
-	return raw_len;
-}
-
-/* Convert a raw-text offset to a stripped-text offset using the map. */
-static int
-xtext_raw_to_stripped (const guint16 *r2s_map, int raw_len, int raw_off)
-{
-	if (raw_off >= raw_len)
-		return r2s_map[raw_len];  /* one past end */
-	return r2s_map[raw_off];
-}
-
-/* --- PangoAttrList builder ---
- *
- * Builds a PangoAttrList from an entry's format spans for a subline slice.
- * This is used by the new renderer to set all colors/styles on a single
- * PangoLayout per subline, replacing the old character-by-character state
- * machine that split text into many separate Pango chunks.
- *
- * Parameters:
- *   ent         - the textentry (must have fmt_spans and emoji_list populated)
- *   sub_start   - byte offset into ent->stripped_str where this subline begins
- *   sub_len     - byte length of this subline in stripped text
- *   palette     - GdkRGBA palette array (xtext->palette)
- *   fontsize    - pixel size for emoji shape attributes
- *   ascent      - font ascent in pixels
- *
- * Returns: a new PangoAttrList (caller must unref). The attribute byte indices
- *          are relative to the subline slice (0-based), not the full stripped text.
- */
-static PangoAttrList *
-xtext_build_attrlist (textentry *ent, int sub_start, int sub_len,
-                      const GdkRGBA *palette, int fontsize, int ascent)
-{
-	PangoAttrList *list = pango_attr_list_new ();
-	int sub_end = sub_start + sub_len;
-
-	/* Walk format spans and create Pango attributes for the subline range */
-	for (int si = 0; si < ent->fmt_span_count; si++)
-	{
-		xtext_fmt_span *span = &ent->fmt_spans[si];
-		int span_end = (si + 1 < ent->fmt_span_count)
-		               ? ent->fmt_spans[si + 1].stripped_off
-		               : ent->stripped_len;
-		PangoAttribute *attr;
-
-		/* Clip span to subline range */
-		int start = MAX (span->stripped_off, sub_start) - sub_start;
-		int end   = MIN (span_end, sub_end) - sub_start;
-
-		if (start >= end)
-			continue;  /* span doesn't overlap this subline */
-
-		if (span->flags & FMT_FLAG_HIDDEN)
-			continue;  /* hidden text isn't in stripped_str */
-
-		/* Foreground color */
-		if (span->fg != XTEXT_FG)
-		{
-			const GdkRGBA *c = &palette[span->fg];
-			attr = pango_attr_foreground_new (
-				(guint16)(c->red * 65535),
-				(guint16)(c->green * 65535),
-				(guint16)(c->blue * 65535));
-			attr->start_index = start;
-			attr->end_index = end;
-			pango_attr_list_insert (list, attr);
-		}
-
-		/* Background color */
-		if (span->bg != XTEXT_BG)
-		{
-			const GdkRGBA *c = &palette[span->bg];
-			attr = pango_attr_background_new (
-				(guint16)(c->red * 65535),
-				(guint16)(c->green * 65535),
-				(guint16)(c->blue * 65535));
-			attr->start_index = start;
-			attr->end_index = end;
-			pango_attr_list_insert (list, attr);
-		}
-
-		/* Bold */
-		if (span->emph & EMPH_BOLD)
-		{
-			attr = pango_attr_weight_new (PANGO_WEIGHT_BOLD);
-			attr->start_index = start;
-			attr->end_index = end;
-			pango_attr_list_insert (list, attr);
-		}
-
-		/* Italic */
-		if (span->emph & EMPH_ITAL)
-		{
-			attr = pango_attr_style_new (PANGO_STYLE_ITALIC);
-			attr->start_index = start;
-			attr->end_index = end;
-			pango_attr_list_insert (list, attr);
-		}
-
-		/* Underline */
-		if (span->flags & FMT_FLAG_UNDERLINE)
-		{
-			attr = pango_attr_underline_new (PANGO_UNDERLINE_SINGLE);
-			attr->start_index = start;
-			attr->end_index = end;
-			pango_attr_list_insert (list, attr);
-		}
-
-		/* Strikethrough */
-		if (span->flags & FMT_FLAG_STRIKETHROUGH)
-		{
-			attr = pango_attr_strikethrough_new (TRUE);
-			attr->start_index = start;
-			attr->end_index = end;
-			pango_attr_list_insert (list, attr);
-		}
-	}
-
-	/* Add shape attributes for emoji placeholders (U+FFFC) so Pango
-	 * reserves the correct width without trying to render the glyph */
-	for (int ei = 0; ei < ent->emoji_count; ei++)
-	{
-		xtext_emoji_info *em = &ent->emoji_list[ei];
-		int em_start = em->stripped_off - sub_start;
-		int em_end = em_start + UFFFC_UTF8_LEN;
-
-		if (em_start < 0 || em_start >= sub_len)
-			continue;  /* emoji not in this subline */
-
-		PangoRectangle ink = { 0, -ascent * PANGO_SCALE, fontsize * PANGO_SCALE, fontsize * PANGO_SCALE };
-		PangoRectangle logical = ink;
-		PangoAttribute *attr = pango_attr_shape_new (&ink, &logical);
-		attr->start_index = em_start;
-		attr->end_index = em_end;
-		pango_attr_list_insert (list, attr);
-	}
-
-	return list;
-}
+/* (Implementations moved to xtext-render.c) */
 
 /* gives width of a string, excluding the mIRC codes */
 
@@ -3450,7 +2972,8 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 	}
 
 	/* --- Build PangoLayout with attributes --- */
-	PangoAttrList *attrs = xtext_build_attrlist (ent, sub_start, sub_len,
+	xtext_format_data fd = xtext_fdata_from_entry (ent);
+	PangoAttrList *attrs = xtext_build_attrlist (&fd, sub_start, sub_len,
 	                                              xtext->palette,
 	                                              xtext->fontsize,
 	                                              xtext->font->ascent);
@@ -3717,7 +3240,8 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 				avail = 1;
 
 			/* Build attributes and set up layout for Pango-based wrapping */
-			PangoAttrList *attrs = xtext_build_attrlist (ent, stripped_start,
+			xtext_format_data fd_wrap = xtext_fdata_from_entry (ent);
+			PangoAttrList *attrs = xtext_build_attrlist (&fd_wrap, stripped_start,
 			                           sub_len, xtext->palette, xtext->fontsize,
 			                           xtext->font->ascent);
 
@@ -3805,17 +3329,17 @@ gtk_xtext_render_stamp (GtkXText * xtext, textentry * ent,
 	                     NULL, NULL,  /* no emoji in timestamps */
 	                     &r2s, FALSE);
 
-	/* Build PangoAttrList from format spans using a temporary entry */
+	/* Build PangoAttrList from format spans */
 	{
-		textentry tmp;
-		memset (&tmp, 0, sizeof (tmp));
-		tmp.stripped_str = stripped;
-		tmp.stripped_len = stripped_len;
-		tmp.fmt_spans = spans;
-		tmp.fmt_span_count = span_count;
-		tmp.emoji_count = 0;
-
-		attrs = xtext_build_attrlist (&tmp, 0, stripped_len,
+		xtext_format_data fd_stamp = {
+			.stripped_str = stripped,
+			.stripped_len = stripped_len,
+			.fmt_spans = spans,
+			.fmt_span_count = span_count,
+			.emoji_list = NULL,
+			.emoji_count = 0
+		};
+		attrs = xtext_build_attrlist (&fd_stamp, 0, stripped_len,
 		                              xtext->palette,
 		                              xtext->fontsize,
 		                              xtext->font->ascent);

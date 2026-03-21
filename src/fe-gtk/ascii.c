@@ -22,6 +22,7 @@
 
 #include "fe-gtk.h"
 #include "hex-input-view.h"
+#include "hex-input-edit.h"
 
 #include "../common/hexchat.h"
 #include "../common/hexchatc.h"

@@ -33,6 +33,7 @@
 #define GLIB_DISABLE_DEPRECATION_WARNINGS
 #include "fe-gtk.h"
 #include "hex-input-view.h"
+#include "hex-input-edit.h"
 
 #include "../common/hexchat.h"
 #include "../common/hexchatc.h"
@@ -1347,7 +1348,15 @@ key_action_history_up (GtkWidget * wid, KEY_EVENT_PARAM, char *d1, char *d2,
 	char *new_line;
 
 	/* In multi-line mode, only trigger history when cursor is on the first line */
-	if (HEX_IS_INPUT_VIEW (wid))
+	if (HEX_IS_INPUT_EDIT (wid))
+	{
+		if (hex_input_edit_get_cursor_line (HEX_INPUT_EDIT (wid)) > 0)
+		{
+			hex_input_edit_move_cursor_up (HEX_INPUT_EDIT (wid));
+			return 2;
+		}
+	}
+	else if (HEX_IS_INPUT_VIEW (wid))
 	{
 		GtkTextBuffer *buf = gtk_text_view_get_buffer (GTK_TEXT_VIEW (wid));
 		GtkTextMark *mark = gtk_text_buffer_get_insert (buf);
@@ -1374,7 +1383,16 @@ key_action_history_down (GtkWidget * wid, KEY_EVENT_PARAM, char *d1,
 	char *new_line;
 
 	/* In multi-line mode, only trigger history when cursor is on the last line */
-	if (HEX_IS_INPUT_VIEW (wid))
+	if (HEX_IS_INPUT_EDIT (wid))
+	{
+		HexInputEdit *ie = HEX_INPUT_EDIT (wid);
+		if (hex_input_edit_get_cursor_line (ie) < hex_input_edit_get_line_count (ie) - 1)
+		{
+			hex_input_edit_move_cursor_down (ie);
+			return 2;
+		}
+	}
+	else if (HEX_IS_INPUT_VIEW (wid))
 	{
 		GtkTextBuffer *buf = gtk_text_view_get_buffer (GTK_TEXT_VIEW (wid));
 		GtkTextMark *mark = gtk_text_buffer_get_insert (buf);
@@ -1388,7 +1406,7 @@ key_action_history_down (GtkWidget * wid, KEY_EVENT_PARAM, char *d1,
 	if (new_line)
 	{
 		SPELL_ENTRY_SET_TEXT (wid, new_line);
-		SPELL_ENTRY_SET_POS (wid, -1);
+		SPELL_ENTRY_SET_POS (wid, 0);
 	}
 
 	return 2;

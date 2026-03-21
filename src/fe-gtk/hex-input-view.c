@@ -406,6 +406,15 @@ hex_input_view_draw_emoji_sprites (HexInputView *view, GtkSnapshot *snapshot)
 				gtk_text_view_get_iter_location (GTK_TEXT_VIEW (view),
 				                                  &emoji_iter, &rect);
 
+				{
+					char dbg[256];
+					g_snprintf (dbg, sizeof(dbg),
+						"emoji[%d] pos=%d bytes=%d rect=(%d,%d %dx%d) file=%s\n",
+						char_start, pos, emoji_bytes,
+						rect.x, rect.y, rect.width, rect.height, filename);
+					OutputDebugStringA (dbg);
+				}
+
 				/* Check if this emoji falls within the selection */
 				in_selection = has_selection
 					&& gtk_text_iter_compare (&emoji_iter, &sel_start) >= 0
@@ -460,6 +469,13 @@ hex_input_view_draw_emoji_sprites (HexInputView *view, GtkSnapshot *snapshot)
 		}
 		else
 		{
+			gunichar skip_ch = g_utf8_get_char (text + pos);
+			if (skip_ch > 0x7F)
+			{
+				char dbg[128];
+				g_snprintf (dbg, sizeof(dbg), "skip: pos=%d U+%04X\n", pos, skip_ch);
+				OutputDebugStringA (dbg);
+			}
 			pos += g_utf8_skip[((const unsigned char *) text)[pos]];
 		}
 	}

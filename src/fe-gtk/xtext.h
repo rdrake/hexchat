@@ -22,6 +22,7 @@
 
 #include <gtk/gtk.h>
 #include "gtk-compat.h"
+#include "xtext-render.h"   /* ATTR_*, XTEXT_*, format span types, rendering functions */
 
 #define GTK_TYPE_XTEXT              (gtk_xtext_get_type ())
 #define GTK_XTEXT(object)           (G_TYPE_CHECK_INSTANCE_CAST ((object), GTK_TYPE_XTEXT, GtkXText))
@@ -29,33 +30,6 @@
 #define GTK_IS_XTEXT(object)        (G_TYPE_CHECK_INSTANCE_TYPE ((object), GTK_TYPE_XTEXT))
 #define GTK_IS_XTEXT_CLASS(klass)   (G_TYPE_CHECK_CLASS_TYPE ((klass), GTK_TYPE_XTEXT))
 #define GTK_XTEXT_GET_CLASS(obj)    (G_TYPE_INSTANCE_GET_CLASS ((obj), GTK_TYPE_XTEXT, GtkXTextClass))
-
-#define ATTR_BOLD				'\002'
-#define ATTR_COLOR			'\003'
-#define ATTR_BLINK			'\006'
-#define ATTR_BEEP				'\007'
-#define ATTR_HIDDEN			'\010'
-#define ATTR_ITALICS2		'\011'
-#define ATTR_RESET			'\017'
-#define ATTR_REVERSE			'\026'
-#define ATTR_ITALICS			'\035'
-#define ATTR_STRIKETHROUGH	'\036'
-#define ATTR_UNDERLINE		'\037'
-
-/* these match palette.h */
-#define XTEXT_MIRC_COLS 32
-#define XTEXT_COLS 37		/* 32 plus 5 for extra stuff below */
-#define XTEXT_MARK_FG 32	/* for marking text */
-#define XTEXT_MARK_BG 33
-#define XTEXT_FG 34
-#define XTEXT_BG 35
-#define XTEXT_MARKER 36		/* for marker line */
-#define XTEXT_MAX_COLOR 41
-
-/* State colors (xtext-internal, not from external palette[]) */
-#define XTEXT_PENDING_FG 37
-#define XTEXT_REDACTED_FG 38
-#define XTEXT_PALETTE_SIZE 39	/* total palette array size */
 
 typedef enum {
 	XTEXT_STATE_NORMAL   = 0,

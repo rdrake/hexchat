@@ -32,6 +32,7 @@
 #include "../common/outbound.h"
 #include "fe-gtk.h"
 #include "hex-input-view.h"
+#include "hex-input-edit.h"
 #include "gtkutil.h"
 #include "maingui.h"
 #include "palette.h"
@@ -2084,7 +2085,15 @@ setup_apply_to_sess (session_gui *gui)
 		gtk_widget_hide (gui->button_box);
 
 	/* update active languages */
-	if (HEX_IS_INPUT_VIEW (gui->input_box))
+	if (HEX_IS_INPUT_EDIT (gui->input_box))
+	{
+		hex_input_edit_set_max_lines (HEX_INPUT_EDIT (gui->input_box), prefs.hex_gui_input_lines);
+		hex_input_edit_set_emoji_cache (HEX_INPUT_EDIT (gui->input_box),
+		                                GTK_XTEXT (gui->xtext)->emoji_cache);
+		hex_input_edit_set_palette (HEX_INPUT_EDIT (gui->input_box),
+		                            GTK_XTEXT (gui->xtext)->palette);
+	}
+	else if (HEX_IS_INPUT_VIEW (gui->input_box))
 	{
 		hex_input_view_deactivate_language (HEX_INPUT_VIEW (gui->input_box), NULL);
 		hex_input_view_activate_default_languages (HEX_INPUT_VIEW (gui->input_box));
