@@ -3121,7 +3121,7 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 						{
 							cairo_set_source_surface (xtext->cr, sprite,
 							                          sprite_x, sprite_y);
-							cairo_paint_with_alpha (xtext->cr, 0.7);
+							cairo_paint_with_alpha (xtext->cr, 0.6);
 						}
 					}
 

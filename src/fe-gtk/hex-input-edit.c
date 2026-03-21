@@ -701,6 +701,229 @@ paste_text_ready_cb (GObject *source, GAsyncResult *result, gpointer data)
 	g_object_unref (edit);
 }
 
+/* =============================== */
+/* === Edit operations          === */
+/* =============================== */
+
+static void
+do_select_all (HexInputEdit *edit)
+{
+	edit->priv->sel_anchor_byte = 0;
+	edit->priv->cursor_byte = (int) edit->priv->text->len;
+	reset_blink (edit);
+}
+
+static void
+do_copy (HexInputEdit *edit)
+{
+	int sel_start, sel_end;
+	if (get_selection_bytes (edit->priv, &sel_start, &sel_end))
+	{
+		char *sel_text = g_strndup (edit->priv->text->str + sel_start,
+		                            sel_end - sel_start);
+		GdkClipboard *clip = gdk_display_get_clipboard (
+		    gdk_display_get_default ());
+		gdk_clipboard_set_text (clip, sel_text);
+		g_free (sel_text);
+	}
+}
+
+static void
+do_cut (HexInputEdit *edit)
+{
+	int sel_start, sel_end;
+	if (get_selection_bytes (edit->priv, &sel_start, &sel_end))
+	{
+		char *sel_text = g_strndup (edit->priv->text->str + sel_start,
+		                            sel_end - sel_start);
+		GdkClipboard *clip = gdk_display_get_clipboard (
+		    gdk_display_get_default ());
+		gdk_clipboard_set_text (clip, sel_text);
+		g_free (sel_text);
+		delete_selection (edit);
+		reset_blink (edit);
+	}
+}
+
+static void
+do_paste (HexInputEdit *edit)
+{
+	GdkClipboard *clip = gdk_display_get_clipboard (
+	    gdk_display_get_default ());
+	g_object_ref (edit);
+	gdk_clipboard_read_text_async (clip, NULL,
+	                               paste_text_ready_cb, edit);
+}
+
+static void
+do_undo (HexInputEdit *edit)
+{
+	HexInputEditPriv *priv = edit->priv;
+	if (!priv->undo_stack || priv->undo_stack->len == 0)
+		return;
+
+	priv->undo_frozen = TRUE;
+
+	/* Save current state for redo if at the tip and text differs */
+	if (priv->undo_pos == (int) priv->undo_stack->len - 1)
+	{
+		UndoSnapshot *top = g_ptr_array_index (priv->undo_stack,
+		                                       priv->undo_pos);
+		if (strcmp (priv->text->str, top->text) != 0)
+		{
+			UndoSnapshot *cur = g_new (UndoSnapshot, 1);
+			cur->text = g_strdup (priv->text->str);
+			cur->cursor_byte = priv->cursor_byte;
+			g_ptr_array_add (priv->undo_stack, cur);
+			priv->undo_pos = (int) priv->undo_stack->len - 1;
+		}
+	}
+
+	if (priv->undo_pos > 0)
+	{
+		priv->undo_pos--;
+		UndoSnapshot *snap = g_ptr_array_index (priv->undo_stack,
+		                                        priv->undo_pos);
+		g_string_assign (priv->text, snap->text);
+		priv->cursor_byte = CLAMP (snap->cursor_byte, 0,
+		                           (int) priv->text->len);
+		priv->sel_anchor_byte = -1;
+		mark_dirty (edit);
+		reset_blink (edit);
+	}
+	priv->undo_frozen = FALSE;
+}
+
+static void
+do_redo (HexInputEdit *edit)
+{
+	HexInputEditPriv *priv = edit->priv;
+	if (priv->undo_stack &&
+	    priv->undo_pos + 1 < (int) priv->undo_stack->len)
+	{
+		priv->undo_pos++;
+		UndoSnapshot *snap = g_ptr_array_index (priv->undo_stack,
+		                                        priv->undo_pos);
+		priv->undo_frozen = TRUE;
+		g_string_assign (priv->text, snap->text);
+		priv->cursor_byte = CLAMP (snap->cursor_byte, 0,
+		                           (int) priv->text->len);
+		priv->sel_anchor_byte = -1;
+		priv->undo_frozen = FALSE;
+		mark_dirty (edit);
+		reset_blink (edit);
+	}
+}
+
+/* =============================== */
+/* === Context menu (popover)   === */
+/* =============================== */
+
+static gboolean
+popover_cleanup_idle (gpointer data)
+{
+	GtkWidget *popover = GTK_WIDGET (data);
+	if (gtk_widget_get_parent (popover))
+		gtk_widget_unparent (popover);
+	g_object_unref (popover);
+	return G_SOURCE_REMOVE;
+}
+
+static void
+popover_closed_cb (GtkPopover *popover, gpointer data)
+{
+	g_object_ref (popover);
+	g_idle_add (popover_cleanup_idle, popover);
+}
+
+static void
+action_cut (GtkWidget *widget, const char *name, GVariant *param)
+{
+	do_cut (HEX_INPUT_EDIT (widget));
+}
+
+static void
+action_copy (GtkWidget *widget, const char *name, GVariant *param)
+{
+	do_copy (HEX_INPUT_EDIT (widget));
+}
+
+static void
+action_paste (GtkWidget *widget, const char *name, GVariant *param)
+{
+	do_paste (HEX_INPUT_EDIT (widget));
+}
+
+static void
+action_select_all (GtkWidget *widget, const char *name, GVariant *param)
+{
+	do_select_all (HEX_INPUT_EDIT (widget));
+}
+
+static void
+action_undo (GtkWidget *widget, const char *name, GVariant *param)
+{
+	do_undo (HEX_INPUT_EDIT (widget));
+}
+
+static void
+action_redo (GtkWidget *widget, const char *name, GVariant *param)
+{
+	do_redo (HEX_INPUT_EDIT (widget));
+}
+
+static void
+show_context_menu (HexInputEdit *edit, double x, double y)
+{
+	HexInputEditPriv *priv = edit->priv;
+	gboolean has_sel = (priv->sel_anchor_byte >= 0 &&
+	                    priv->sel_anchor_byte != priv->cursor_byte);
+	gboolean can_undo = (priv->undo_stack && priv->undo_pos > 0);
+	gboolean can_redo = (priv->undo_stack &&
+	                     priv->undo_pos + 1 < (int) priv->undo_stack->len);
+
+	/* Update action enabled states */
+	gtk_widget_action_set_enabled (GTK_WIDGET (edit), "edit.undo", can_undo);
+	gtk_widget_action_set_enabled (GTK_WIDGET (edit), "edit.redo", can_redo);
+	gtk_widget_action_set_enabled (GTK_WIDGET (edit), "edit.cut", has_sel);
+	gtk_widget_action_set_enabled (GTK_WIDGET (edit), "edit.copy", has_sel);
+	gtk_widget_action_set_enabled (GTK_WIDGET (edit), "edit.select-all",
+	                               priv->text->len > 0);
+
+	/* Menu model */
+	GMenu *menu = g_menu_new ();
+	GMenu *section1 = g_menu_new ();
+	g_menu_append (section1, "_Undo", "edit.undo");
+	g_menu_append (section1, "_Redo", "edit.redo");
+	g_menu_append_section (menu, NULL, G_MENU_MODEL (section1));
+	g_object_unref (section1);
+
+	GMenu *section2 = g_menu_new ();
+	g_menu_append (section2, "Cu_t", "edit.cut");
+	g_menu_append (section2, "_Copy", "edit.copy");
+	g_menu_append (section2, "_Paste", "edit.paste");
+	g_menu_append_section (menu, NULL, G_MENU_MODEL (section2));
+	g_object_unref (section2);
+
+	GMenu *section3 = g_menu_new ();
+	g_menu_append (section3, "Select _All", "edit.select-all");
+	g_menu_append_section (menu, NULL, G_MENU_MODEL (section3));
+	g_object_unref (section3);
+
+	/* Popover */
+	GtkWidget *popover = gtk_popover_menu_new_from_model (G_MENU_MODEL (menu));
+	g_object_unref (menu);
+
+	gtk_widget_set_parent (popover, GTK_WIDGET (edit));
+	GdkRectangle rect = { (int) x, (int) y, 1, 1 };
+	gtk_popover_set_pointing_to (GTK_POPOVER (popover), &rect);
+	gtk_popover_set_has_arrow (GTK_POPOVER (popover), FALSE);
+
+	g_signal_connect (popover, "closed",
+	                  G_CALLBACK (popover_closed_cb), edit);
+	gtk_popover_popup (GTK_POPOVER (popover));
+}
+
 static gboolean
 key_pressed_cb (GtkEventControllerKey *controller, guint keyval,
                 guint keycode, GdkModifierType state, gpointer data)
@@ -722,129 +945,36 @@ key_pressed_cb (GtkEventControllerKey *controller, guint keyval,
 		{
 		case GDK_KEY_a:
 		case GDK_KEY_A:
-			/* Select all */
-			priv->sel_anchor_byte = 0;
-			priv->cursor_byte = (int) priv->text->len;
-			reset_blink (edit);
+			do_select_all (edit);
 			return TRUE;
 
 		case GDK_KEY_c:
 		case GDK_KEY_C:
-		{
-			/* Copy selection */
-			int sel_start, sel_end;
-			if (get_selection_bytes (priv, &sel_start, &sel_end))
-			{
-				char *sel_text = g_strndup (priv->text->str + sel_start,
-				                            sel_end - sel_start);
-				GdkClipboard *clip = gdk_display_get_clipboard (
-				    gdk_display_get_default ());
-				gdk_clipboard_set_text (clip, sel_text);
-				g_free (sel_text);
-			}
+			do_copy (edit);
 			return TRUE;
-		}
 
 		case GDK_KEY_x:
 		case GDK_KEY_X:
-		{
-			/* Cut selection */
-			int sel_start, sel_end;
-			if (get_selection_bytes (priv, &sel_start, &sel_end))
-			{
-				char *sel_text = g_strndup (priv->text->str + sel_start,
-				                            sel_end - sel_start);
-				GdkClipboard *clip = gdk_display_get_clipboard (
-				    gdk_display_get_default ());
-				gdk_clipboard_set_text (clip, sel_text);
-				g_free (sel_text);
-				delete_selection (edit);
-				reset_blink (edit);
-			}
+			do_cut (edit);
 			return TRUE;
-		}
 
 		case GDK_KEY_v:
 		case GDK_KEY_V:
-		{
-			/* Paste */
-			GdkClipboard *clip = gdk_display_get_clipboard (
-			    gdk_display_get_default ());
-			g_object_ref (edit);
-			gdk_clipboard_read_text_async (clip, NULL,
-			                               paste_text_ready_cb, edit);
+			do_paste (edit);
 			return TRUE;
-		}
 
 		case GDK_KEY_z:
 		case GDK_KEY_Z:
-		{
 			if (shift)
-				goto do_redo;
-
-			/* Undo: go back one state in the stack.
-			 * undo_pos tracks the last pushed (pre-mutation) state.
-			 * Before undoing, if the user has typed since the last push,
-			 * save the current state so redo can return to it. */
-			if (!priv->undo_stack || priv->undo_stack->len == 0)
-				return TRUE;
-
-			priv->undo_frozen = TRUE;
-
-			/* Save current state for redo if we're at the tip and
-			 * current text differs from the top of stack */
-			if (priv->undo_pos == (int) priv->undo_stack->len - 1)
-			{
-				UndoSnapshot *top = g_ptr_array_index (priv->undo_stack,
-				                                       priv->undo_pos);
-				if (strcmp (priv->text->str, top->text) != 0)
-				{
-					UndoSnapshot *cur = g_new (UndoSnapshot, 1);
-					cur->text = g_strdup (priv->text->str);
-					cur->cursor_byte = priv->cursor_byte;
-					g_ptr_array_add (priv->undo_stack, cur);
-					priv->undo_pos = (int) priv->undo_stack->len - 1;
-				}
-			}
-
-			if (priv->undo_pos > 0)
-			{
-				priv->undo_pos--;
-				UndoSnapshot *snap = g_ptr_array_index (priv->undo_stack,
-				                                        priv->undo_pos);
-				g_string_assign (priv->text, snap->text);
-				priv->cursor_byte = CLAMP (snap->cursor_byte, 0,
-				                           (int) priv->text->len);
-				priv->sel_anchor_byte = -1;
-				mark_dirty (edit);
-				reset_blink (edit);
-			}
-			priv->undo_frozen = FALSE;
+				do_redo (edit);
+			else
+				do_undo (edit);
 			return TRUE;
-		}
 
 		case GDK_KEY_y:
 		case GDK_KEY_Y:
-		do_redo:
-		{
-			/* Redo: move forward in the undo stack */
-			if (priv->undo_stack &&
-			    priv->undo_pos + 1 < (int) priv->undo_stack->len)
-			{
-				priv->undo_pos++;
-				UndoSnapshot *snap = g_ptr_array_index (priv->undo_stack,
-				                                        priv->undo_pos);
-				priv->undo_frozen = TRUE;
-				g_string_assign (priv->text, snap->text);
-				priv->cursor_byte = CLAMP (snap->cursor_byte, 0,
-				                           (int) priv->text->len);
-				priv->sel_anchor_byte = -1;
-				priv->undo_frozen = FALSE;
-				mark_dirty (edit);
-				reset_blink (edit);
-			}
+			do_redo (edit);
 			return TRUE;
-		}
 
 		case GDK_KEY_Left:
 		case GDK_KEY_KP_Left:
@@ -1161,6 +1291,15 @@ click_released_cb (GtkGestureClick *gesture, int n_press, double x, double y,
 }
 
 static void
+rclick_pressed_cb (GtkGestureClick *gesture, int n_press, double x, double y,
+                   gpointer data)
+{
+	HexInputEdit *edit = HEX_INPUT_EDIT (data);
+	gtk_widget_grab_focus (GTK_WIDGET (edit));
+	show_context_menu (edit, x, y);
+}
+
+static void
 drag_update_cb (GtkGestureDrag *gesture, double offset_x, double offset_y,
                 gpointer data)
 {
@@ -1242,7 +1381,7 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 	graphene_rect_init (&bounds, 0, 0, width, height);
 	cairo_t *cr = gtk_snapshot_append_cairo (snapshot, &bounds);
 
-	/* Background */
+	/* Background — our palette BG (theme background suppressed via CSS) */
 	gdk_cairo_set_source_rgba (cr, &pal[XTEXT_BG]);
 	cairo_rectangle (cr, 0, 0, width, height);
 	cairo_fill (cr);
@@ -1347,6 +1486,18 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 	/* Emoji sprites */
 	if (priv->emoji_cache && priv->emoji_list)
 	{
+		/* Compute selection range in stripped coords for emoji highlight */
+		int em_sel_s = -1, em_sel_e = -1;
+		int em_sel_sb, em_sel_eb;
+		if (get_selection_bytes (priv, &em_sel_sb, &em_sel_eb) &&
+		    priv->raw_to_stripped_map)
+		{
+			em_sel_s = xtext_raw_to_stripped (priv->raw_to_stripped_map,
+			                                  priv->text->len, em_sel_sb);
+			em_sel_e = xtext_raw_to_stripped (priv->raw_to_stripped_map,
+			                                  priv->text->len, em_sel_eb);
+		}
+
 		for (int ei = 0; ei < priv->emoji_count; ei++)
 		{
 			xtext_emoji_info *em = &priv->emoji_list[ei];
@@ -1369,13 +1520,17 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 			double sx = ex + (ew - sw) / 2.0;
 			double sy = ey + (eh - sh) / 2.0;
 
-			/* Clear background behind emoji to cover U+FFFC glyph */
-			gdk_cairo_set_source_rgba (cr, &pal[XTEXT_BG]);
+			/* Background behind emoji — use selection BG if within selection */
+			gboolean in_sel = (em_sel_s >= 0 &&
+			                   em->stripped_off >= em_sel_s &&
+			                   em->stripped_off < em_sel_e);
+			gdk_cairo_set_source_rgba (cr,
+				in_sel ? &pal[XTEXT_MARK_BG] : &pal[XTEXT_BG]);
 			cairo_rectangle (cr, ex, ey, ew, eh);
 			cairo_fill (cr);
 
 			cairo_set_source_surface (cr, surf, sx, sy);
-			cairo_paint (cr);
+			cairo_paint_with_alpha (cr, in_sel ? 0.6 : 1.0);
 		}
 	}
 
@@ -1531,6 +1686,32 @@ hex_input_edit_finalize (GObject *obj)
 	G_OBJECT_CLASS (hex_input_edit_parent_class)->finalize (obj);
 }
 
+static gboolean
+scroll_cb (GtkEventControllerScroll *controller, double dx, double dy,
+           gpointer data)
+{
+	HexInputEdit *edit = HEX_INPUT_EDIT (data);
+	HexInputEditPriv *priv = edit->priv;
+	int widget_h = gtk_widget_get_height (GTK_WIDGET (edit));
+	int layout_h = 0;
+
+	if (!priv->layout)
+		return FALSE;
+
+	pango_layout_get_pixel_size (priv->layout, NULL, &layout_h);
+	int content_h = widget_h - 2 * VPAD;
+	if (layout_h <= content_h)
+		return FALSE;  /* no scrolling needed */
+
+	int max_scroll = layout_h - content_h;
+	priv->scroll_y += (int)(dy * priv->line_height);
+	if (priv->scroll_y < 0) priv->scroll_y = 0;
+	if (priv->scroll_y > max_scroll) priv->scroll_y = max_scroll;
+
+	gtk_widget_queue_draw (GTK_WIDGET (edit));
+	return TRUE;
+}
+
 static void
 hex_input_edit_init (HexInputEdit *edit)
 {
@@ -1585,11 +1766,25 @@ hex_input_edit_init (HexInputEdit *edit)
 	                  G_CALLBACK (click_released_cb), edit);
 	gtk_widget_add_controller (GTK_WIDGET (edit), GTK_EVENT_CONTROLLER (click));
 
+	/* Right-click for context menu */
+	GtkGesture *rclick = gtk_gesture_click_new ();
+	gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (rclick), GDK_BUTTON_SECONDARY);
+	g_signal_connect (rclick, "pressed",
+	                  G_CALLBACK (rclick_pressed_cb), edit);
+	gtk_widget_add_controller (GTK_WIDGET (edit), GTK_EVENT_CONTROLLER (rclick));
+
 	/* Drag gesture for selection */
 	GtkGesture *drag = gtk_gesture_drag_new ();
 	g_signal_connect (drag, "drag-update",
 	                  G_CALLBACK (drag_update_cb), edit);
 	gtk_widget_add_controller (GTK_WIDGET (edit), GTK_EVENT_CONTROLLER (drag));
+
+	/* Scroll controller (mouse wheel) */
+	GtkEventController *scroll_ctrl = gtk_event_controller_scroll_new (
+		GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
+	g_signal_connect (scroll_ctrl, "scroll",
+	                  G_CALLBACK (scroll_cb), edit);
+	gtk_widget_add_controller (GTK_WIDGET (edit), scroll_ctrl);
 
 	/* Focus controller */
 	GtkEventController *focus_ctrl = gtk_event_controller_focus_new ();
@@ -1621,8 +1816,26 @@ hex_input_edit_class_init (HexInputEditClass *klass)
 	widget_class->unrealize = hex_input_edit_unrealize;
 	widget_class->get_request_mode = hex_input_edit_get_request_mode;
 
-	/* CSS node name "entry" to inherit theme border/styling */
 	gtk_widget_class_set_css_name (widget_class, "entry");
+
+	/* Widget-class actions for context menu */
+	gtk_widget_class_install_action (widget_class, "edit.undo", NULL, action_undo);
+	gtk_widget_class_install_action (widget_class, "edit.redo", NULL, action_redo);
+	gtk_widget_class_install_action (widget_class, "edit.cut", NULL, action_cut);
+	gtk_widget_class_install_action (widget_class, "edit.copy", NULL, action_copy);
+	gtk_widget_class_install_action (widget_class, "edit.paste", NULL, action_paste);
+	gtk_widget_class_install_action (widget_class, "edit.select-all", NULL, action_select_all);
+
+	/* Suppress theme background — we draw our own from the xtext palette,
+	 * but keep the theme's border, focus ring, and other entry styling. */
+	GtkCssProvider *css = gtk_css_provider_new ();
+	gtk_css_provider_load_from_string (css,
+		"entry.hex-input-edit { background: none; }");
+	gtk_style_context_add_provider_for_display (
+		gdk_display_get_default (),
+		GTK_STYLE_PROVIDER (css),
+		GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+	g_object_unref (css);
 
 	/* Signals */
 	signals[SIGNAL_ACTIVATE] = g_signal_new (
