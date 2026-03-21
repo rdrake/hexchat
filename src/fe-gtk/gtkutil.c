@@ -144,7 +144,7 @@ gtkutil_file_req_done (GtkWidget * wid, struct file_req *freq)
 
 	if (freq->flags & FRF_MULTIPLE)
 	{
-		files = cur = gtk_file_chooser_get_filenames (fs);
+		files = cur = hc_file_chooser_get_filenames (fs);
 		while (cur)
 		{
 			gtkutil_check_file (cur->data, freq);
@@ -181,7 +181,7 @@ gtkutil_file_req_done (GtkWidget * wid, struct file_req *freq)
 	}
 
 	/* this should call the "destroy" cb, where we free(freq) */
-	hc_window_destroy (freq->dialog);
+	hc_window_destroy_fn (GTK_WINDOW (freq->dialog));
 }
 
 static void
@@ -195,7 +195,7 @@ gtkutil_file_req_response (GtkWidget *dialog, gint res, struct file_req *freq)
 
 	case GTK_RESPONSE_CANCEL:
 		/* this should call the "destroy" cb, where we free(freq) */
-		hc_window_destroy (freq->dialog);
+		hc_window_destroy_fn (GTK_WINDOW (freq->dialog));
 	}
 }
 
@@ -218,8 +218,6 @@ gtkutil_file_req (GtkWindow *parent, const char *title, void *callback, void *us
 												_("_Save"), GTK_RESPONSE_ACCEPT,
 												NULL);
 
-		if (!(flags & FRF_NOASKOVERWRITE))
-			gtk_file_chooser_set_do_overwrite_confirmation (GTK_FILE_CHOOSER (dialog), TRUE);
 	}
 	else
 		dialog = gtk_file_chooser_dialog_new (title, NULL,
@@ -307,7 +305,7 @@ gtkutil_esc_destroy (GtkEventControllerKey *controller, guint keyval, guint keyc
 	(void)keycode; (void)state; (void)userdata;
 
 	if (keyval == GDK_KEY_Escape)
-		hc_widget_destroy (win);
+		hc_widget_destroy_impl (win);
 
 	return FALSE;
 }
@@ -323,7 +321,7 @@ gtkutil_destroy_on_esc (GtkWidget *win)
 void
 gtkutil_destroy (GtkWidget * igad, GtkWidget * dgad)
 {
-	hc_widget_destroy (dgad);
+	hc_widget_destroy_impl (dgad);
 }
 
 static void
@@ -341,11 +339,11 @@ gtkutil_get_str_response (GtkDialog *dialog, gint arg1, gpointer entry)
 	{
 	case GTK_RESPONSE_REJECT:
 		callback (TRUE, text, user_data);
-		hc_window_destroy (GTK_WIDGET (dialog));
+		hc_window_destroy_fn (GTK_WINDOW (dialog));
 		break;
 	case GTK_RESPONSE_ACCEPT:
 		callback (FALSE, text, user_data);
-		hc_window_destroy (GTK_WIDGET (dialog));
+		hc_window_destroy_fn (GTK_WINDOW (dialog));
 		break;
 	}
 }
@@ -388,15 +386,6 @@ fe_get_str (char *msg, char *def, void *callback, void *userdata)
 	gtk_widget_set_margin_top (content_area, 12);
 	gtk_widget_set_margin_bottom (content_area, 12);
 
-	if (userdata == (void *)1)	/* nick box is usually on the very bottom, make it centered */
-	{
-		hc_window_set_position (dialog, GTK_WIN_POS_CENTER);
-	}
-	else
-	{
-		hc_window_set_position (dialog, GTK_WIN_POS_MOUSE);
-	}
-
 	/* Input row: label + entry */
 	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
 
@@ -404,16 +393,16 @@ fe_get_str (char *msg, char *def, void *callback, void *userdata)
 	g_object_set_data (G_OBJECT (dialog), "ud", userdata);
 
 	label = gtk_label_new (msg);
-	hc_box_pack_start (hbox, label, 0, 0, 0);
+	gtk_box_append (GTK_BOX (hbox), label);
 
 	entry = gtk_entry_new ();
 	gtk_widget_set_hexpand (entry, TRUE);
 	g_signal_connect (G_OBJECT (entry), "activate",
 						 	G_CALLBACK (gtkutil_str_enter), dialog);
 	hc_entry_set_text (entry, def);
-	hc_box_pack_start (hbox, entry, 0, 0, 0);
+	gtk_box_append (GTK_BOX (hbox), entry);
 
-	hc_box_add (content_area, hbox);
+	gtk_box_append (GTK_BOX (content_area), hbox);
 
 	/* Button row */
 	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
@@ -422,18 +411,16 @@ fe_get_str (char *msg, char *def, void *callback, void *userdata)
 	button = gtk_button_new_with_mnemonic (_("_Cancel"));
 	g_signal_connect (G_OBJECT (button), "clicked",
 					  G_CALLBACK (gtkutil_str_cancel), dialog);
-	hc_box_pack_start (button_box, button, 0, 0, 0);
+	gtk_box_append (GTK_BOX (button_box), button);
 
 	button = gtk_button_new_with_mnemonic (_("_OK"));
 	g_signal_connect (G_OBJECT (button), "clicked",
 					  G_CALLBACK (gtkutil_str_enter), dialog);
-	hc_box_pack_start (button_box, button, 0, 0, 0);
+	gtk_box_append (GTK_BOX (button_box), button);
 
-	hc_box_add (content_area, button_box);
+	gtk_box_append (GTK_BOX (content_area), button_box);
 	g_signal_connect (G_OBJECT (dialog), "response",
 						   G_CALLBACK (gtkutil_get_str_response), entry);
-
-	hc_widget_show_all (dialog);
 }
 
 static void
@@ -451,11 +438,11 @@ gtkutil_get_number_response (GtkDialog *dialog, gint arg1, gpointer spin)
 	{
 	case GTK_RESPONSE_REJECT:
 		callback (TRUE, num, user_data);
-		hc_window_destroy (GTK_WIDGET (dialog));
+		hc_window_destroy_fn (GTK_WINDOW (dialog));
 		break;
 	case GTK_RESPONSE_ACCEPT:
 		callback (FALSE, num, user_data);
-		hc_window_destroy (GTK_WIDGET (dialog));
+		hc_window_destroy_fn (GTK_WINDOW (dialog));
 		break;
 	}
 }
@@ -473,11 +460,11 @@ gtkutil_get_bool_response (GtkDialog *dialog, gint arg1, gpointer spin)
 	{
 	case GTK_RESPONSE_REJECT:
 		callback (0, user_data);
-		hc_window_destroy (GTK_WIDGET (dialog));
+		hc_window_destroy_fn (GTK_WINDOW (dialog));
 		break;
 	case GTK_RESPONSE_ACCEPT:
 		callback (1, user_data);
-		hc_window_destroy (GTK_WIDGET (dialog));
+		hc_window_destroy_fn (GTK_WINDOW (dialog));
 		break;
 	}
 }
@@ -497,7 +484,6 @@ fe_get_int (char *msg, int def, void *callback, void *userdata)
 										_("_OK"), GTK_RESPONSE_ACCEPT,
 										NULL);
 	gtk_box_set_homogeneous (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), TRUE);
-	hc_window_set_position (dialog, GTK_WIN_POS_MOUSE);
 	gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (parent_window));
 
 	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
@@ -510,19 +496,16 @@ fe_get_int (char *msg, int def, void *callback, void *userdata)
 	gtk_adjustment_set_lower (adj, 0);
 	gtk_adjustment_set_upper (adj, 1024);
 	gtk_adjustment_set_step_increment (adj, 1);
-	gtk_adjustment_changed (adj);
 	gtk_spin_button_set_value ((GtkSpinButton*)spin, def);
-	hc_box_pack_end (hbox, spin, 0, 0, 0);
+	gtk_box_append (GTK_BOX (hbox), spin);
 
 	label = gtk_label_new (msg);
-	hc_box_pack_end (hbox, label, 0, 0, 0);
+	gtk_box_append (GTK_BOX (hbox), label);
 
 	g_signal_connect (G_OBJECT (dialog), "response",
 						   G_CALLBACK (gtkutil_get_number_response), spin);
 
-	hc_box_add (gtk_dialog_get_content_area (GTK_DIALOG (dialog)), hbox);
-
-	hc_widget_show_all (dialog);
+	gtk_box_append (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), hbox);
 }
 
 void
@@ -537,7 +520,6 @@ fe_get_bool (char *title, char *prompt, void *callback, void *userdata)
 		_("_Yes"), GTK_RESPONSE_ACCEPT,
 		NULL);
 	gtk_box_set_homogeneous (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), TRUE);
-	hc_window_set_position (dialog, GTK_WIN_POS_MOUSE);
 	gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (parent_window));
 
 
@@ -549,9 +531,7 @@ fe_get_bool (char *title, char *prompt, void *callback, void *userdata)
 	g_signal_connect (G_OBJECT (dialog), "response",
 		G_CALLBACK (gtkutil_get_bool_response), NULL);
 
-	hc_box_add (gtk_dialog_get_content_area (GTK_DIALOG (dialog)), prompt_label);
-
-	hc_widget_show_all (dialog);
+	gtk_box_append (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), prompt_label);
 }
 
 GtkWidget *
@@ -572,7 +552,7 @@ gtkutil_button (GtkWidget *box, char *icon, char *tip, void *callback,
 		/* Add horizontal padding inside the button */
 		gtk_widget_set_margin_start (bbox, 6);
 		gtk_widget_set_margin_end (bbox, 6);
-		hc_button_set_child (wid, bbox);
+		gtk_button_set_child (GTK_BUTTON (wid), bbox);
 
 		if (icon)
 		{
@@ -583,16 +563,16 @@ gtkutil_button (GtkWidget *box, char *icon, char *tip, void *callback,
 		label = gtk_label_new_with_mnemonic (labeltext);
 		gtk_box_append (GTK_BOX (bbox), label);
 		if (box)
-			hc_box_add (box, wid);
+			gtk_box_append (GTK_BOX (box), wid);
 	}
 	else
 	{
 		/* Icon-only button - center the icon */
 		img = hc_image_new_from_icon_name (icon, GTK_ICON_SIZE_MENU);
 		gtk_widget_set_halign (img, GTK_ALIGN_CENTER);
-		hc_button_set_child (wid, img);
+		gtk_button_set_child (GTK_BUTTON (wid), img);
 		gtk_widget_show (img);
-		hc_box_pack_start (box, wid, 0, 0, 0);
+		gtk_box_append (GTK_BOX (box), wid);
 	}
 
 	g_signal_connect (G_OBJECT (wid), "clicked",
@@ -608,7 +588,7 @@ void
 gtkutil_label_new (char *text, GtkWidget * box)
 {
 	GtkWidget *label = gtk_label_new (text);
-	hc_box_add (box, label);
+	gtk_box_append (GTK_BOX (box), label);
 	gtk_widget_show (label);
 }
 
@@ -618,7 +598,7 @@ gtkutil_entry_new (int max, GtkWidget * box, void *callback,
 {
 	GtkWidget *entry = gtk_entry_new ();
 	gtk_entry_set_max_length (GTK_ENTRY (entry), max);
-	hc_box_add (box, entry);
+	gtk_box_append (GTK_BOX (box), entry);
 	if (callback)
 		g_signal_connect (G_OBJECT (entry), "changed",
 								G_CALLBACK (callback), userdata);
@@ -682,23 +662,18 @@ gtkutil_window_new (char *title, char *role, int width, int height, int flags)
 	if (fe_get_application ())
 		gtk_window_set_application (GTK_WINDOW (win), fe_get_application ());
 	gtkutil_set_icon (win);
-#ifdef WIN32
-	gtk_window_set_wmclass (GTK_WINDOW (win), "HexChat", "hexchat");
-#endif
 	gtk_window_set_title (GTK_WINDOW (win), title);
 	gtk_window_set_default_size (GTK_WINDOW (win), width, height);
-	gtk_window_set_role (GTK_WINDOW (win), role);
-	if (flags & 1)
-		hc_window_set_position (win, GTK_WIN_POS_MOUSE);
 	if ((flags & 2) && parent_window)
 	{
-		gtk_window_set_type_hint (GTK_WINDOW (win), GDK_WINDOW_TYPE_HINT_DIALOG);
 		gtk_window_set_transient_for (GTK_WINDOW (win), GTK_WINDOW (parent_window));
 		gtk_window_set_destroy_with_parent (GTK_WINDOW (win), TRUE);
 		g_signal_connect (win, "close-request",
 		                  G_CALLBACK (gtkutil_close_request_focus_parent),
 		                  parent_window);
 	}
+
+	gtk_window_present (GTK_WINDOW (win));
 
 	return win;
 }
@@ -744,8 +719,8 @@ gtkutil_treeview_new (GtkWidget *box, GtkTreeModel *model,
 	GType type;
 	char *title, *attr;
 
-	win = hc_scrolled_window_new ();
-	hc_box_add (box, win);
+	win = gtk_scrolled_window_new ();
+	gtk_box_append (GTK_BOX (box), win);
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (win),
 											  GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 	gtk_widget_show (win);
@@ -753,7 +728,7 @@ gtkutil_treeview_new (GtkWidget *box, GtkTreeModel *model,
 	view = gtk_tree_view_new_with_model (model);
 	/* the view now has a ref on the model, we can unref it */
 	g_object_unref (G_OBJECT (model));
-	hc_scrolled_window_set_child (win, view);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (win), view);
 
 	va_start (args, mapper);
 	for (col_id = va_arg (args, int); col_id != -1; col_id = va_arg (args, int))

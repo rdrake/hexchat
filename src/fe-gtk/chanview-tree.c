@@ -464,13 +464,12 @@ cv_tree_init (chanview *cv)
 	GtkSingleSelection *sel_model;
 	treeview *tv = (treeview *)cv;
 
-	win = hc_scrolled_window_new ();
+	win = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (win),
 	                                GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_hexpand (win, TRUE);
 	gtk_widget_set_vexpand (win, TRUE);
-	hc_box_pack_start (cv->box, win, TRUE, TRUE, 0);
-	hc_widget_show (win);
+	gtk_box_append (GTK_BOX (cv->box), win);
 
 	/* Create root store for server items */
 	tv->root_store = g_list_store_new (HC_TYPE_CHAN_ITEM);
@@ -527,10 +526,9 @@ cv_tree_init (chanview *cv)
 	/* DND - drag source for layout swapping */
 	mg_setup_chanview_drag_source (view);
 
-	hc_scrolled_window_set_child (win, view);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (win), view);
 	tv->view = GTK_LIST_VIEW (view);
 	tv->scrollw = win;
-	hc_widget_show (view);
 }
 
 static void
@@ -750,7 +748,7 @@ cv_tree_cleanup (chanview *cv)
 
 	if (cv->box)
 		/* kill the scrolled window */
-		hc_widget_destroy (tv->scrollw);
+		hc_widget_destroy_impl (GTK_WIDGET (tv->scrollw));
 
 	/* Clean up GTK4 model */
 	g_clear_object (&tv->root_store);

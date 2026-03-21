@@ -576,7 +576,7 @@ servlist_deletenetwork (ircnet *net)
 static void
 servlist_deletenetdialog_cb (GtkDialog *dialog, gint arg1, ircnet *net)
 {
-	hc_window_destroy (GTK_WIDGET (dialog));
+	hc_window_destroy_fn (GTK_WINDOW (dialog));
 	if (arg1 == GTK_RESPONSE_OK)
 		servlist_deletenetwork (net);
 }
@@ -741,7 +741,7 @@ servlist_edit_close_cb (GtkWidget *button, gpointer userdata)
 	if (selected_net)
 		servlist_edit_update (selected_net);
 
-	hc_window_destroy (edit_win);
+	hc_window_destroy_fn (GTK_WINDOW (edit_win));
 	edit_win = NULL;
 
 }
@@ -817,7 +817,6 @@ servlist_deletenet_cb (GtkWidget *item, ircnet *net)
 												net->name);
 	g_signal_connect (dialog, "response",
 							G_CALLBACK (servlist_deletenetdialog_cb), net);
-	hc_window_set_position (dialog, GTK_WIN_POS_MOUSE);
 	gtk_widget_show (dialog);
 }
 
@@ -1206,7 +1205,7 @@ servlist_connect_cb (GtkWidget *button, gpointer userdata)
 
 	servlist_connect (servlist_sess, selected_net, TRUE);
 
-	hc_window_destroy (serverlist_win);
+	hc_window_destroy_fn (GTK_WINDOW (serverlist_win));
 	serverlist_win = NULL;
 	selected_net = NULL;
 }
@@ -1291,7 +1290,7 @@ servlist_create_check (int num, int state, GtkWidget *table, int row, int col, c
 	GtkWidget *but;
 
 	but = gtk_check_button_new_with_label (labeltext);
-	hc_check_button_set_active (but, state);
+	gtk_check_button_set_active (GTK_CHECK_BUTTON (but), state);
 	g_signal_connect (G_OBJECT (but), "toggled",
 							G_CALLBACK (servlist_check_cb), GINT_TO_POINTER (num));
 	gtk_widget_set_hexpand (but, TRUE);
@@ -1358,14 +1357,14 @@ servlist_close_cb (GtkWidget *button, gpointer userdata)
 	GtkWidget *win;
 
 	(void)button; (void)userdata;
-	/* hc_window_destroy uses gtk_window_destroy which does NOT fire
+	/* hc_window_destroy_fn uses gtk_window_destroy which does NOT fire
 	 * "close-request", so servlist_delete_cb wouldn't run.  Do the
 	 * cleanup and exit check here before destroying. */
 	servlist_savegui ();
 	win = serverlist_win;
 	serverlist_win = NULL;
 	selected_net = NULL;
-	hc_window_destroy (win);
+	hc_window_destroy_fn (GTK_WINDOW (win));
 
 	if (sess_list == NULL)
 		hexchat_exit ();
@@ -1803,10 +1802,6 @@ servlist_create_charsetcombo (void)
 		i++;
 	}
 
-	hc_entry_set_text (gtk_bin_get_child (GTK_BIN(cb)), selected_net->encoding ? selected_net->encoding : pages[0]);
-	
-	g_signal_connect (G_OBJECT (gtk_bin_get_child (GTK_BIN (cb))), "changed",
-							G_CALLBACK (servlist_combo_cb), NULL);
 
 	return cb;
 }
@@ -1830,7 +1825,7 @@ servlist_create_logintypecombo (GtkWidget *data)
 	gtk_combo_box_set_active (GTK_COMBO_BOX (cb), servlist_get_login_desc_index (selected_net->logintype));
 
 	gtk_widget_set_tooltip_text (cb, _("The way you identify yourself to the server. For custom login methods use connect commands."));
-	g_signal_connect (G_OBJECT (GTK_BIN (cb)), "changed", G_CALLBACK (servlist_logintypecombo_cb), data);
+	g_signal_connect (G_OBJECT (cb), "changed", G_CALLBACK (servlist_logintypecombo_cb), data);
 
 	return cb;
 }
@@ -1905,26 +1900,27 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	editwindow = gtk_window_new ();
 	if (fe_get_application ())
 		gtk_window_set_application (GTK_WINDOW (editwindow), fe_get_application ());
-	hc_container_set_border_width (editwindow, 4);
+	hc_widget_set_margin_all (editwindow, 4);
 	g_snprintf (buf, sizeof (buf), _("Edit %s - %s"), net->name, _(DISPLAY_NAME));
 	gtk_window_set_title (GTK_WINDOW (editwindow), buf);
 	gtk_window_set_default_size (GTK_WINDOW (editwindow), netedit_win_width, netedit_win_height);
 	gtk_window_set_transient_for (GTK_WINDOW (editwindow), GTK_WINDOW (parent));
 	gtk_window_set_modal (GTK_WINDOW (editwindow), TRUE);
-	gtk_window_set_type_hint (GTK_WINDOW (editwindow), GDK_WINDOW_TYPE_HINT_DIALOG);
-	gtk_window_set_role (GTK_WINDOW (editwindow), "editserv");
 
 	vbox5 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-	hc_window_set_child (editwindow, vbox5);
+	gtk_window_set_child (GTK_WINDOW (editwindow), vbox5);
 
 
 	/* Tabs and buttons */
 	hbox1 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-	hc_box_pack_start (vbox5, hbox1, TRUE, TRUE, 4);
+	gtk_widget_set_vexpand (hbox1, TRUE);
+	gtk_widget_set_margin_top (hbox1, 4);
+	gtk_widget_set_margin_bottom (hbox1, 4);
+	gtk_box_append (GTK_BOX (vbox5), hbox1);
 
-	scrolledwindow2 = hc_scrolled_window_new ();
-	scrolledwindow4 = hc_scrolled_window_new ();
-	scrolledwindow5 = hc_scrolled_window_new ();
+	scrolledwindow2 = gtk_scrolled_window_new ();
+	scrolledwindow4 = gtk_scrolled_window_new ();
+	scrolledwindow5 = gtk_scrolled_window_new ();
 
 	notebook = gtk_notebook_new ();
 	gtk_notebook_append_page (GTK_NOTEBOOK (notebook), scrolledwindow2, gtk_label_new (_("Servers")));
@@ -1937,7 +1933,7 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 		GtkWidget *oauth_grid = gtk_grid_new ();
 		gtk_grid_set_row_spacing (GTK_GRID (oauth_grid), 2);
 		gtk_grid_set_column_spacing (GTK_GRID (oauth_grid), 8);
-		hc_container_set_border_width (oauth_grid, 4);
+		hc_widget_set_margin_all (oauth_grid, 4);
 
 		edit_entry_oauth_clientid = servlist_create_entry (oauth_grid, _("Client ID:"), 0,
 			net->oauth_client_id, &edit_label_oauth_clientid,
@@ -1982,16 +1978,16 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 #endif
 
 	gtk_notebook_set_tab_pos (GTK_NOTEBOOK (notebook), GTK_POS_BOTTOM);
-	hc_box_pack_start (hbox1, notebook, TRUE, TRUE, SERVLIST_X_PADDING);
+	gtk_widget_set_hexpand (notebook, TRUE);
+	gtk_widget_set_margin_start (notebook, SERVLIST_X_PADDING);
+	gtk_widget_set_margin_end (notebook, SERVLIST_X_PADDING);
+	gtk_box_append (GTK_BOX (hbox1), notebook);
 
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolledwindow2), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolledwindow2), GTK_SHADOW_IN);
 
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolledwindow4), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolledwindow4),	GTK_SHADOW_IN);
 
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolledwindow5), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolledwindow5), GTK_SHADOW_IN);
 	gtk_widget_set_tooltip_text (scrolledwindow5, _("%n=Nick name\n%p=Password\n%r=Real name\n%u=User name"));
 
 
@@ -2004,7 +2000,7 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	g_signal_connect (G_OBJECT (gtk_tree_view_get_selection (GTK_TREE_VIEW (treeview_servers))),
 							"changed", G_CALLBACK (servlist_server_row_cb), NULL);
 	g_object_unref (model);
-	hc_scrolled_window_set_child (scrolledwindow2, treeview_servers);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow2), treeview_servers);
 	gtk_widget_set_size_request (treeview_servers, -1, 80);
 	gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (treeview_servers),
 												  FALSE);
@@ -2028,7 +2024,7 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	g_signal_connect (G_OBJECT (gtk_tree_view_get_selection (GTK_TREE_VIEW (treeview_channels))),
 							"changed", G_CALLBACK (servlist_channel_row_cb), NULL);
 	g_object_unref (model);
-	hc_scrolled_window_set_child (scrolledwindow4, treeview_channels);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow4), treeview_channels);
 	gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (treeview_channels), TRUE);
 
 	renderer = gtk_cell_renderer_text_new ();
@@ -2064,7 +2060,7 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	g_signal_connect (G_OBJECT (gtk_tree_view_get_selection (GTK_TREE_VIEW (treeview_commands))),
 							"changed", G_CALLBACK (servlist_command_row_cb), NULL);
 	g_object_unref (model);
-	hc_scrolled_window_set_child (scrolledwindow5, treeview_commands);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow5), treeview_commands);
 	gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (treeview_commands),
 												  FALSE);
 
@@ -2080,33 +2076,32 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 
 
 	/* Button Box */
-	vbuttonbox1 = hc_button_box_new (GTK_ORIENTATION_VERTICAL);
+	vbuttonbox1 = hc_button_box_new_impl (GTK_ORIENTATION_VERTICAL);
 	gtk_box_set_spacing (GTK_BOX (vbuttonbox1), 3);
-	hc_button_box_set_layout (vbuttonbox1, GTK_BUTTONBOX_START);
-	hc_box_pack_start (hbox1, vbuttonbox1, FALSE, FALSE, 3);
+	hc_button_box_set_layout_impl (vbuttonbox1, HC_BUTTONBOX_START);
+	gtk_widget_set_margin_start (vbuttonbox1, 3);
+	gtk_widget_set_margin_end (vbuttonbox1, 3);
+	gtk_box_append (GTK_BOX (hbox1), vbuttonbox1);
 
 	buttonadd = gtk_button_new_with_mnemonic (_("_Add"));
 	g_signal_connect (G_OBJECT (buttonadd), "clicked",
 							G_CALLBACK (servlist_addbutton_cb), notebook);
-	hc_box_add (vbuttonbox1, buttonadd);
-	gtk_widget_set_can_default (buttonadd, TRUE);
+	gtk_box_append (GTK_BOX (vbuttonbox1), buttonadd);
 
 	buttonremove = gtk_button_new_with_mnemonic (_("_Remove"));
 	g_signal_connect (G_OBJECT (buttonremove), "clicked",
 							G_CALLBACK (servlist_deletebutton_cb), notebook);
-	hc_box_add (vbuttonbox1, buttonremove);
-	gtk_widget_set_can_default (buttonremove, TRUE);
+	gtk_box_append (GTK_BOX (vbuttonbox1), buttonremove);
 
 	buttonedit = gtk_button_new_with_mnemonic (_("_Edit"));
 	g_signal_connect (G_OBJECT (buttonedit), "clicked",
 							G_CALLBACK (servlist_editbutton_cb), notebook);
-	hc_box_add (vbuttonbox1, buttonedit);
-	gtk_widget_set_can_default (buttonedit, TRUE);
+	gtk_box_append (GTK_BOX (vbuttonbox1), buttonedit);
 
 
 	/* Checkboxes and entries */
 	table3 = gtk_grid_new ();
-	hc_box_pack_start (vbox5, table3, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox5), table3);
 	gtk_grid_set_row_spacing (GTK_GRID (table3), 2);
 	gtk_grid_set_column_spacing (GTK_GRID (table3), 8);
 
@@ -2175,16 +2170,18 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 
 	/* Rule and Close button */
 	hseparator2 = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_box_pack_start (vbox5, hseparator2, FALSE, FALSE, 8);
+	gtk_widget_set_margin_top (hseparator2, 8);
+	gtk_widget_set_margin_bottom (hseparator2, 8);
+	gtk_box_append (GTK_BOX (vbox5), hseparator2);
 
-	hbuttonbox4 = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_box_pack_start (vbox5, hbuttonbox4, FALSE, FALSE, 0);
-	hc_button_box_set_layout (hbuttonbox4, GTK_BUTTONBOX_END);
+	hbuttonbox4 = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	gtk_box_append (GTK_BOX (vbox5), hbuttonbox4);
+	hc_button_box_set_layout_impl (hbuttonbox4, HC_BUTTONBOX_END);
 
 	button10 = gtk_button_new_with_mnemonic (_("_Close"));
 	g_signal_connect (G_OBJECT (button10), "clicked",
 							G_CALLBACK (servlist_edit_close_cb), 0);
-	hc_box_add (hbuttonbox4, button10);
+	gtk_box_append (GTK_BOX (hbuttonbox4), button10);
 
 	if (net->flags & FLAG_USE_GLOBAL)
 	{
@@ -2192,8 +2189,6 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	}
 
 	gtk_widget_grab_focus (button10);
-
-	hc_widget_show_all (editwindow);
 
 	/* We can't set the active tab without child elements being shown, so this must be *after* gtk_widget_show()s! */
 	gtk_notebook_set_current_page (GTK_NOTEBOOK (notebook), netedit_active_tab);
@@ -2247,12 +2242,10 @@ servlist_open_networks (void)
 	servlist = gtk_window_new ();
 	if (fe_get_application ())
 		gtk_window_set_application (GTK_WINDOW (servlist), fe_get_application ());
-	hc_container_set_border_width (servlist, 4);
+	hc_widget_set_margin_all (servlist, 4);
 	g_snprintf(buf, sizeof(buf), _("Network List - %s"), _(DISPLAY_NAME));
 	gtk_window_set_title (GTK_WINDOW (servlist), buf);
 	gtk_window_set_default_size (GTK_WINDOW (servlist), netlist_win_width, netlist_win_height);
-	gtk_window_set_role (GTK_WINDOW (servlist), "servlist");
-	gtk_window_set_type_hint (GTK_WINDOW (servlist), GDK_WINDOW_TYPE_HINT_DIALOG);
 	if (current_sess)
 	{
 		gtk_window_set_transient_for (GTK_WINDOW (servlist), GTK_WINDOW (current_sess->gui->window));
@@ -2270,15 +2263,15 @@ servlist_open_networks (void)
 
 	vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_show (vbox1);
-	hc_window_set_child (servlist, vbox1);
+	gtk_window_set_child (GTK_WINDOW (servlist), vbox1);
 
 	label2 = bold_label (_("User Information"));
-	hc_box_pack_start (vbox1, label2, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox1), label2);
 
 	table1 = gtk_grid_new ();
 	gtk_widget_show (table1);
-	hc_box_pack_start (vbox1, table1, FALSE, FALSE, 0);
-	hc_container_set_border_width (table1, 8);
+	gtk_box_append (GTK_BOX (vbox1), table1);
+	hc_widget_set_margin_all (table1, 8);
 	gtk_grid_set_row_spacing (GTK_GRID (table1), 2);
 	gtk_grid_set_column_spacing (GTK_GRID (table1), 4);
 
@@ -2344,27 +2337,27 @@ servlist_open_networks (void)
 
 	vbox2 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_show (vbox2);
-	hc_box_pack_start (vbox1, vbox2, TRUE, TRUE, 0);
+	gtk_widget_set_vexpand (vbox2, TRUE);
+	gtk_box_append (GTK_BOX (vbox1), vbox2);
 
 	label1 = bold_label (_("Networks"));
-	hc_box_pack_start (vbox2, label1, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox2), label1);
 
 	table4 = gtk_grid_new ();
 	gtk_widget_show (table4);
-	hc_box_pack_start (vbox2, table4, TRUE, TRUE, 0);
-	hc_container_set_border_width (table4, 8);
+	gtk_widget_set_vexpand (table4, TRUE);
+	gtk_box_append (GTK_BOX (vbox2), table4);
+	hc_widget_set_margin_all (table4, 8);
 	gtk_grid_set_row_spacing (GTK_GRID (table4), 2);
 	gtk_grid_set_column_spacing (GTK_GRID (table4), 3);
 
-	scrolledwindow3 = hc_scrolled_window_new ();
+	scrolledwindow3 = gtk_scrolled_window_new ();
 	gtk_widget_show (scrolledwindow3);
 	gtk_widget_set_hexpand (scrolledwindow3, TRUE);
 	gtk_widget_set_vexpand (scrolledwindow3, TRUE);
 	gtk_grid_attach (GTK_GRID (table4), scrolledwindow3, 0, 0, 1, 1);
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolledwindow3),
 											  GTK_POLICY_NEVER, GTK_POLICY_ALWAYS);
-	gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolledwindow3),
-													 GTK_SHADOW_IN);
 
 	store = gtk_list_store_new (3, G_TYPE_STRING, G_TYPE_BOOLEAN, G_TYPE_INT);
 	model = GTK_TREE_MODEL (store);
@@ -2372,7 +2365,7 @@ servlist_open_networks (void)
 	networks_tree = treeview_networks = gtk_tree_view_new_with_model (model);
 	g_object_unref (model);
 	gtk_widget_show (treeview_networks);
-	hc_scrolled_window_set_child (scrolledwindow3, treeview_networks);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow3), treeview_networks);
 	gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (treeview_networks),
 												  FALSE);
 
@@ -2393,25 +2386,25 @@ servlist_open_networks (void)
 
 	checkbutton_skip =
 		gtk_check_button_new_with_mnemonic (_("Skip network list on startup"));
-	hc_check_button_set_active (checkbutton_skip,
+	gtk_check_button_set_active (GTK_CHECK_BUTTON (checkbutton_skip),
 											prefs.hex_gui_slist_skip);
-	hc_box_add (hbox, checkbutton_skip);
+	gtk_box_append (GTK_BOX (hbox), checkbutton_skip);
 	g_signal_connect (G_OBJECT (checkbutton_skip), "toggled",
 							G_CALLBACK (no_servlist), 0);
 	gtk_widget_show (checkbutton_skip);
 
 	checkbutton_fav =
 		gtk_check_button_new_with_mnemonic (_("Show favorites only"));
-	hc_check_button_set_active (checkbutton_fav,
+	gtk_check_button_set_active (GTK_CHECK_BUTTON (checkbutton_fav),
 											prefs.hex_gui_slist_fav);
-	hc_box_add (hbox, checkbutton_fav);
+	gtk_box_append (GTK_BOX (hbox), checkbutton_fav);
 	g_signal_connect (G_OBJECT (checkbutton_fav), "toggled",
 							G_CALLBACK (fav_servlist), 0);
 	gtk_widget_show (checkbutton_fav);
 
-	vbuttonbox2 = hc_button_box_new (GTK_ORIENTATION_VERTICAL);
+	vbuttonbox2 = hc_button_box_new_impl (GTK_ORIENTATION_VERTICAL);
 	gtk_box_set_spacing (GTK_BOX (vbuttonbox2), 3);
-	hc_button_box_set_layout (vbuttonbox2, GTK_BUTTONBOX_START);
+	hc_button_box_set_layout_impl (vbuttonbox2, HC_BUTTONBOX_START);
 	gtk_widget_show (vbuttonbox2);
 	gtk_grid_attach (GTK_GRID (table4), vbuttonbox2, 1, 0, 1, 1);
 
@@ -2419,22 +2412,19 @@ servlist_open_networks (void)
 	g_signal_connect (G_OBJECT (button_add), "clicked",
 							G_CALLBACK (servlist_addnet_cb), networks_tree);
 	gtk_widget_show (button_add);
-	hc_box_add (vbuttonbox2, button_add);
-	gtk_widget_set_can_default (button_add, TRUE);
+	gtk_box_append (GTK_BOX (vbuttonbox2), button_add);
 
 	button_remove = gtk_button_new_with_mnemonic (_("_Remove"));
 	g_signal_connect (G_OBJECT (button_remove), "clicked",
 							G_CALLBACK (servlist_deletenet_cb), 0);
 	gtk_widget_show (button_remove);
-	hc_box_add (vbuttonbox2, button_remove);
-	gtk_widget_set_can_default (button_remove, TRUE);
+	gtk_box_append (GTK_BOX (vbuttonbox2), button_remove);
 
 	button_edit = gtk_button_new_with_mnemonic (_("_Edit..."));
 	g_signal_connect (G_OBJECT (button_edit), "clicked",
 							G_CALLBACK (servlist_edit_cb), 0);
 	gtk_widget_show (button_edit);
-	hc_box_add (vbuttonbox2, button_edit);
-	gtk_widget_set_can_default (button_edit, TRUE);
+	gtk_box_append (GTK_BOX (vbuttonbox2), button_edit);
 
 	button_sort = gtk_button_new_with_mnemonic (_("_Sort"));
 	gtk_widget_set_tooltip_text (button_sort, _("Sorts the network list in alphabetical order. "
@@ -2442,25 +2432,25 @@ servlist_open_networks (void)
 	g_signal_connect (G_OBJECT (button_sort), "clicked",
 							G_CALLBACK (servlist_sort), 0);
 	gtk_widget_show (button_sort);
-	hc_box_add (vbuttonbox2, button_sort);
-	gtk_widget_set_can_default (button_sort, TRUE);
+	gtk_box_append (GTK_BOX (vbuttonbox2), button_sort);
 
 	button_sort = gtk_button_new_with_mnemonic (_("_Favor"));
 	gtk_widget_set_tooltip_text (button_sort, _("Mark or unmark this network as a favorite."));
 	g_signal_connect (G_OBJECT (button_sort), "clicked",
 							G_CALLBACK (servlist_favor), 0);
 	gtk_widget_show (button_sort);
-	hc_box_add (vbuttonbox2, button_sort);
-	gtk_widget_set_can_default (button_sort, TRUE);
+	gtk_box_append (GTK_BOX (vbuttonbox2), button_sort);
 
 	hseparator1 = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
 	gtk_widget_show (hseparator1);
-	hc_box_pack_start (vbox1, hseparator1, FALSE, TRUE, 4);
+	gtk_widget_set_margin_top (hseparator1, 4);
+	gtk_widget_set_margin_bottom (hseparator1, 4);
+	gtk_box_append (GTK_BOX (vbox1), hseparator1);
 
-	hbuttonbox1 = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
+	hbuttonbox1 = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
 	gtk_widget_show (hbuttonbox1);
-	hc_box_pack_start (vbox1, hbuttonbox1, FALSE, TRUE, 0);
-	hc_container_set_border_width (hbuttonbox1, 8);
+	gtk_box_append (GTK_BOX (vbox1), hbuttonbox1);
+	hc_widget_set_margin_all (hbuttonbox1, 8);
 	/* GTK4: Use FILL alignment with spacer to get Close on left, Connect on right */
 	gtk_widget_set_halign (hbuttonbox1, GTK_ALIGN_FILL);
 
@@ -2468,8 +2458,7 @@ servlist_open_networks (void)
 	gtk_widget_show (button_close);
 	g_signal_connect (G_OBJECT (button_close), "clicked",
 							G_CALLBACK (servlist_close_cb), 0);
-	hc_box_add (hbuttonbox1, button_close);
-	gtk_widget_set_can_default (button_close, TRUE);
+	gtk_box_append (GTK_BOX (hbuttonbox1), button_close);
 
 	/* GTK4: Add spacer to push Connect button to the right */
 	{
@@ -2480,7 +2469,6 @@ servlist_open_networks (void)
 
 	button_connect = gtkutil_button (hbuttonbox1, "network-transmit-receive", NULL,
 												servlist_connect_cb, NULL, _("C_onnect"));
-	gtk_widget_set_can_default (button_connect, TRUE);
 
 	g_signal_connect (G_OBJECT (entry_guser), "changed", 
 					G_CALLBACK(servlist_username_changed_cb), button_connect);
@@ -2498,7 +2486,6 @@ servlist_open_networks (void)
 	/* gtk_label_set_mnemonic_widget (GTK_LABEL (label7), entry5); */
 
 	gtk_widget_grab_focus (networks_tree);
-	gtk_widget_grab_default (button_close);
 	return servlist;
 }
 

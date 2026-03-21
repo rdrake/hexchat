@@ -20,7 +20,7 @@
 #ifndef HEXCHAT_FKEYS_H
 #define HEXCHAT_FKEYS_H
 
-#include "gtk-compat.h"
+#include "gtk-helpers.h"
 
 /* These are cp'ed from history.c --AGL */
 #define STATE_SHIFT		GDK_SHIFT_MASK

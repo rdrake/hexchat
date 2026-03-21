@@ -32,7 +32,7 @@
 #include <gtk/gtk.h>
 
 /* GTK3/GTK4 compatibility layer - must be included after gtk/gtk.h */
-#include "gtk-compat.h"
+#include "gtk-helpers.h"
 
 #ifdef HAVE_GTK_MAC
 #include <gtkosxapplication.h>

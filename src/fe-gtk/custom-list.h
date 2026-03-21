@@ -20,7 +20,7 @@
 #ifndef HEXCHAT_CUSTOM_LIST_H
 #define HEXCHAT_CUSTOM_LIST_H
 
-#include "gtk-compat.h"
+#include "gtk-helpers.h"
 
 /*
  * =============================================================================

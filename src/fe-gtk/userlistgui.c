@@ -188,7 +188,7 @@ userlist_select (session *sess, char *name)
 	if (!sel_model)
 		return;
 
-	model = gtk_selection_model_get_model (sel_model);
+	model = gtk_multi_selection_get_model (GTK_MULTI_SELECTION (sel_model));
 	n_items = g_list_model_get_n_items (model);
 
 	for (i = 0; i < n_items; i++)
@@ -231,7 +231,7 @@ fe_userlist_set_selected (struct session *sess)
 		return;
 
 	/* Get the underlying model - need to check if it's the same as our store */
-	list_model = gtk_selection_model_get_model (sel_model);
+	list_model = gtk_multi_selection_get_model (GTK_MULTI_SELECTION (sel_model));
 
 	/* If we're using a sort model, we need to get the underlying store */
 	if (GTK_IS_SORT_LIST_MODEL (list_model))
@@ -741,7 +741,7 @@ userlist_selection_list_gtk4 (GtkListView *view, int *num_ret)
 	nicks = g_new (char *, num_sel + 1);
 
 	/* Get the underlying base model (not the sort model) */
-	model = gtk_selection_model_get_model (sel_model);
+	model = gtk_multi_selection_get_model (GTK_MULTI_SELECTION (sel_model));
 
 	i = 0;
 	valid = gtk_bitset_iter_init_first (&iter, selection, &position);
@@ -810,7 +810,7 @@ userlist_get_position_at_coords (GtkListView *view, double x, double y)
 	if (!sel_model)
 		return GTK_INVALID_LIST_POSITION;
 
-	model = gtk_selection_model_get_model (sel_model);
+	model = gtk_multi_selection_get_model (GTK_MULTI_SELECTION (sel_model));
 	n_items = g_list_model_get_n_items (model);
 
 	/* For a simple list view, we can estimate position based on row height.
@@ -999,15 +999,15 @@ userlist_create (GtkWidget *box)
 	GtkDropTarget *drop_target;
 	GtkSizeGroup *nick_size_group;
 
-	sw = hc_scrolled_window_new ();
+	sw = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (sw),
 											  prefs.hex_gui_ulist_show_hosts ?
 												GTK_POLICY_AUTOMATIC :
 												GTK_POLICY_NEVER,
 											  GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_hexpand (sw, TRUE);
-	hc_box_pack_start (box, sw, TRUE, TRUE, 0);
-	hc_widget_show (sw);
+	gtk_widget_set_vexpand (sw, TRUE);
+	gtk_box_append (GTK_BOX (box), sw);
 
 	/* Create size group for nick label alignment when hosts are shown */
 	nick_size_group = gtk_size_group_new (GTK_SIZE_GROUP_HORIZONTAL);
@@ -1052,8 +1052,7 @@ userlist_create (GtkWidget *box)
 	g_object_set_data_full (G_OBJECT (view), "nick-size-group",
 	                        nick_size_group, g_object_unref);
 
-	hc_scrolled_window_set_child (sw, view);
-	hc_widget_show (view);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (sw), view);
 
 	return view;
 }
@@ -1138,7 +1137,7 @@ fe_uselect (session *sess, char *word[], int do_clear, int scroll_to)
 	if (!sel_model)
 		return;
 
-	model = gtk_selection_model_get_model (sel_model);
+	model = gtk_multi_selection_get_model (GTK_MULTI_SELECTION (sel_model));
 	n_items = g_list_model_get_n_items (model);
 
 	if (do_clear)

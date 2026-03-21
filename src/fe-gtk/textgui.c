@@ -214,11 +214,11 @@ PrintTextRaw (void *xtbuf, unsigned char *text, int indent, time_t stamp)
 			break;
 		case ATTR_BEEP:
 			*text = ' ';
-			if (!beep_done) /* beeps may be slow, so only do 1 per line */
+			if (!beep_done)
 			{
 				beep_done = TRUE;
 				if (!prefs.hex_input_filter_beep)
-					gdk_beep ();
+					fe_beep (NULL);
 			}
 		default:
 			text++;
@@ -310,7 +310,7 @@ PrintTextRawPrepend (void *xtbuf, unsigned char *text, int indent, time_t stamp)
 			{
 				beep_done = TRUE;
 				if (!prefs.hex_input_filter_beep)
-					gdk_beep ();
+					fe_beep (NULL);
 			}
 		default:
 			text++;
@@ -411,7 +411,7 @@ PrintTextRawInsertSorted (void *xtbuf, unsigned char *text, int indent, time_t s
 			{
 				beep_done = TRUE;
 				if (!prefs.hex_input_filter_beep)
-					gdk_beep ();
+					fe_beep (NULL);
 			}
 		default:
 			text++;
@@ -579,7 +579,7 @@ pevent_load_cb (GtkWidget * wid, void *data)
 static void
 pevent_ok_cb (GtkWidget * wid, void *data)
 {
-	hc_window_destroy (pevent_dialog);
+	hc_window_destroy_fn (GTK_WINDOW (pevent_dialog));
 }
 
 static void
@@ -711,7 +711,7 @@ pevent_columnview_new (void)
 	GtkListItemFactory *factory;
 	GtkSelectionModel *sel_model;
 
-	scroll = hc_scrolled_window_new ();
+	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_size_request (GTK_WIDGET (scroll), -1, 250);
 	gtk_widget_set_vexpand (scroll, TRUE);
@@ -750,7 +750,7 @@ pevent_columnview_new (void)
 	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
 	g_object_unref (col);
 
-	hc_scrolled_window_set_child (scroll, view);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
 
 	/* Store the view in the scroll widget's data for later retrieval */
 	g_object_set_data (G_OBJECT (scroll), "column-view", view);
@@ -766,7 +766,7 @@ pevent_hlist_columnview_new (void)
 	GtkColumnViewColumn *col;
 	GtkListItemFactory *factory;
 
-	scroll = hc_scrolled_window_new ();
+	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_vexpand (scroll, FALSE);
 
@@ -795,7 +795,7 @@ pevent_hlist_columnview_new (void)
 	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
 	g_object_unref (col);
 
-	hc_scrolled_window_set_child (scroll, view);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
 
 	/* Store the view in the scroll widget's data for later retrieval */
 	g_object_set_data (G_OBJECT (scroll), "column-view", view);
@@ -822,7 +822,8 @@ pevent_dialog_show ()
 
 	/* Outer pane: lists on top, preview on bottom (resizable) */
 	pane = gtk_paned_new (GTK_ORIENTATION_VERTICAL);
-	hc_box_pack_start (vbox, pane, TRUE, TRUE, 0);
+	gtk_widget_set_vexpand (pane, TRUE);
+	gtk_box_append (GTK_BOX (vbox), pane);
 
 	/* Inner pane for events list and help list */
 	lists_pane = gtk_paned_new (GTK_ORIENTATION_VERTICAL);
@@ -853,18 +854,19 @@ pevent_dialog_show ()
 
 	pevent_dialog_twid = gtk_xtext_new (colors, 0);
 	gtk_widget_set_size_request (pevent_dialog_twid, -1, 100);
-	hc_box_pack_start (preview_box, pevent_dialog_twid, TRUE, TRUE, 0);
+	gtk_widget_set_hexpand (pevent_dialog_twid, TRUE);
+	gtk_box_append (GTK_BOX (preview_box), pevent_dialog_twid);
 	gtk_xtext_set_font (GTK_XTEXT (pevent_dialog_twid), prefs.hex_text_font);
 
 	/* Scrollbar connected to xtext's internal adjustment */
 	wid = gtk_scrollbar_new (GTK_ORIENTATION_VERTICAL,
 	                         GTK_XTEXT (pevent_dialog_twid)->adj);
-	hc_box_pack_start (preview_box, wid, FALSE, TRUE, 0);
+	gtk_box_append (GTK_BOX (preview_box), wid);
 
-	hbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (hbox, GTK_BUTTONBOX_SPREAD);
+	hbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (hbox, HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (hbox, 6);
-	hc_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), hbox);
 	gtkutil_button (hbox, "document-save-as", NULL, pevent_save_cb,
 						 (void *) 1, _("Save As..."));
 	gtkutil_button (hbox, "document-open", NULL, pevent_load_cb,
@@ -874,5 +876,4 @@ pevent_dialog_show ()
 	gtkutil_button (hbox, "emblem-ok", NULL, pevent_ok_cb,
 						NULL, _("OK"));
 
-	hc_widget_show_all (pevent_dialog);
 }

@@ -300,7 +300,7 @@ banlist_sensitize (banlist_info *banl)
 		/* Checkbox is not checkable.  Grey it and uncheck it. */
 		{
 			gtk_widget_set_sensitive (banl->checkboxes[i], FALSE);
-			hc_check_button_set_active (banl->checkboxes[i], FALSE);
+			gtk_check_button_set_active (GTK_CHECK_BUTTON (banl->checkboxes[i]), FALSE);
 		}
 		else
 		/* Checkbox is checkable.  Be sure it's sensitive. */
@@ -620,7 +620,7 @@ banlist_clear_cb (GtkDialog *dialog, gint response, gpointer data)
 	banlist_info *banl = data;
 	GtkSelectionModel *sel_model;
 
-	hc_window_destroy (GTK_WIDGET (dialog));
+	hc_window_destroy_fn (GTK_WINDOW (dialog));
 
 	if (response == GTK_RESPONSE_OK)
 	{
@@ -641,7 +641,6 @@ banlist_clear (GtkWidget * wid, banlist_info *banl)
 
 	g_signal_connect (G_OBJECT (dialog), "response",
 							G_CALLBACK (banlist_clear_cb), banl);
-	hc_window_set_position (dialog, GTK_WIN_POS_MOUSE);
 	gtk_widget_show (dialog);
 }
 
@@ -698,7 +697,7 @@ banlist_toggle (GtkWidget *item, gpointer data)
 	if (bit)		/* Should be gassert() */
 	{
 		banl->checked &= ~bit;
-		banl->checked |= (hc_check_button_get_active (item))? bit: 0;
+		banl->checked |= (gtk_check_button_get_active (GTK_CHECK_BUTTON (item)))? bit: 0;
 		banlist_do_refresh (banl);
 	}
 }
@@ -842,7 +841,7 @@ banlist_columnview_new (GtkWidget *box, banlist_info *banl)
 	GtkSorter *sorter;
 	GtkSelectionModel *sel_model;
 
-	scroll = hc_scrolled_window_new ();
+	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 
 	/* Create list store for ban items */
@@ -918,8 +917,9 @@ banlist_columnview_new (GtkWidget *box, banlist_info *banl)
 	/* Store references */
 	g_object_set_data (G_OBJECT (view), "store", store);
 
-	hc_scrolled_window_set_child (scroll, view);
-	hc_box_pack_start (box, scroll, TRUE, TRUE, 0);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
+	gtk_widget_set_vexpand (scroll, TRUE);
+	gtk_box_append (GTK_BOX (box), scroll);
 
 	return view;
 }
@@ -983,24 +983,23 @@ banlist_opengui (struct session *sess)
 
 	table = gtk_grid_new ();
 	gtk_grid_set_column_spacing (GTK_GRID (table), 16);
-	hc_box_pack_start (vbox, table, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), table);
 
 	for (i = 0; i < MODE_CT; i++)
 	{
 		if (!(banl->capable & 1<<i))
 			continue;
 		banl->checkboxes[i] = gtk_check_button_new_with_label (_(modes[i].name));
-		hc_check_button_set_active (banl->checkboxes[i], (banl->checked & 1<<i? TRUE: FALSE));
+		gtk_check_button_set_active (GTK_CHECK_BUTTON (banl->checkboxes[i]), (banl->checked & 1<<i? TRUE: FALSE));
 		g_signal_connect (G_OBJECT (banl->checkboxes[i]), "toggled",
 								G_CALLBACK (banlist_toggle), banl);
 		gtk_grid_attach (GTK_GRID (table), banl->checkboxes[i], i+1, 0, 1, 1);
 	}
 
-	bbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (bbox, GTK_BUTTONBOX_SPREAD);
+	bbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (GTK_WIDGET (bbox), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (bbox, 6);
-	hc_box_pack_start (vbox, bbox, FALSE, FALSE, 0);
-	hc_widget_show (bbox);
+	gtk_box_append (GTK_BOX (vbox), bbox);
 
 	banl->but_remove = gtkutil_button (bbox, "list-remove", 0, banlist_unban, banl,
 	                _("Remove"));
@@ -1013,5 +1012,5 @@ banlist_opengui (struct session *sess)
 
 	banlist_do_refresh (banl);
 
-	hc_widget_show_all (banl->window);
+	gtk_widget_set_visible (banl->window, TRUE);
 }

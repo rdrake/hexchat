@@ -203,7 +203,6 @@ fe_args (int argc, char *argv[])
 	g_option_context_set_help_enabled (context, FALSE);	/* disable stdout help as stdout is unavailable for subsystem:windows */
 #endif
 	g_option_context_add_main_entries (context, gopt_entries, GETTEXT_PACKAGE);
-	g_option_context_add_group (context, gtk_get_option_group (FALSE));
 	g_option_context_parse (context, &argc, &argv, &error);
 
 #ifdef WIN32
@@ -336,7 +335,7 @@ InputStyle *
 create_input_style (InputStyle *style)
 {
 	char buf[256];
-	char css_buf[1024];
+	char css_buf[2048];
 	const char *font_family;
 	int font_size;
 
@@ -364,8 +363,8 @@ create_input_style (InputStyle *style)
 	if (!input_css_provider)
 	{
 		input_css_provider = gtk_css_provider_new ();
-		gtk_style_context_add_provider_for_screen (
-			gdk_screen_get_default (),
+		gtk_style_context_add_provider_for_display (
+			gdk_display_get_default (),
 			GTK_STYLE_PROVIDER (input_css_provider),
 			GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 	}
@@ -376,6 +375,7 @@ create_input_style (InputStyle *style)
 		font_size = pango_font_description_get_size (style->font_desc) / PANGO_SCALE;
 
 		g_snprintf (css_buf, sizeof (css_buf),
+			/* Main input box — full theme (colors + font) */
 			"#hexchat-inputbox { "
 			"  caret-color: rgb(%d, %d, %d); "
 			"  background-color: rgb(%d, %d, %d); "
@@ -386,18 +386,52 @@ create_input_style (InputStyle *style)
 			"#hexchat-inputbox selection { "
 			"  background-color: rgb(%d, %d, %d); "
 			"  color: rgb(%d, %d, %d); "
+			"} "
+			/* All other entries and spinbuttons — colors only, no font override */
+			"entry, spinbutton { "
+			"  background-color: rgb(%d, %d, %d); "
+			"  color: rgb(%d, %d, %d); "
+			"  caret-color: rgb(%d, %d, %d); "
+			"} "
+			"entry selection, spinbutton selection { "
+			"  background-color: rgb(%d, %d, %d); "
+			"  color: rgb(%d, %d, %d); "
 			"}",
+			/* #hexchat-inputbox foreground */
 			(int)(colors[COL_FG].red * 255),
 			(int)(colors[COL_FG].green * 255),
 			(int)(colors[COL_FG].blue * 255),
+			/* #hexchat-inputbox background */
 			(int)(colors[COL_BG].red * 255),
 			(int)(colors[COL_BG].green * 255),
 			(int)(colors[COL_BG].blue * 255),
+			/* #hexchat-inputbox color */
 			(int)(colors[COL_FG].red * 255),
 			(int)(colors[COL_FG].green * 255),
 			(int)(colors[COL_FG].blue * 255),
+			/* #hexchat-inputbox font */
 			font_family ? font_family : "sans",
 			font_size > 0 ? font_size : 11,
+			/* #hexchat-inputbox selection */
+			(int)(colors[COL_MARK_BG].red * 255),
+			(int)(colors[COL_MARK_BG].green * 255),
+			(int)(colors[COL_MARK_BG].blue * 255),
+			(int)(colors[COL_MARK_FG].red * 255),
+			(int)(colors[COL_MARK_FG].green * 255),
+			(int)(colors[COL_MARK_FG].blue * 255),
+			/* generic entry/spinbutton background */
+			(int)(colors[COL_BG].red * 255),
+			(int)(colors[COL_BG].green * 255),
+			(int)(colors[COL_BG].blue * 255),
+			/* generic entry/spinbutton foreground */
+			(int)(colors[COL_FG].red * 255),
+			(int)(colors[COL_FG].green * 255),
+			(int)(colors[COL_FG].blue * 255),
+			/* generic entry/spinbutton caret */
+			(int)(colors[COL_FG].red * 255),
+			(int)(colors[COL_FG].green * 255),
+			(int)(colors[COL_FG].blue * 255),
+			/* generic entry/spinbutton selection */
 			(int)(colors[COL_MARK_BG].red * 255),
 			(int)(colors[COL_MARK_BG].green * 255),
 			(int)(colors[COL_MARK_BG].blue * 255),
@@ -425,8 +459,8 @@ apply_tree_css (void)
 	if (!tree_css_provider)
 	{
 		tree_css_provider = gtk_css_provider_new ();
-		gtk_style_context_add_provider_for_screen (
-			gdk_screen_get_default (),
+		gtk_style_context_add_provider_for_display (
+			gdk_display_get_default (),
 			GTK_STYLE_PROVIDER (tree_css_provider),
 			GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 	}
@@ -672,7 +706,7 @@ fe_idle (gpointer data)
 	plugin_add (sess, NULL, NULL, tray_plugin_init, tray_plugin_deinit, NULL, FALSE);
 
 	if (arg_minimize == 1)
-		gtk_window_iconify (GTK_WINDOW (sess->gui->window));
+		gtk_window_minimize (GTK_WINDOW (sess->gui->window));
 	else if (arg_minimize == 2)
 		tray_toggle_visibility (FALSE);
 
@@ -895,7 +929,7 @@ fe_close_window (struct session *sess)
 	if (sess->gui->is_tab)
 		mg_tab_close (sess);
 	else
-		hc_window_destroy (sess->gui->window);
+		hc_window_destroy_fn (GTK_WINDOW (sess->gui->window));
 }
 
 void
@@ -1333,9 +1367,8 @@ fe_beep (session *sess)
 										CA_PROP_APPLICATION_ICON_NAME, "hexchat", NULL);
 	}
 
-	if (ca_context_play (ca_con, 0, CA_PROP_EVENT_ID, "message-new-instant", NULL) != 0)
+	ca_context_play (ca_con, 0, CA_PROP_EVENT_ID, "message-new-instant", NULL);
 #endif
-	gdk_beep ();
 #endif
 }
 
@@ -1504,7 +1537,7 @@ fe_ctrl_gui (session *sess, fe_gui_action action, int arg)
 	case FE_GUI_COLOR:
 		fe_set_tab_color (sess, arg); break;
 	case FE_GUI_ICONIFY:
-		gtk_window_iconify (GTK_WINDOW (sess->gui->window)); break;
+		gtk_window_minimize (GTK_WINDOW (sess->gui->window)); break;
 	case FE_GUI_MENU:
 		menu_bar_toggle ();	/* toggle menubar on/off */
 		break;

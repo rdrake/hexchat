@@ -125,7 +125,7 @@ editlist_save (GtkWidget *igad, gchar *file)
 		}
 
 		close (fh);
-		hc_window_destroy (editlist_win);
+		hc_window_destroy_fn (GTK_WINDOW (editlist_win));
 		if (editlist_list == replace_list)
 		{
 			list_free (&replace_list);
@@ -243,7 +243,7 @@ editlist_add (GtkWidget *wid, gpointer userdata)
 static void
 editlist_close (GtkWidget *wid, gpointer userdata)
 {
-	hc_window_destroy (editlist_win);
+	hc_window_destroy_fn (GTK_WINDOW (editlist_win));
 	editlist_win = NULL;
 }
 
@@ -415,7 +415,7 @@ editlist_columnview_new (GtkWidget *box, char *title1, char *title2, GListStore 
 	GtkColumnViewColumn *col;
 	GtkListItemFactory *factory;
 
-	scroll = hc_scrolled_window_new ();
+	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 
 	/* Create list store for edit items */
@@ -453,8 +453,9 @@ editlist_columnview_new (GtkWidget *box, char *title1, char *title2, GListStore 
 	/* Add key controller for Shift+Up/Down row movement */
 	hc_add_key_controller (view, G_CALLBACK (editlist_keypress), NULL, NULL);
 
-	hc_scrolled_window_set_child (scroll, view);
-	hc_box_pack_start (box, scroll, TRUE, TRUE, 0);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
+	gtk_widget_set_vexpand (scroll, TRUE);
+	gtk_box_append (GTK_BOX (box), scroll);
 
 	*store_out = store;
 	return view;
@@ -487,10 +488,10 @@ editlist_gui_open (char *title1, char *title2, GSList *list, char *title, char *
 	if (help)
 		gtk_widget_set_tooltip_text (view, help);
 
-	box = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (box, GTK_BUTTONBOX_SPREAD);
+	box = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (GTK_WIDGET (box), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (box, 6);
-	hc_box_pack_start (vbox, box, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), box);
 	gtk_widget_show (box);
 
 	gtkutil_button (box, "document-new", 0, editlist_add,

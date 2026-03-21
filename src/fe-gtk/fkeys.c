@@ -562,7 +562,7 @@ key_dialog_selection_changed (GtkTreeSelection *sel, gpointer userdata)
 static void
 key_dialog_close (GtkWidget *wid, gpointer userdata)
 {
-	hc_window_destroy (key_dialog);
+	hc_window_destroy_fn (GTK_WINDOW (key_dialog));
 	key_dialog = NULL;
 }
 
@@ -675,7 +675,7 @@ key_dialog_treeview_new (GtkWidget *box)
 	GtkCellRenderer *render;
 	int i;
 
-	scroll = hc_scrolled_window_new ();
+	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 
 	store = gtk_list_store_new (N_COLUMNS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
@@ -775,8 +775,9 @@ key_dialog_treeview_new (GtkWidget *box)
 	gtk_tree_view_column_set_min_width (col, 80);
 	gtk_tree_view_column_set_resizable (col, TRUE);
 
-	hc_scrolled_window_set_child (scroll, view);
-	hc_box_pack_start (box, scroll, TRUE, TRUE, 0);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
+	gtk_widget_set_vexpand (scroll, TRUE);
+	gtk_box_append (GTK_BOX (box), scroll);
 
 	return view;
 }
@@ -831,16 +832,16 @@ key_dialog_show ()
 
 	view = key_dialog_treeview_new (vbox);
 	xtext = gtk_xtext_new (colors, 0);
-	hc_box_pack_start (vbox, xtext, FALSE, TRUE, 2);
+	gtk_box_append (GTK_BOX (vbox), xtext);
 	gtk_xtext_set_font (GTK_XTEXT (xtext), prefs.hex_text_font);
 
 	g_object_set_data (G_OBJECT (key_dialog), "view", view);
 	g_object_set_data (G_OBJECT (key_dialog), "xtext", xtext);
 
-	box = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (box, GTK_BUTTONBOX_SPREAD);
+	box = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (GTK_WIDGET (box), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (box, 6);
-	hc_box_pack_start (vbox, box, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), box);
 
 	gtkutil_button (box, "document-new", NULL, key_dialog_add,
 					NULL, _("Add"));
@@ -854,7 +855,7 @@ key_dialog_show ()
 	store = GTK_LIST_STORE (gtk_tree_view_get_model (GTK_TREE_VIEW (view)));
 	key_dialog_load (store);
 
-	hc_widget_show_all (key_dialog);
+	gtk_widget_set_visible (key_dialog, TRUE);
 }
 
 static int

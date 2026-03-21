@@ -20,7 +20,7 @@
 #ifndef HEXCHAT_USERLISTGUI_H
 #define HEXCHAT_USERLISTGUI_H
 
-#include "gtk-compat.h"
+#include "gtk-helpers.h"
 
 void userlist_set_value (GtkWidget *treeview, gfloat val);
 gfloat userlist_get_value (GtkWidget *treeview);

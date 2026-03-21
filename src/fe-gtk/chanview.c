@@ -246,7 +246,7 @@ chanview_destroy (chanview *cv)
 		cv->func_cleanup (cv);
 
 	if (cv->box)
-		hc_widget_destroy (cv->box);
+		hc_widget_destroy_impl (GTK_WIDGET (cv->box));
 
 	chanview_destroy_store (cv);
 	g_free (cv);

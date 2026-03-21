@@ -737,21 +737,21 @@ setup_create_3oggle (GtkWidget *tab, int row, const setting *set)
 	gtk_grid_attach (GTK_GRID (tab), label, 2, row, 1, 1);
 
 	wid = gtk_check_button_new ();
-	hc_check_button_set_active (wid,
+	gtk_check_button_set_active (GTK_CHECK_BUTTON (wid),
 											setup_get_int3 (&setup_prefs, offsets[0]));
 	g_signal_connect (G_OBJECT (wid), "toggled",
 							G_CALLBACK (setup_3oggle_cb), ((int *)&setup_prefs) + offsets[0]);
 	gtk_grid_attach (GTK_GRID (tab), wid, 3, row, 1, 1);
 
 	wid = gtk_check_button_new ();
-	hc_check_button_set_active (wid,
+	gtk_check_button_set_active (GTK_CHECK_BUTTON (wid),
 											setup_get_int3 (&setup_prefs, offsets[1]));
 	g_signal_connect (G_OBJECT (wid), "toggled",
 							G_CALLBACK (setup_3oggle_cb), ((int *)&setup_prefs) + offsets[1]);
 	gtk_grid_attach (GTK_GRID (tab), wid, 4, row, 1, 1);
 
 	wid = gtk_check_button_new ();
-	hc_check_button_set_active (wid,
+	gtk_check_button_set_active (GTK_CHECK_BUTTON (wid),
 											setup_get_int3 (&setup_prefs, offsets[2]));
 	g_signal_connect (G_OBJECT (wid), "toggled",
 							G_CALLBACK (setup_3oggle_cb), ((int *)&setup_prefs) + offsets[2]);
@@ -798,7 +798,7 @@ setup_create_toggleR (GtkWidget *tab, int row, const setting *set)
 	wid = gtk_check_button_new_with_label (_(set->label));
 	val = setup_get_int (&setup_prefs, set);
 	hc_debug_log ("setup_create_toggleR: %s offset=%d val=%d", set->label, set->offset, val);
-	hc_check_button_set_active (wid, val);
+	gtk_check_button_set_active (GTK_CHECK_BUTTON (wid), val);
 	g_signal_connect (G_OBJECT (wid), "toggled",
 							G_CALLBACK (setup_toggle_cb), (gpointer)set);
 	if (set->tooltip)
@@ -816,7 +816,7 @@ setup_create_toggleL (GtkWidget *tab, int row, const setting *set)
 	wid = gtk_check_button_new_with_label (_(set->label));
 	val = setup_get_int (&setup_prefs, set);
 	hc_debug_log ("setup_create_toggleL: %s offset=%d val=%d", set->label, set->offset, val);
-	hc_check_button_set_active (wid, val);
+	gtk_check_button_set_active (GTK_CHECK_BUTTON (wid), val);
 	g_signal_connect (G_OBJECT (wid), "toggled",
 							G_CALLBACK (setup_toggle_cb), (gpointer)set);
 	if (set->tooltip)
@@ -873,7 +873,7 @@ setup_create_spin (GtkWidget *table, int row, const setting *set)
 										setup_get_int (&setup_prefs, set));
 	g_signal_connect (G_OBJECT (wid), "value_changed",
 							G_CALLBACK (setup_spin_cb), (gpointer)set);
-	hc_box_pack_start (rbox, wid, 0, 0, 0);
+	gtk_box_append (GTK_BOX (rbox), wid);
 
 	if (set->list)
 	{
@@ -882,7 +882,8 @@ setup_create_spin (GtkWidget *table, int row, const setting *set)
 			label = setup_create_italic_label (text + 1);
 		else
 			label = gtk_label_new (text);
-		hc_box_pack_start (rbox, label, 0, 0, 6);
+		gtk_widget_set_margin_start (label, 6);
+		gtk_box_append (GTK_BOX (rbox), label);
 	}
 
 	return wid;
@@ -892,8 +893,7 @@ static gint
 setup_apply_trans (int *tag)
 {
 	prefs.hex_gui_transparency = setup_prefs.hex_gui_transparency;
-	gtk_window_set_opacity (GTK_WINDOW (current_sess->gui->window),
-							(prefs.hex_gui_transparency / 255.));
+	/* GTK4: gtk_window_set_opacity removed; use CSS opacity if needed */
 
 	/* mg_update_xtext (current_sess->gui->xtext); */
 	*tag = 0;
@@ -965,7 +965,7 @@ setup_menu_cb (GtkWidget *cbox, const setting *set)
 static void
 setup_radio_cb (GtkWidget *item, const setting *set)
 {
-	if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (item)))
+	if (gtk_check_button_get_active (GTK_CHECK_BUTTON (item)))
 	{
 		int n = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (item), "n"));
 		/* set the prefs.<field> */
@@ -977,9 +977,9 @@ static int
 setup_create_radio (GtkWidget *table, int row, const setting *set)
 {
 	GtkWidget *wid, *hbox;
+	GtkWidget *first_btn = NULL;
 	int i;
 	const char **text = (const char **)set->list;
-	GSList *group;
 
 	wid = gtk_label_new (_(set->label));
 	gtk_widget_set_halign (wid, GTK_ALIGN_START);
@@ -991,18 +991,20 @@ setup_create_radio (GtkWidget *table, int row, const setting *set)
 	gtk_grid_attach (GTK_GRID (table), hbox, 3, row, 1, 1);
 
 	i = 0;
-	group = NULL;
 	while (text[i])
 	{
 		if (text[i][0] != 0)
 		{
-			wid = gtk_radio_button_new_with_mnemonic (group, _(text[i]));
+			wid = gtk_check_button_new_with_mnemonic (_(text[i]));
+			if (first_btn)
+				gtk_check_button_set_group (GTK_CHECK_BUTTON (wid), GTK_CHECK_BUTTON (first_btn));
+			else
+				first_btn = wid;
 			/*if (set->tooltip)
 				gtk_widget_set_tooltip_text (wid, _(set->tooltip));*/
-			group = gtk_radio_button_get_group (GTK_RADIO_BUTTON (wid));
-			hc_box_add (hbox, wid);
+			gtk_box_append (GTK_BOX (hbox), wid);
 			if (i == setup_get_int (&setup_prefs, set))
-				gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (wid), TRUE);
+				gtk_check_button_set_active (GTK_CHECK_BUTTON (wid), TRUE);
 			g_object_set_data (G_OBJECT (wid), "n", GINT_TO_POINTER (i));
 			g_signal_connect (G_OBJECT (wid), "toggled",
 									G_CALLBACK (setup_radio_cb), (gpointer)set);
@@ -1013,75 +1015,6 @@ setup_create_radio (GtkWidget *table, int row, const setting *set)
 
 	return i;
 }
-
-/*
-static const char *id_strings[] =
-{
-	"",
-	"*",
-	"%C4*%C18%B%B",
-	"%U"
-};
-
-static void
-setup_id_menu_cb (GtkWidget *item, char *dest)
-{
-	int n = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (item), "n"));
-
-	strcpy (dest, id_strings[n]);
-}
-
-static void
-setup_create_id_menu (GtkWidget *table, char *label, int row, char *dest)
-{
-	GtkWidget *wid, *menu, *item;
-	int i, def = 0;
-	static const char *text[] =
-	{
-		("(disabled)"),
-		("A star (*)"),
-		("A red star (*)"),
-		("Underlined")
-	};
-
-	wid = gtk_label_new (label);
-	hc_misc_set_alignment (wid, 0.0, 0.5);
-	gtk_table_attach (GTK_TABLE (table), wid, 2, 3, row, row + 1,
-							GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, LABEL_INDENT, 0);
-
-	wid = gtk_option_menu_new ();
-	menu = gtk_menu_new ();
-
-	for (i = 0; i < 4; i++)
-	{
-		if (strcmp (id_strings[i], dest) == 0)
-		{
-			def = i;
-			break;
-		}
-	}
-
-	i = 0;
-	while (text[i])
-	{
-		item = gtk_menu_item_new_with_label (_(text[i]));
-		g_object_set_data (G_OBJECT (item), "n", GINT_TO_POINTER (i));
-
-		gtk_widget_show (item);
-		gtk_menu_shell_append (GTK_MENU_SHELL (menu), item);
-		g_signal_connect (G_OBJECT (item), "activate",
-								G_CALLBACK (setup_id_menu_cb), dest);
-		i++;
-	}
-
-	gtk_option_menu_set_menu (GTK_OPTION_MENU (wid), menu);
-	gtk_option_menu_set_history (GTK_OPTION_MENU (wid), def);
-
-	gtk_table_attach (GTK_TABLE (table), wid, 3, 4, row, row + 1,
-							GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 0, 0);
-}
-
-*/
 
 static void
 setup_create_menu (GtkWidget *table, int row, const setting *set)
@@ -1107,7 +1040,7 @@ setup_create_menu (GtkWidget *table, int row, const setting *set)
 							G_CALLBACK (setup_menu_cb), (gpointer)set);
 
 	box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-	hc_box_pack_start (box, cbox, 0, 0, 0);
+	gtk_box_append (GTK_BOX (box), cbox);
 	gtk_widget_set_hexpand (box, TRUE);
 	gtk_grid_attach (GTK_GRID (table), box, 3, row, 1, 1);
 }
@@ -1161,7 +1094,7 @@ setup_fontsel_response (GtkDialog *dialog, gint response_id, GtkWidget *entry)
 		}
 	}
 
-	hc_window_destroy (GTK_WIDGET (dialog));
+	hc_window_destroy_fn (GTK_WINDOW (dialog));
 	font_dialog = NULL;
 }
 
@@ -1327,7 +1260,7 @@ setup_create_frame (void)
 	GtkWidget *tab;
 
 	tab = gtk_grid_new ();
-	hc_container_set_border_width (tab, 6);
+	hc_widget_set_margin_all (tab, 6);
 	gtk_grid_set_row_spacing (GTK_GRID (tab), 2);
 	gtk_grid_set_column_spacing (GTK_GRID (tab), 3);
 
@@ -1348,7 +1281,7 @@ setup_create_page (const setting *set)
 	GtkWidget *wid = NULL, *parentwid = NULL;
 
 	tab = setup_create_frame ();
-	hc_container_set_border_width (tab, 6);
+	hc_widget_set_margin_all (tab, 6);
 
 	i = row = do_disable = 0;
 	while (set[i].type != ST_END)
@@ -1558,13 +1491,13 @@ setup_create_color_page (void)
 	int i;
 
 	box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-	hc_container_set_border_width (box, 6);
+	hc_widget_set_margin_all (box, 6);
 
 	tab = gtk_grid_new ();
-	hc_container_set_border_width (tab, 6);
+	hc_widget_set_margin_all (tab, 6);
 	gtk_grid_set_row_spacing (GTK_GRID (tab), 2);
 	gtk_grid_set_column_spacing (GTK_GRID (tab), 3);
-	hc_box_add (box, tab);
+	gtk_box_append (GTK_BOX (box), tab);
 
 	setup_create_header (tab, 0, N_("Text Colors"));
 
@@ -1802,20 +1735,18 @@ setup_create_sound_page (void)
 	GtkTreeSelection *sel;
 
 	vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-	hc_container_set_border_width (vbox1, 6);
+	hc_widget_set_margin_all (vbox1, 6);
 	gtk_widget_show (vbox1);
 
 	vbox2 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_show (vbox2);
-	hc_box_add (vbox1, vbox2);
+	gtk_box_append (GTK_BOX (vbox1), vbox2);
 
-	scrolledwindow1 = hc_scrolled_window_new ();
+	scrolledwindow1 = gtk_scrolled_window_new ();
 	gtk_widget_show (scrolledwindow1);
-	hc_box_add (vbox2, scrolledwindow1);
+	gtk_box_append (GTK_BOX (vbox2), scrolledwindow1);
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolledwindow1),
 											  GTK_POLICY_AUTOMATIC, GTK_POLICY_ALWAYS);
-	gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolledwindow1),
-													 GTK_SHADOW_IN);
 
 	sound_tree = gtk_tree_view_new ();
 	sel = gtk_tree_view_get_selection (GTK_TREE_VIEW (sound_tree));
@@ -1825,12 +1756,12 @@ setup_create_sound_page (void)
 	g_signal_connect (G_OBJECT (sel), "changed",
 							G_CALLBACK (setup_snd_row_cb), NULL);
 	gtk_widget_show (sound_tree);
-	hc_scrolled_window_set_child (scrolledwindow1, sound_tree);
-	hc_tree_view_set_rules_hint (sound_tree, TRUE);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow1), sound_tree);
 
 	table1 = gtk_grid_new ();
 	gtk_widget_show (table1);
-	hc_box_pack_start (vbox2, table1, FALSE, TRUE, 8);
+	gtk_widget_set_margin_top (table1, 8);
+	gtk_box_append (GTK_BOX (vbox2), table1);
 	gtk_grid_set_row_spacing (GTK_GRID (table1), 2);
 	gtk_grid_set_column_spacing (GTK_GRID (table1), 4);
 
@@ -1883,20 +1814,20 @@ setup_add_page (const char *title, GtkWidget *book, GtkWidget *tab)
 	gtk_widget_set_margin_end (label, 2);
 	gtk_widget_set_margin_top (label, 1);
 	gtk_widget_set_margin_bottom (label, 1);
-	hc_box_pack_start (vvbox, label, FALSE, FALSE, 2);
+	gtk_widget_set_margin_bottom (label, 2);
+	gtk_box_append (GTK_BOX (vvbox), label);
 
 	/* Settings grid should expand to fill available space */
 	gtk_widget_set_hexpand (tab, TRUE);
 	gtk_widget_set_vexpand (tab, TRUE);
-	hc_box_add (vvbox, tab);
+	gtk_box_append (GTK_BOX (vvbox), tab);
 
-	sw = GTK_SCROLLED_WINDOW(hc_scrolled_window_new ());
-	gtk_scrolled_window_set_shadow_type (sw, GTK_SHADOW_IN);
+	sw = GTK_SCROLLED_WINDOW(gtk_scrolled_window_new ());
 	gtk_scrolled_window_set_policy (sw, GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 
 	viewport = gtk_viewport_new (NULL, NULL);
-	hc_viewport_set_child (viewport, vvbox);
-	hc_scrolled_window_set_child (GTK_WIDGET (sw), viewport);
+	gtk_viewport_set_child (GTK_VIEWPORT (viewport), vvbox);
+	gtk_scrolled_window_set_child (sw, viewport);
 
 	hc_page_container_append (book, GTK_WIDGET(sw));
 }
@@ -1929,7 +1860,7 @@ static GtkWidget *
 setup_create_pages (GtkWidget *box)
 {
 	GtkWidget *book;
-	GtkWindow *win = GTK_WINDOW(gtk_widget_get_toplevel (box));
+	GtkWindow *win = GTK_WINDOW(gtk_widget_get_root (box));
 
 	book = hc_page_container_new ();
 
@@ -1969,7 +1900,7 @@ setup_create_pages (GtkWidget *box)
 	/* Page container should expand to fill available space */
 	gtk_widget_set_hexpand (book, TRUE);
 	gtk_widget_set_vexpand (book, TRUE);
-	hc_box_add (box, book);
+	gtk_box_append (GTK_BOX (box), book);
 
 	return book;
 }
@@ -2055,11 +1986,11 @@ setup_create_tree (GtkWidget *box, GtkWidget *book)
 	gtk_tree_view_expand_all (GTK_TREE_VIEW (tree));
 
 	frame = gtk_frame_new (NULL);
-	hc_frame_set_child (frame, tree);
+	gtk_frame_set_child (GTK_FRAME (frame), tree);
 	/* Tree frame expands vertically but not horizontally */
 	gtk_widget_set_vexpand (frame, TRUE);
-	hc_box_pack_start (box, frame, 0, 0, 0);
-	gtk_box_reorder_child (GTK_BOX (box), frame, 0);
+	gtk_box_append (GTK_BOX (box), frame);
+	hc_box_reorder_child (GTK_BOX (box), frame, 0);
 
 	if (sel_iter)
 	{
@@ -2297,7 +2228,7 @@ setup_ok_cb (GtkWidget *but, GtkWidget *win)
 	hc_debug_log ("setup_ok_cb: setup_prefs.hex_gui_ulist_color=%d", setup_prefs.hex_gui_ulist_color);
 	/* Set flag to prevent toggle callbacks from corrupting settings during window destruction */
 	setup_applying = TRUE;
-	hc_window_destroy (win);
+	hc_window_destroy_fn (GTK_WINDOW (win));
 	setup_apply (&setup_prefs);
 	hc_debug_log ("setup_ok_cb: after apply, prefs.hex_gui_ulist_color=%d", prefs.hex_gui_ulist_color);
 	save_config ();
@@ -2315,33 +2246,31 @@ setup_window_open (void)
 	win = gtkutil_window_new (buf, "prefs", 0, 600, 2);
 
 	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 5);
-	hc_container_set_border_width (vbox, 6);
-	hc_window_set_child (win, vbox);
+	hc_widget_set_margin_all (vbox, 6);
+	gtk_window_set_child (GTK_WINDOW (win), vbox);
 
 	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
 	/* Main content area should expand to fill available space */
 	gtk_widget_set_vexpand (hbox, TRUE);
-	hc_box_add (vbox, hbox);
+	gtk_box_append (GTK_BOX (vbox), hbox);
 
 	setup_create_tree (hbox, setup_create_pages (hbox));
 
 	/* prepare the button box */
-	hbbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (hbbox, GTK_BUTTONBOX_END);
+	hbbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (hbbox, HC_BUTTONBOX_END);
 	gtk_box_set_spacing (GTK_BOX (hbbox), 4);
-	hc_box_pack_end (vbox, hbbox, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), hbbox);
 
 	cancel_button = wid = gtk_button_new_with_mnemonic (_("_Cancel"));
 	g_signal_connect (G_OBJECT (wid), "clicked",
 							G_CALLBACK (gtkutil_destroy), win);
-	hc_box_pack_start (hbbox, wid, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (hbbox), wid);
 
 	wid = gtk_button_new_with_mnemonic (_("_OK"));
 	g_signal_connect (G_OBJECT (wid), "clicked",
 							G_CALLBACK (setup_ok_cb), win);
-	hc_box_pack_start (hbbox, wid, FALSE, FALSE, 0);
-
-	hc_widget_show_all (win);
+	gtk_box_append (GTK_BOX (hbbox), wid);
 
 	return win;
 }
@@ -2353,7 +2282,7 @@ setup_close_cb (GtkWidget *win, GtkWidget **swin)
 
 	if (font_dialog)
 	{
-		hc_window_destroy (font_dialog);
+		hc_window_destroy_fn (GTK_WINDOW (font_dialog));
 		font_dialog = NULL;
 	}
 }

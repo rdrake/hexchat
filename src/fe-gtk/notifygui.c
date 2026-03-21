@@ -212,7 +212,7 @@ notify_columnview_new (GtkWidget *box)
 	GtkListItemFactory *factory;
 	GtkSelectionModel *sel_model;
 
-	scroll = hc_scrolled_window_new ();
+	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 
 	/* Create list store for notify items */
@@ -266,8 +266,9 @@ notify_columnview_new (GtkWidget *box)
 	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
 	g_object_unref (col);
 
-	hc_scrolled_window_set_child (scroll, view);
-	hc_box_pack_start (box, scroll, TRUE, TRUE, 0);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
+	gtk_widget_set_vexpand (scroll, TRUE);
+	gtk_box_append (GTK_BOX (box), scroll);
 
 	return view;
 }
@@ -455,7 +456,7 @@ notifygui_add_cb (GtkDialog *dialog, gint response, gpointer entry)
 			notify_adduser (text, networks);
 	}
 
-	hc_window_destroy (GTK_WIDGET (dialog));
+	hc_window_destroy_fn (GTK_WINDOW (dialog));
 }
 
 static void
@@ -480,13 +481,12 @@ fe_notify_ask (char *nick, char *networks)
 										"_Cancel", GTK_RESPONSE_REJECT,
 										"_OK", GTK_RESPONSE_ACCEPT,
 										NULL);
-	hc_window_set_position (dialog, GTK_WIN_POS_MOUSE);
 
 	table = gtk_grid_new ();
-	hc_container_set_border_width (table, 12);
+	hc_widget_set_margin_all (GTK_WIDGET (table), 12);
 	gtk_grid_set_row_spacing (GTK_GRID (table), 3);
 	gtk_grid_set_column_spacing (GTK_GRID (table), 8);
-	hc_box_add (gtk_dialog_get_content_area (GTK_DIALOG (dialog)), table);
+	gtk_box_append (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), table);
 
 	label = gtk_label_new (msg);
 	gtk_grid_attach (GTK_GRID (table), label, 0, 0, 1, 1);
@@ -517,7 +517,7 @@ fe_notify_ask (char *nick, char *networks)
 	gtk_label_set_markup (GTK_LABEL (label), buf);
 	gtk_grid_attach (GTK_GRID (table), label, 1, 3, 1, 1);
 
-	hc_widget_show_all (dialog);
+	gtk_widget_set_visible (dialog, TRUE);
 }
 
 static void
@@ -548,11 +548,10 @@ notify_opengui (void)
 	view = notify_columnview_new (vbox);
 	g_object_set_data (G_OBJECT (notify_window), "view", view);
   
-	bbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (bbox, GTK_BUTTONBOX_SPREAD);
+	bbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (GTK_WIDGET (bbox), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (bbox, 6);
-	hc_box_pack_start (vbox, bbox, FALSE, FALSE, 0);
-	gtk_widget_show (bbox);
+	gtk_box_append (GTK_BOX (vbox), bbox);
 
 	gtkutil_button (bbox, "document-new", 0, notify_add_clicked, 0,
 	                _("Add..."));

@@ -59,8 +59,55 @@ pixmap_load_from_file_real (char *file)
 	if (!img)
 		return NULL;
 
-	/* Convert GdkPixbuf to cairo_surface_t */
-	surface = gdk_cairo_surface_create_from_pixbuf (img, 1, NULL);
+	/* Convert GdkPixbuf to cairo_surface_t (GTK4 removed gdk_cairo_surface_create_from_pixbuf) */
+	{
+		int width = gdk_pixbuf_get_width (img);
+		int height = gdk_pixbuf_get_height (img);
+		int rowstride = gdk_pixbuf_get_rowstride (img);
+		gboolean has_alpha = gdk_pixbuf_get_has_alpha (img);
+		const guchar *pixels = gdk_pixbuf_get_pixels (img);
+		int cairo_stride;
+		guchar *cairo_data;
+		int x, y;
+
+		surface = cairo_image_surface_create (
+			has_alpha ? CAIRO_FORMAT_ARGB32 : CAIRO_FORMAT_RGB24,
+			width, height);
+		cairo_stride = cairo_image_surface_get_stride (surface);
+		cairo_data = cairo_image_surface_get_data (surface);
+
+		cairo_surface_flush (surface);
+		for (y = 0; y < height; y++)
+		{
+			const guchar *src_row = pixels + y * rowstride;
+			guint32 *dst_row = (guint32 *)(cairo_data + y * cairo_stride);
+
+			for (x = 0; x < width; x++)
+			{
+				guchar r = src_row[x * (has_alpha ? 4 : 3) + 0];
+				guchar g = src_row[x * (has_alpha ? 4 : 3) + 1];
+				guchar b = src_row[x * (has_alpha ? 4 : 3) + 2];
+
+				if (has_alpha)
+				{
+					guchar a = src_row[x * 4 + 3];
+					/* cairo ARGB32 is premultiplied */
+					dst_row[x] = ((guint32)a << 24) |
+					             ((guint32)((r * a + 127) / 255) << 16) |
+					             ((guint32)((g * a + 127) / 255) << 8) |
+					             ((guint32)((b * a + 127) / 255));
+				}
+				else
+				{
+					dst_row[x] = (0xFFu << 24) |
+					             ((guint32)r << 16) |
+					             ((guint32)g << 8) |
+					             ((guint32)b);
+				}
+			}
+		}
+		cairo_surface_mark_dirty (surface);
+	}
 	g_object_unref (img);
 
 	return surface;

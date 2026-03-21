@@ -49,7 +49,7 @@
 #include "xtext.h"
 #include "xtext-emoji.h"
 #include "fkeys.h"
-#include "gtk-compat.h"
+#include "gtk-helpers.h"
 
 #define charlen(str) g_utf8_skip[*(guchar *)(str)]
 
@@ -626,9 +626,6 @@ gtk_xtext_adjustment_set (xtext_buffer *buf, int fire_signal)
 			value = 0;
 
 		gtk_adjustment_configure (adj, value, 0, upper, 1, page_size, page_size);
-
-		if (fire_signal)
-			gtk_adjustment_changed (adj);
 	}
 }
 
@@ -1253,7 +1250,7 @@ gtk_xtext_draw_marker (GtkXText * xtext, textentry * ent, int y)
 	cairo_line_to (xtext->cr, x + width, render_y + 0.5);
 	cairo_stroke (xtext->cr);
 
-	if (gtk_window_has_toplevel_focus (GTK_WINDOW (gtk_widget_get_toplevel (GTK_WIDGET (xtext)))))
+	if (gtk_window_is_active (GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (xtext)))))
 	{
 		xtext->buffer->marker_seen = TRUE;
 	}
@@ -2064,7 +2061,6 @@ gtk_xtext_motion_notify (GtkEventControllerMotion *controller, double event_x, d
 	if (xtext->button_down)
 	{
 		redraw = gtk_xtext_check_mark_stamp (xtext, mask);
-		gtk_grab_add (widget);
 		xtext->select_end_x = x;
 		xtext->select_end_y = y;
 		gtk_xtext_selection_update (xtext, NULL, y, !redraw);
@@ -2258,8 +2254,6 @@ gtk_xtext_button_release (GtkGestureClick *gesture, int n_press, double x, doubl
 			g_source_remove (xtext->scroll_tag);
 			xtext->scroll_tag = 0;
 		}
-
-		gtk_grab_remove (widget);
 
 		/* got a new selection? */
 		if (xtext->buffer->last_ent_start_id)
@@ -5386,7 +5380,7 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	if (!buf->server_read_marker &&
 	    (buf->marker_pos_id == 0 || buf->marker_seen) &&
 	    (buf->xtext->buffer != buf ||
-	     !gtk_window_has_toplevel_focus (GTK_WINDOW (gtk_widget_get_toplevel (GTK_WIDGET (buf->xtext))))))
+	     !gtk_window_is_active (GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (buf->xtext))))))
 	{
 		buf->marker_pos_id = ent->entry_id;
 		buf->marker_state = MARKER_IS_SET;
@@ -6415,7 +6409,6 @@ gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 
 		/* GTK3: Queue a redraw instead of rendering directly */
 		gtk_widget_queue_draw (GTK_WIDGET (xtext));
-		gtk_adjustment_changed (xtext->adj);
 	}
 }
 

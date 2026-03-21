@@ -292,7 +292,7 @@ ignore_columnview_new (GtkWidget *box, GListStore **store_out)
 	GtkColumnViewColumn *col;
 	GtkListItemFactory *factory;
 
-	scroll = hc_scrolled_window_new ();
+	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 
 	/* Create list store for ignore items */
@@ -378,8 +378,9 @@ ignore_columnview_new (GtkWidget *box, GListStore **store_out)
 	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
 	g_object_unref (col);
 
-	hc_scrolled_window_set_child (scroll, view);
-	hc_box_pack_start (box, scroll, TRUE, TRUE, 0);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
+	gtk_widget_set_vexpand (scroll, TRUE);
+	gtk_box_append (GTK_BOX (box), scroll);
 
 	*store_out = store;
 	return view;
@@ -455,7 +456,7 @@ ignore_clear_cb (GtkDialog *dialog, gint response)
 	guint i, n_items;
 	HcIgnoreItem *item;
 
-	hc_window_destroy (GTK_WIDGET (dialog));
+	hc_window_destroy_fn (GTK_WINDOW (dialog));
 
 	if (response == GTK_RESPONSE_OK)
 	{
@@ -489,7 +490,6 @@ ignore_clear_entry_clicked (GtkWidget * wid)
 					_("Are you sure you want to remove all ignores?"));
 	g_signal_connect (G_OBJECT (dialog), "response",
 							G_CALLBACK (ignore_clear_cb), NULL);
-	hc_window_set_position (dialog, GTK_WIN_POS_MOUSE);
 	gtk_widget_show (dialog);
 }
 
@@ -558,8 +558,8 @@ ignore_gui_open ()
 	gtk_widget_show (frame);
 
 	stat_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
-	hc_container_set_border_width (stat_box, 6);
-	hc_frame_set_child (frame, stat_box);
+	hc_widget_set_margin_all (GTK_WIDGET (stat_box), 6);
+	gtk_frame_set_child (GTK_FRAME (frame), stat_box);
 	gtk_widget_show (stat_box);
 
 	num_chan = ignore_stats_entry (stat_box, _("Channel:"), ignored_chan);
@@ -568,13 +568,12 @@ ignore_gui_open ()
 	num_ctcp = ignore_stats_entry (stat_box, _("CTCP:"), ignored_ctcp);
 	num_invi = ignore_stats_entry (stat_box, _("Invite:"), ignored_invi);
 
-	hc_box_pack_start (vbox, frame, 0, 0, 5);
+	gtk_box_append (GTK_BOX (vbox), frame);
 
-	box = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (box, GTK_BUTTONBOX_SPREAD);
+	box = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (GTK_WIDGET (box), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (box, 6);
-	hc_box_pack_start (vbox, box, FALSE, FALSE, 0);
-	gtk_widget_show (box);
+	gtk_box_append (GTK_BOX (vbox), box);
 
 	gtkutil_button (box, "document-new", 0, ignore_new_entry_clicked, 0,
 						 _("Add..."));

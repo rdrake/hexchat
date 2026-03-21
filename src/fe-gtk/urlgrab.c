@@ -86,7 +86,7 @@ url_listview_activate_cb (GtkListView *view, guint position, gpointer user_data)
 	GtkStringObject *str_obj;
 
 	sel_model = gtk_list_view_get_model (view);
-	str_obj = g_list_model_get_item (G_LIST_MODEL (gtk_selection_model_get_model (sel_model)), position);
+	str_obj = g_list_model_get_item (G_LIST_MODEL (gtk_single_selection_get_model (GTK_SINGLE_SELECTION (sel_model))), position);
 	if (str_obj)
 	{
 		fe_open_url (gtk_string_object_get_string (str_obj));
@@ -141,11 +141,12 @@ url_listview_new (GtkWidget *box)
 	gtk_widget_add_controller (view, GTK_EVENT_CONTROLLER (gesture));
 
 	/* Wrap in scrolled window */
-	scrolled = hc_scrolled_window_new ();
+	scrolled = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolled),
 	                                GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-	hc_scrolled_window_set_child (scrolled, view);
-	hc_box_pack_start (box, scrolled, TRUE, TRUE, 0);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolled), view);
+	gtk_widget_set_vexpand (scrolled, TRUE);
+	gtk_box_append (GTK_BOX (box), scrolled);
 
 	/* Store model reference on window for later access */
 	g_object_set_data (G_OBJECT (scrolled), "url-view", view);
@@ -263,10 +264,10 @@ url_opengui ()
 	g_object_set_data (G_OBJECT (urlgrabberwindow), "model", store);
 	g_object_set_data (G_OBJECT (urlgrabberwindow), "view", view);
 
-	hbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (hbox, GTK_BUTTONBOX_SPREAD);
+	hbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (GTK_WIDGET (hbox), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (hbox, 6);
-	hc_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), hbox);
 	gtk_widget_show (hbox);
 
 	gtkutil_button (hbox, "edit-clear",

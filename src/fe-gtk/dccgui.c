@@ -1128,7 +1128,7 @@ dcc_file_columnview_new (GtkWidget *vbox)
 	GtkColumnViewColumn *col;
 	GtkListItemFactory *factory;
 
-	scroll = hc_scrolled_window_new ();
+	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_vexpand (scroll, TRUE);
 
@@ -1226,8 +1226,9 @@ dcc_file_columnview_new (GtkWidget *vbox)
 	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
 	g_object_unref (col);
 
-	hc_scrolled_window_set_child (scroll, view);
-	hc_box_pack_start (vbox, scroll, TRUE, TRUE, 0);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
+	gtk_widget_set_vexpand (scroll, TRUE);
+	gtk_box_append (GTK_BOX (vbox), scroll);
 
 	/* Connect selection changed signal */
 	g_signal_connect (dccfwin.sel_model, "selection-changed",
@@ -1274,7 +1275,7 @@ fe_dcc_open_recv_win (int passive)
 
 	table = gtk_grid_new ();
 	gtk_grid_set_column_spacing (GTK_GRID (table), 16);
-	hc_box_pack_start (vbox, table, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), table);
 
 	/* GTK4: Use GtkCheckButton with groups */
 	check = gtk_check_button_new_with_mnemonic (_("Both"));
@@ -1312,10 +1313,10 @@ fe_dcc_open_recv_win (int passive)
 	dccfwin.file_label = dcc_detail_label (_("File:"), detailbox, 0);
 	dccfwin.address_label = dcc_detail_label (_("Address:"), detailbox, 1);
 
-	bbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (bbox, GTK_BUTTONBOX_SPREAD);
+	bbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (GTK_WIDGET (bbox), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (bbox, 6);
-	hc_box_pack_start (vbox, bbox, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), bbox);
 
 	dccfwin.abort_button = gtkutil_button (bbox, "process-stop", 0, abort_clicked, 0, _("Abort"));
 	dccfwin.accept_button = gtkutil_button (bbox, "emblem-default", 0, accept_clicked, 0, _("Accept"));
@@ -1327,8 +1328,7 @@ fe_dcc_open_recv_win (int passive)
 	gtk_widget_set_sensitive (dccfwin.abort_button, FALSE);
 
 	dcc_fill_window (3);
-	hc_widget_show_all (dccfwin.window);
-	hc_widget_hide (detailbox);
+	gtk_widget_set_visible (detailbox, FALSE);
 
 	return FALSE;
 }
@@ -1564,7 +1564,7 @@ dcc_chat_columnview_new (GtkWidget *vbox)
 	GtkColumnViewColumn *col;
 	GtkListItemFactory *factory;
 
-	scroll = hc_scrolled_window_new ();
+	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_vexpand (scroll, TRUE);
 
@@ -1625,8 +1625,9 @@ dcc_chat_columnview_new (GtkWidget *vbox)
 	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
 	g_object_unref (col);
 
-	hc_scrolled_window_set_child (scroll, view);
-	hc_box_pack_start (vbox, scroll, TRUE, TRUE, 0);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
+	gtk_widget_set_vexpand (scroll, TRUE);
+	gtk_box_append (GTK_BOX (vbox), scroll);
 
 	/* Connect selection changed signal */
 	g_signal_connect (dcccwin.sel_model, "selection-changed",
@@ -1662,10 +1663,10 @@ fe_dcc_open_chat_win (int passive)
 	view = dcc_chat_columnview_new (vbox);
 	dcccwin.list = view;
 
-	bbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (bbox, GTK_BUTTONBOX_SPREAD);
+	bbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (GTK_WIDGET (bbox), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (bbox, 6);
-	hc_box_pack_start (vbox, bbox, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), bbox);
 
 	dcccwin.abort_button = gtkutil_button (bbox, "process-stop", 0, abort_chat_clicked, 0, _("Abort"));
 	dcccwin.accept_button = gtkutil_button (bbox, "emblem-default", 0, accept_chat_clicked, 0, _("Accept"));
@@ -1673,7 +1674,6 @@ fe_dcc_open_chat_win (int passive)
 	gtk_widget_set_sensitive (dcccwin.abort_button, FALSE);
 
 	dcc_chat_fill_win ();
-	hc_widget_show_all (dcccwin.window);
 
 	return FALSE;
 }

@@ -117,20 +117,20 @@ open_rawlog (struct server *serv)
 							 640, 320, &vbox, serv);
 	gtkutil_destroy_on_esc (serv->gui->rawlog_window);
 
-	scrolledwindow = hc_scrolled_window_new ();
+	scrolledwindow = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolledwindow), GTK_POLICY_NEVER, GTK_POLICY_ALWAYS);
-	gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolledwindow), GTK_SHADOW_IN);
-	hc_box_pack_start (vbox, scrolledwindow, TRUE, TRUE, 0);
+	gtk_widget_set_vexpand (scrolledwindow, TRUE);
+	gtk_box_append (GTK_BOX (vbox), scrolledwindow);
 
 	serv->gui->rawlog_textlist = gtk_xtext_new (colors, 0);
-	hc_scrolled_window_set_child (scrolledwindow, serv->gui->rawlog_textlist);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow), serv->gui->rawlog_textlist);
 	gtk_xtext_set_font (GTK_XTEXT (serv->gui->rawlog_textlist), prefs.hex_text_font);
 	GTK_XTEXT (serv->gui->rawlog_textlist)->ignore_hidden = 1;
 
-	bbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (bbox, GTK_BUTTONBOX_SPREAD);
+	bbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (GTK_WIDGET (bbox), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (bbox, 6);
-	hc_box_pack_start (vbox, bbox, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), bbox);
 
 	gtkutil_button (bbox, "edit-clear", NULL, rawlog_clearbutton,
 						 serv, _("Clear Raw Log"));
@@ -141,7 +141,7 @@ open_rawlog (struct server *serv)
 	/* Copy selection to clipboard when Ctrl+Shift+C is pressed AND text auto-copy is disabled */
 	hc_add_key_controller (serv->gui->rawlog_window, G_CALLBACK (rawlog_key_cb), NULL, serv->gui->rawlog_textlist);
 
-	hc_widget_show_all (serv->gui->rawlog_window);
+	gtk_widget_set_visible (serv->gui->rawlog_window, TRUE);
 }
 
 void

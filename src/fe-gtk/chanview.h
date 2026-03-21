@@ -20,7 +20,7 @@
 #ifndef HEXCHAT_CHANVIEW_H
 #define HEXCHAT_CHANVIEW_H
 
-#include "gtk-compat.h"
+#include "gtk-helpers.h"
 
 typedef struct _chanview chanview;
 typedef struct _chan chan;

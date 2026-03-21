@@ -21,7 +21,7 @@
 #define HEXCHAT_XTEXT_H
 
 #include <gtk/gtk.h>
-#include "gtk-compat.h"
+#include "gtk-helpers.h"
 #include "xtext-render.h"   /* ATTR_*, XTEXT_*, format span types, rendering functions */
 
 #define GTK_TYPE_XTEXT              (gtk_xtext_get_type ())

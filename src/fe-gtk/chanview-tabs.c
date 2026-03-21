@@ -80,7 +80,7 @@ cv_tabs_check_overflow (chanview *cv)
 		/* In GTK4, use the viewport's adjustment which tracks content vs visible size.
 		 * upper = total content size, page_size = visible area size */
 		{
-			GtkAdjustment *adj = gtk_viewport_get_vadjustment (GTK_VIEWPORT (viewport));
+			GtkAdjustment *adj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (viewport));
 			viewport_size = (gint)gtk_adjustment_get_page_size (adj);
 			content_size = (gint)gtk_adjustment_get_upper (adj);
 		}
@@ -89,7 +89,7 @@ cv_tabs_check_overflow (chanview *cv)
 		/* In GTK4, use the viewport's adjustment which tracks content vs visible size.
 		 * upper = total content size, page_size = visible area size */
 		{
-			GtkAdjustment *adj = gtk_viewport_get_hadjustment (GTK_VIEWPORT (viewport));
+			GtkAdjustment *adj = gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
 			viewport_size = (gint)gtk_adjustment_get_page_size (adj);
 			content_size = (gint)gtk_adjustment_get_upper (adj);
 		}
@@ -97,12 +97,12 @@ cv_tabs_check_overflow (chanview *cv)
 
 	if (content_size <= viewport_size)
 	{
-		hc_widget_hide (((tabview *)cv)->b1);
-		hc_widget_hide (((tabview *)cv)->b2);
+		gtk_widget_set_visible (((tabview *)cv)->b1, FALSE);
+		gtk_widget_set_visible (((tabview *)cv)->b2, FALSE);
 	} else
 	{
-		hc_widget_show (((tabview *)cv)->b1);
-		hc_widget_show (((tabview *)cv)->b2);
+		gtk_widget_set_visible (((tabview *)cv)->b1, TRUE);
+		gtk_widget_set_visible (((tabview *)cv)->b2, TRUE);
 	}
 }
 
@@ -213,12 +213,12 @@ tab_scroll_left_up_clicked (GtkWidget *widget, chanview *cv)
 
 	if (cv->vertical)
 	{
-		adj = gtk_viewport_get_vadjustment (GTK_VIEWPORT (viewport));
+		adj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (viewport));
 		/* In GTK4, use adjustment page_size for visible size */
 		viewport_size = (gint)gtk_adjustment_get_page_size (adj);
 	} else
 	{
-		adj = gtk_viewport_get_hadjustment (GTK_VIEWPORT (viewport));
+		adj = gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
 		/* In GTK4, use adjustment page_size for visible size */
 		viewport_size = (gint)gtk_adjustment_get_page_size (adj);
 	}
@@ -264,12 +264,12 @@ tab_scroll_right_down_clicked (GtkWidget *widget, chanview *cv)
 
 	if (cv->vertical)
 	{
-		adj = gtk_viewport_get_vadjustment (GTK_VIEWPORT (viewport));
+		adj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (viewport));
 		/* In GTK4, use adjustment page_size for visible size */
 		viewport_size = (gint)gtk_adjustment_get_page_size (adj);
 	} else
 	{
-		adj = gtk_viewport_get_hadjustment (GTK_VIEWPORT (viewport));
+		adj = gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
 		/* In GTK4, use adjustment page_size for visible size */
 		viewport_size = (gint)gtk_adjustment_get_page_size (adj);
 	}
@@ -388,8 +388,7 @@ cv_tabs_init (chanview *cv)
 	else
 		outer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	((tabview *)cv)->outer = outer;
-/*	hc_container_set_border_width (outer, 2);*/
-	hc_widget_show (outer);
+/*	hc_widget_set_margin_all (GTK_WIDGET (outer), 2);*/
 
 	{
 		/* GTK4: Wrap viewport in a GtkScrolledWindow with EXTERNAL scroll policy.
@@ -409,7 +408,7 @@ cv_tabs_init (chanview *cv)
 
 		viewport = gtk_viewport_new (NULL, NULL);
 		gtk_viewport_set_scroll_to_focus (GTK_VIEWPORT (viewport), FALSE);
-		hc_scrolled_window_set_child (scrollw, viewport);
+		gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrollw), viewport);
 		hc_add_scroll_controller (scrollw, G_CALLBACK (tab_scroll_cb), cv);
 
 		/* Connect to adjustment "changed" signal to detect when content size changes.
@@ -420,9 +419,7 @@ cv_tabs_init (chanview *cv)
 		g_signal_connect (G_OBJECT (adj), "changed",
 								G_CALLBACK (cv_tabs_adj_changed), cv);
 
-		hc_box_pack_start (outer, scrollw, TRUE, TRUE, 0);
-		hc_widget_show (scrollw);
-		hc_widget_show (viewport);
+		hc_box_pack_start_impl (GTK_BOX (outer), scrollw, TRUE);
 	}
 
 	if (cv->vertical)
@@ -435,14 +432,12 @@ cv_tabs_init (chanview *cv)
 	 * The adjustment "changed" signal may not fire immediately when content changes. */
 	g_signal_connect (G_OBJECT (box), "size_allocate",
 							G_CALLBACK (cv_tabs_sizealloc), cv);
-	hc_widget_show (box);
 
 	/* if vertical, the buttons can be side by side */
 	if (cv->vertical)
 	{
 		hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-		hc_box_pack_start (outer, hbox, FALSE, FALSE, 0);
-		hc_widget_show (hbox);
+		gtk_box_append (GTK_BOX (outer), hbox);
 	}
 
 	/* make the Scroll buttons */
@@ -461,25 +456,25 @@ cv_tabs_init (chanview *cv)
 		/* When vertical, expand scroll buttons horizontally */
 		gtk_widget_set_hexpand (((tabview *)cv)->b2, TRUE);
 		gtk_widget_set_hexpand (((tabview *)cv)->b1, TRUE);
-		hc_box_pack_start (hbox, ((tabview *)cv)->b2, FALSE, FALSE, 0);
-		hc_box_pack_start (hbox, ((tabview *)cv)->b1, FALSE, FALSE, 0);
+		gtk_box_append (GTK_BOX (hbox), ((tabview *)cv)->b2);
+		gtk_box_append (GTK_BOX (hbox), ((tabview *)cv)->b1);
 	} else
 	{
-		hc_box_pack_start (outer, ((tabview *)cv)->b2, FALSE, FALSE, 0);
-		hc_box_pack_start (outer, ((tabview *)cv)->b1, FALSE, FALSE, 0);
+		gtk_box_append (GTK_BOX (outer), ((tabview *)cv)->b2);
+		gtk_box_append (GTK_BOX (outer), ((tabview *)cv)->b1);
 	}
 
 	/* Start with scroll buttons hidden - cv_tabs_sizealloc will show them if needed.
 	 * In GTK4 widgets are visible by default, so we must explicitly hide them. */
-	hc_widget_hide (((tabview *)cv)->b1);
-	hc_widget_hide (((tabview *)cv)->b2);
+	gtk_widget_set_visible (((tabview *)cv)->b1, FALSE);
+	gtk_widget_set_visible (((tabview *)cv)->b2, FALSE);
 
 	button = gtkutil_button (outer, "window-close", NULL, cv_tabs_xclick_cb,
 									 cv, 0);
 	gtk_button_set_has_frame (GTK_BUTTON (button), FALSE);
 	gtk_widget_set_can_focus (button, FALSE);
 
-	hc_box_pack_start (cv->box, outer, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (cv->box), outer);
 }
 
 static void
@@ -497,8 +492,7 @@ tab_add_sorted (chanview *cv, GtkWidget *box, GtkWidget *tab, chan *ch)
 
 	if (!cv->sorted)
 	{
-		hc_box_pack_start (box, tab, 0, 0, 0);
-		gtk_widget_show (tab);
+		gtk_box_append (GTK_BOX (box), tab);
 		return;
 	}
 
@@ -520,9 +514,8 @@ tab_add_sorted (chanview *cv, GtkWidget *box, GtkWidget *tab, chan *ch)
 			{
 				/* Insert before this child (at position i).
 				 * The new tab should come before the existing tab. */
-				hc_box_pack_start (box, tab, 0, 0, 0);
-				gtk_box_reorder_child (GTK_BOX (box), tab, i);
-				gtk_widget_show (tab);
+				gtk_box_append (GTK_BOX (box), tab);
+				hc_box_reorder_child (GTK_BOX (box), tab, i);
 				g_list_free (head);
 				return;
 			}
@@ -534,9 +527,7 @@ tab_add_sorted (chanview *cv, GtkWidget *box, GtkWidget *tab, chan *ch)
 	g_list_free (head);
 
 	/* append at end */
-	hc_box_pack_start (box, tab, 0, 0, 0);
-	/* No reorder needed - pack_start appends to end */
-	gtk_widget_show (tab);
+	gtk_box_append (GTK_BOX (box), tab);
 }
 
 /* remove empty boxes and separators */
@@ -571,7 +562,7 @@ cv_tabs_prune (chanview *cv)
 		}
 
 		if (empty)
-			hc_widget_destroy (box);
+			hc_widget_destroy_impl (GTK_WIDGET (box));
 	}
 }
 
@@ -614,7 +605,7 @@ tab_add_real (chanview *cv, GtkWidget *tab, chan *ch)
 		}
 
 		if (empty)
-			hc_widget_destroy (box);
+			hc_widget_destroy_impl (GTK_WIDGET (box));
 	}
 
 	/* create a new family box */
@@ -630,13 +621,10 @@ tab_add_real (chanview *cv, GtkWidget *tab, chan *ch)
 		sep = gtk_separator_new (GTK_ORIENTATION_VERTICAL);
 	}
 
-	hc_box_pack_end (box, sep, 0, 0, 4);
-	gtk_widget_show (sep);
-	hc_box_pack_start (inner, box, 0, 0, 0);
+	hc_box_pack_end_impl (GTK_BOX (box), sep, FALSE);
+	gtk_box_append (GTK_BOX (inner), box);
 	g_object_set_data (G_OBJECT (box), "f", ch->family);
-	hc_box_pack_start (box, tab, 0, 0, 0);
-	gtk_widget_show (tab);
-	gtk_widget_show (box);
+	gtk_box_append (GTK_BOX (box), tab);
 	gtk_widget_queue_resize (gtk_widget_get_parent(inner));
 }
 
@@ -860,13 +848,13 @@ cv_tabs_scroll_to_tab_impl (chanview *cv, GtkWidget *tab)
 
 	if (cv->vertical)
 	{
-		adj = gtk_viewport_get_vadjustment (GTK_VIEWPORT (viewport));
+		adj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (viewport));
 		tab_start = tab_origin.y;
 		tab_end = tab_origin.y + gtk_widget_get_height (tab);
 	}
 	else
 	{
-		adj = gtk_viewport_get_hadjustment (GTK_VIEWPORT (viewport));
+		adj = gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
 		tab_start = tab_origin.x;
 		tab_end = tab_origin.x + gtk_widget_get_width (tab);
 	}
@@ -983,8 +971,8 @@ cv_tabs_scroll_to_tab_try (gpointer user_data)
 	if (viewport && GTK_IS_VIEWPORT (viewport))
 	{
 		adj = data->cv->vertical ?
-			gtk_viewport_get_vadjustment (GTK_VIEWPORT (viewport)) :
-			gtk_viewport_get_hadjustment (GTK_VIEWPORT (viewport));
+			gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (viewport)) :
+			gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
 		upper = gtk_adjustment_get_upper (adj);
 		tab_end = data->cv->vertical ?
 			(tab_origin.y + tab_height) :
@@ -1096,7 +1084,7 @@ cv_tabs_move_focus (chanview *cv, gboolean relative, int num)
 static void
 cv_tabs_remove (chan *ch)
 {
-	hc_widget_destroy (ch->impl);
+	hc_widget_destroy_impl (GTK_WIDGET (ch->impl));
 	ch->impl = NULL;
 
 	cv_tabs_prune (ch->cv);
@@ -1120,13 +1108,13 @@ cv_tabs_move (chan *ch, int delta)
 
 		/* keep separator at end to not throw off our count */
 		if (GTK_IS_SEPARATOR (child_entry))
-			gtk_box_reorder_child (GTK_BOX (parent), child_entry, -1);
+			hc_box_reorder_child (GTK_BOX (parent), child_entry, -1);
 		else
 			i++;
 	}
 
 	pos = (pos - delta) % i;
-	gtk_box_reorder_child (GTK_BOX (parent), ch->impl, pos);
+	hc_box_reorder_child (GTK_BOX (parent), ch->impl, pos);
 }
 
 static void
@@ -1154,7 +1142,7 @@ cv_tabs_move_family (chan *ch, int delta)
 	}
 
 	pos = (pos - delta) % i;
-	gtk_box_reorder_child (GTK_BOX (gtk_widget_get_parent(box)), box, pos);
+	hc_box_reorder_child (GTK_BOX (gtk_widget_get_parent(box)), box, pos);
 }
 
 static void
@@ -1167,7 +1155,7 @@ cv_tabs_cleanup (chanview *cv)
 		((tabview *)cv)->overflow_check_id = 0;
 	}
 	if (cv->box)
-		hc_widget_destroy (((tabview *)cv)->outer);
+		hc_widget_destroy_impl (GTK_WIDGET (((tabview *)cv)->outer));
 }
 
 static void

@@ -200,11 +200,12 @@ plugingui_columnview_new (GtkWidget *box)
 	gtk_column_view_column_set_expand (col, TRUE);
 
 	/* Wrap in scrolled window */
-	scrolled = hc_scrolled_window_new ();
+	scrolled = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolled),
 	                                GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-	hc_scrolled_window_set_child (scrolled, view);
-	hc_box_pack_start (box, scrolled, TRUE, TRUE, 0);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolled), view);
+	gtk_widget_set_vexpand (scrolled, TRUE);
+	gtk_box_append (GTK_BOX (box), scrolled);
 
 	/* Store references */
 	g_object_set_data (G_OBJECT (scrolled), "column-view", view);
@@ -375,10 +376,10 @@ plugingui_open (void)
 	g_object_set_data (G_OBJECT (plugin_window), "view", view);
 	g_object_set_data (G_OBJECT (plugin_window), "store", store);
 
-	hbox = hc_button_box_new (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout (hbox, GTK_BUTTONBOX_SPREAD);
+	hbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hc_button_box_set_layout_impl (GTK_WIDGET (hbox), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (hbox, 6);
-	hc_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
+	gtk_box_append (GTK_BOX (vbox), hbox);
 
 	gtkutil_button (hbox, "document-revert", NULL,
 	                plugingui_loadbutton_cb, NULL, _("_Load..."));
@@ -391,5 +392,5 @@ plugingui_open (void)
 
 	fe_pluginlist_update ();
 
-	hc_widget_show_all (plugin_window);
+	gtk_widget_set_visible (plugin_window, TRUE);
 }
