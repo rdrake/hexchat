@@ -1049,6 +1049,7 @@ chanlist_create_columnview (server *serv)
 
 	/* Create the column view */
 	view = gtk_column_view_new (GTK_SELECTION_MODEL (sel_model));
+	gtk_widget_set_name (view, "hexchat-list");
 	gtk_column_view_set_show_column_separators (GTK_COLUMN_VIEW (view), TRUE);
 
 	/* Enable sorting on the column view */

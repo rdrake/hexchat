@@ -1996,6 +1996,7 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	model = GTK_TREE_MODEL (store);
 
 	edit_trees[SERVER_TREE] = treeview_servers = gtk_tree_view_new_with_model (model);
+	gtk_widget_set_name (treeview_servers, "hexchat-list");
 	hc_add_key_controller (treeview_servers, G_CALLBACK (servlist_keypress_cb), NULL, notebook);
 	g_signal_connect (G_OBJECT (gtk_tree_view_get_selection (GTK_TREE_VIEW (treeview_servers))),
 							"changed", G_CALLBACK (servlist_server_row_cb), NULL);
@@ -2020,6 +2021,7 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	model = GTK_TREE_MODEL (store);
 
 	edit_trees[CHANNEL_TREE] = treeview_channels = gtk_tree_view_new_with_model (model);
+	gtk_widget_set_name (treeview_channels, "hexchat-list");
 	hc_add_key_controller (treeview_channels, G_CALLBACK (servlist_keypress_cb), NULL, notebook);
 	g_signal_connect (G_OBJECT (gtk_tree_view_get_selection (GTK_TREE_VIEW (treeview_channels))),
 							"changed", G_CALLBACK (servlist_channel_row_cb), NULL);
@@ -2056,6 +2058,7 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	model = GTK_TREE_MODEL (store);
 
 	edit_trees[CMD_TREE] = treeview_commands = gtk_tree_view_new_with_model (model);
+	gtk_widget_set_name (treeview_commands, "hexchat-list");
 	hc_add_key_controller (treeview_commands, G_CALLBACK (servlist_keypress_cb), NULL, notebook);
 	g_signal_connect (G_OBJECT (gtk_tree_view_get_selection (GTK_TREE_VIEW (treeview_commands))),
 							"changed", G_CALLBACK (servlist_command_row_cb), NULL);
@@ -2363,6 +2366,7 @@ servlist_open_networks (void)
 	model = GTK_TREE_MODEL (store);
 
 	networks_tree = treeview_networks = gtk_tree_view_new_with_model (model);
+	gtk_widget_set_name (treeview_networks, "hexchat-list");
 	g_object_unref (model);
 	gtk_widget_show (treeview_networks);
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow3), treeview_networks);

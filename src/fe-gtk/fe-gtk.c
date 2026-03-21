@@ -462,81 +462,104 @@ apply_tree_css (void)
 		gtk_style_context_add_provider_for_display (
 			gdk_display_get_default (),
 			GTK_STYLE_PROVIDER (tree_css_provider),
-			GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+			GTK_STYLE_PROVIDER_PRIORITY_USER);
 	}
 
 	/* Extract font family and size from the input style */
 	font_family = pango_font_description_get_family (input_style->font_desc);
 	font_size = pango_font_description_get_size (input_style->font_desc) / PANGO_SCALE;
 
-	/* Apply theme colors and font to chanview tree and userlist.
-	 * GTK4 list views use listview > row:selected, columnview > row:selected CSS. */
+	/* Apply theme colors to chanview tree, userlist, and all .hexchat-list views.
+	 * ID selectors for chanview/userlist; class selector for dialog list views. */
 	g_snprintf (css_buf, sizeof (css_buf),
-		/* Chanview tree styling - GTK4 GtkListView */
+		/* Chanview tree (GtkListView) */
 		"#hexchat-tree { "
 		"  background-color: rgb(%d, %d, %d); "
 		"  color: rgb(%d, %d, %d); "
 		"  font-family: \"%s\"; "
 		"  font-size: %dpt; "
 		"} "
-		/* GTK4: Selection styling on the row widget */
 		"#hexchat-tree > row:selected { "
 		"  background-color: rgb(%d, %d, %d); "
 		"} "
-		/* Style labels inside selected rows to override channel colors */
 		"#hexchat-tree > row:selected label { "
 		"  color: rgb(%d, %d, %d); "
 		"} "
-		/* Userlist styling - GTK4 GtkColumnView */
+		/* Userlist (GtkColumnView) */
 		"#hexchat-userlist { "
 		"  background-color: rgb(%d, %d, %d); "
 		"  color: rgb(%d, %d, %d); "
 		"  font-family: \"%s\"; "
 		"  font-size: %dpt; "
 		"} "
-		/* GTK4: Selection styling for columnview rows */
 		"#hexchat-userlist > row:selected { "
 		"  background-color: rgb(%d, %d, %d); "
 		"} "
-		/* Style labels inside selected userlist rows */
 		"#hexchat-userlist > row:selected label { "
 		"  color: rgb(%d, %d, %d); "
+		"} "
+		/* Dialog list/column views named hexchat-list */
+		"#hexchat-list { "
+		"  background-color: rgb(%d, %d, %d); "
+		"  color: rgb(%d, %d, %d); "
+		"} "
+		"#hexchat-list row:selected { "
+		"  background-color: rgb(%d, %d, %d); "
+		"} "
+		"#hexchat-list row:selected label { "
+		"  color: rgb(%d, %d, %d); "
 		"}",
-		/* #hexchat-tree background */
+		/* #hexchat-tree bg */
 		(int)(colors[COL_BG].red * 255),
 		(int)(colors[COL_BG].green * 255),
 		(int)(colors[COL_BG].blue * 255),
-		/* #hexchat-tree color (foreground) */
+		/* #hexchat-tree fg */
 		(int)(colors[COL_FG].red * 255),
 		(int)(colors[COL_FG].green * 255),
 		(int)(colors[COL_FG].blue * 255),
 		/* #hexchat-tree font */
 		font_family ? font_family : "sans",
 		font_size > 0 ? font_size : 11,
-		/* #hexchat-tree > row:selected background (mark background) */
+		/* #hexchat-tree row:selected bg */
 		(int)(colors[COL_MARK_BG].red * 255),
 		(int)(colors[COL_MARK_BG].green * 255),
 		(int)(colors[COL_MARK_BG].blue * 255),
-		/* #hexchat-tree > row:selected label color (mark foreground) */
+		/* #hexchat-tree row:selected label fg */
 		(int)(colors[COL_MARK_FG].red * 255),
 		(int)(colors[COL_MARK_FG].green * 255),
 		(int)(colors[COL_MARK_FG].blue * 255),
-		/* #hexchat-userlist background */
+		/* #hexchat-userlist bg */
 		(int)(colors[COL_BG].red * 255),
 		(int)(colors[COL_BG].green * 255),
 		(int)(colors[COL_BG].blue * 255),
-		/* #hexchat-userlist color (foreground) */
+		/* #hexchat-userlist fg */
 		(int)(colors[COL_FG].red * 255),
 		(int)(colors[COL_FG].green * 255),
 		(int)(colors[COL_FG].blue * 255),
 		/* #hexchat-userlist font */
 		font_family ? font_family : "sans",
 		font_size > 0 ? font_size : 11,
-		/* #hexchat-userlist > row:selected background (mark background) */
+		/* #hexchat-userlist row:selected bg */
 		(int)(colors[COL_MARK_BG].red * 255),
 		(int)(colors[COL_MARK_BG].green * 255),
 		(int)(colors[COL_MARK_BG].blue * 255),
-		/* #hexchat-userlist > row:selected label color (mark foreground) */
+		/* #hexchat-userlist row:selected label fg */
+		(int)(colors[COL_MARK_FG].red * 255),
+		(int)(colors[COL_MARK_FG].green * 255),
+		(int)(colors[COL_MARK_FG].blue * 255),
+		/* #hexchat-list bg */
+		(int)(colors[COL_BG].red * 255),
+		(int)(colors[COL_BG].green * 255),
+		(int)(colors[COL_BG].blue * 255),
+		/* #hexchat-list fg */
+		(int)(colors[COL_FG].red * 255),
+		(int)(colors[COL_FG].green * 255),
+		(int)(colors[COL_FG].blue * 255),
+		/* #hexchat-list row:selected bg */
+		(int)(colors[COL_MARK_BG].red * 255),
+		(int)(colors[COL_MARK_BG].green * 255),
+		(int)(colors[COL_MARK_BG].blue * 255),
+		/* #hexchat-list row:selected label fg */
 		(int)(colors[COL_MARK_FG].red * 255),
 		(int)(colors[COL_MARK_FG].green * 255),
 		(int)(colors[COL_MARK_FG].blue * 255));

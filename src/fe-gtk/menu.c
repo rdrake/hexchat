@@ -2492,6 +2492,8 @@ menu_join (GtkWidget * wid, gpointer none)
 
 	gtk_editable_set_editable (GTK_EDITABLE (entry), TRUE);
 	gtk_editable_set_position (GTK_EDITABLE (entry), 1);
+
+	gtk_window_present (GTK_WINDOW (dialog));
 }
 
 static void

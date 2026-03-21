@@ -585,7 +585,9 @@ hc_list_view_new_simple (GListModel *model,
 	if (bind_cb)
 		g_signal_connect (factory, "bind", bind_cb, user_data);
 
-	return gtk_list_view_new (sel_model, factory);
+	GtkWidget *view = gtk_list_view_new (sel_model, factory);
+	gtk_widget_set_name (view, "hexchat-list");
+	return view;
 }
 
 static inline GtkWidget *
@@ -600,7 +602,9 @@ hc_column_view_new_simple (GListModel *model, GtkSelectionMode selection_mode)
 	else
 		sel_model = GTK_SELECTION_MODEL (gtk_no_selection_new (model));
 
-	return gtk_column_view_new (sel_model);
+	GtkWidget *view = gtk_column_view_new (sel_model);
+	gtk_widget_set_name (view, "hexchat-list");
+	return view;
 }
 
 static inline GtkColumnViewColumn *

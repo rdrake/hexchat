@@ -683,6 +683,7 @@ key_dialog_treeview_new (GtkWidget *box)
 	g_return_val_if_fail (store != NULL, NULL);
 
 	view = gtk_tree_view_new_with_model (GTK_TREE_MODEL (store));
+	gtk_widget_set_name (view, "hexchat-list");
 	gtk_tree_view_set_fixed_height_mode (GTK_TREE_VIEW (view), TRUE);
 	gtk_tree_view_set_enable_search (GTK_TREE_VIEW (view), FALSE);
 	gtk_tree_view_set_reorderable (GTK_TREE_VIEW (view), TRUE);

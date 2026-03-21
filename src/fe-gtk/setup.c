@@ -1749,6 +1749,7 @@ setup_create_sound_page (void)
 											  GTK_POLICY_AUTOMATIC, GTK_POLICY_ALWAYS);
 
 	sound_tree = gtk_tree_view_new ();
+	gtk_widget_set_name (sound_tree, "hexchat-list");
 	sel = gtk_tree_view_get_selection (GTK_TREE_VIEW (sound_tree));
 	gtk_tree_selection_set_mode (sel, GTK_SELECTION_SINGLE);
 	setup_snd_add_columns (GTK_TREE_VIEW (sound_tree));
@@ -1972,6 +1973,7 @@ setup_create_tree (GtkWidget *box, GtkWidget *book)
 	} while (cata[i]);
 
 	tree = gtk_tree_view_new_with_model (GTK_TREE_MODEL (model));
+	gtk_widget_set_name (tree, "hexchat-list");
 	g_object_unref (G_OBJECT (model));
 	sel = gtk_tree_view_get_selection (GTK_TREE_VIEW (tree));
 	gtk_tree_selection_set_mode (sel, GTK_SELECTION_BROWSE);

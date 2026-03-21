@@ -726,6 +726,7 @@ gtkutil_treeview_new (GtkWidget *box, GtkTreeModel *model,
 	gtk_widget_show (win);
 
 	view = gtk_tree_view_new_with_model (model);
+	gtk_widget_set_name (view, "hexchat-list");
 	/* the view now has a ref on the model, we can unref it */
 	g_object_unref (G_OBJECT (model));
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (win), view);
