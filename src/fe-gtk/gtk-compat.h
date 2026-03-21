@@ -445,11 +445,19 @@ hc_container_get_children(GtkWidget *container)
  * =============================================================================
  */
 
+/* Include HexInputEdit for hc_entry_* macro dispatch */
+#include "hex-input-edit.h"
+
 #define hc_entry_get_text(entry) \
-	gtk_editable_get_text(GTK_EDITABLE(entry))
+	(HEX_IS_INPUT_EDIT (entry) \
+	 ? hex_input_edit_get_text (HEX_INPUT_EDIT (entry)) \
+	 : gtk_editable_get_text (GTK_EDITABLE (entry)))
 
 #define hc_entry_set_text(entry, text) \
-	gtk_editable_set_text(GTK_EDITABLE(entry), text)
+	do { if (HEX_IS_INPUT_EDIT (entry)) \
+	         hex_input_edit_set_text (HEX_INPUT_EDIT (entry), text); \
+	     else gtk_editable_set_text (GTK_EDITABLE (entry), text); \
+	} while (0)
 
 /*
  * =============================================================================

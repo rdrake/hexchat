@@ -21,7 +21,7 @@
 #include <stdlib.h>
 
 #include "fe-gtk.h"
-#include "hex-input-view.h"
+#include "hex-input-edit.h"
 
 #ifdef WIN32
 #include <gdk/win32/gdkwin32.h>
