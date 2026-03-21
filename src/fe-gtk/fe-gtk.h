@@ -200,7 +200,7 @@ extern cairo_surface_t *dialogwin_pix;
 	     else if (HEX_IS_INPUT_VIEW (e)) hex_input_view_set_text (HEX_INPUT_VIEW (e), txt); \
 	     else hc_entry_set_text (e, txt); } while (0)
 #define SPELL_ENTRY_SET_EDITABLE(e,v) \
-	do { if (HEX_IS_INPUT_EDIT (e)) { /* no-op for now */ } \
+	do { if (HEX_IS_INPUT_EDIT (e)) hex_input_edit_set_editable (HEX_INPUT_EDIT (e), v); \
 	     else if (HEX_IS_INPUT_VIEW (e)) gtk_text_view_set_editable (GTK_TEXT_VIEW (e), v); \
 	     else gtk_editable_set_editable (GTK_EDITABLE (e), v); } while (0)
 #define SPELL_ENTRY_GET_POS(e) \

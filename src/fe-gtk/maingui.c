@@ -701,7 +701,10 @@ mg_restore_entry (GtkWidget *entry, char **text)
 	{
 		hc_entry_set_text (entry, "");
 	}
-	gtk_editable_set_position (GTK_EDITABLE (entry), -1);
+	if (HEX_IS_INPUT_EDIT (entry))
+		hex_input_edit_set_position (HEX_INPUT_EDIT (entry), -1);
+	else
+		gtk_editable_set_position (GTK_EDITABLE (entry), -1);
 }
 
 static void
@@ -1000,7 +1003,7 @@ mg_populate (session *sess)
 		/* hide the userlist */
 		mg_decide_userlist (sess, FALSE);
 		/* shouldn't edit the topic */
-		gtk_editable_set_editable (GTK_EDITABLE (gui->topic_entry), FALSE);
+		hex_input_edit_set_editable (HEX_INPUT_EDIT (gui->topic_entry), FALSE);
 		/* might be hidden from server tab */
 		if (prefs.hex_gui_topicbar)
 			gtk_widget_show (gui->topic_bar);
@@ -1021,7 +1024,7 @@ mg_populate (session *sess)
 		/* show the userlist */
 		mg_decide_userlist (sess, FALSE);
 		/* let the topic be editted */
-		gtk_editable_set_editable (GTK_EDITABLE (gui->topic_entry), TRUE);
+		hex_input_edit_set_editable (HEX_INPUT_EDIT (gui->topic_entry), TRUE);
 		if (prefs.hex_gui_topicbar)
 			gtk_widget_show (gui->topic_bar);
 		/* Show mode buttons after topic_bar is visible */
@@ -2624,11 +2627,13 @@ mg_create_chanmodebuttons (session_gui *gui, GtkWidget *box)
 	gui->flag_b = mg_create_flagbutton (_("Ban List"), box, "b");
 
 	gui->flag_k = mg_create_flagbutton (_("Keyword"), box, "k");
-	gui->key_entry = gtk_entry_new ();
+	gui->key_entry = hex_input_edit_new ();
+	hex_input_edit_set_multiline (HEX_INPUT_EDIT (gui->key_entry), FALSE);
+	hex_input_edit_set_checked (HEX_INPUT_EDIT (gui->key_entry), FALSE);
+	hex_input_edit_set_max_chars (HEX_INPUT_EDIT (gui->key_entry), 23);
+	hex_input_edit_set_width_chars (HEX_INPUT_EDIT (gui->key_entry), 8);
+	hex_input_edit_set_max_width_chars (HEX_INPUT_EDIT (gui->key_entry), 12);
 	gtk_widget_set_name (gui->key_entry, "hexchat-inputbox");
-	gtk_entry_set_max_length (GTK_ENTRY (gui->key_entry), 23);
-	gtk_editable_set_width_chars (GTK_EDITABLE (gui->key_entry), 8);
-	gtk_editable_set_max_width_chars (GTK_EDITABLE (gui->key_entry), 12);
 	gtk_widget_set_hexpand (gui->key_entry, FALSE);
 	hc_box_pack_start (box, gui->key_entry, 0, 0, 0);
 	g_signal_connect (G_OBJECT (gui->key_entry), "activate",
@@ -2643,11 +2648,13 @@ mg_create_chanmodebuttons (session_gui *gui, GtkWidget *box)
 	gtk_widget_show (gui->key_entry);
 
 	gui->flag_l = mg_create_flagbutton (_("User Limit"), box, "l");
-	gui->limit_entry = gtk_entry_new ();
+	gui->limit_entry = hex_input_edit_new ();
+	hex_input_edit_set_multiline (HEX_INPUT_EDIT (gui->limit_entry), FALSE);
+	hex_input_edit_set_checked (HEX_INPUT_EDIT (gui->limit_entry), FALSE);
+	hex_input_edit_set_max_chars (HEX_INPUT_EDIT (gui->limit_entry), 10);
+	hex_input_edit_set_width_chars (HEX_INPUT_EDIT (gui->limit_entry), 4);
+	hex_input_edit_set_max_width_chars (HEX_INPUT_EDIT (gui->limit_entry), 5);
 	gtk_widget_set_name (gui->limit_entry, "hexchat-inputbox");
-	gtk_entry_set_max_length (GTK_ENTRY (gui->limit_entry), 10);
-	gtk_editable_set_width_chars (GTK_EDITABLE (gui->limit_entry), 4);
-	gtk_editable_set_max_width_chars (GTK_EDITABLE (gui->limit_entry), 5);
 	gtk_widget_set_hexpand (gui->limit_entry, FALSE);
 	hc_box_pack_start (box, gui->limit_entry, 0, 0, 0);
 	g_signal_connect (G_OBJECT (gui->limit_entry), "activate",
@@ -2740,9 +2747,10 @@ mg_create_topicbar (session *sess, GtkWidget *box)
 	if (!gui->is_tab)
 		sess->res->tab = NULL;
 
-	gui->topic_entry = topic = sexy_spell_entry_new ();
+	gui->topic_entry = topic = hex_input_edit_new ();
+	hex_input_edit_set_multiline (HEX_INPUT_EDIT (topic), FALSE);
+	hex_input_edit_set_checked (HEX_INPUT_EDIT (topic), FALSE);
 	gtk_widget_set_name (topic, "hexchat-inputbox");
-	sexy_spell_entry_set_checked (SEXY_SPELL_ENTRY (topic), FALSE);
 	gtk_widget_set_hexpand (topic, TRUE);
 	hc_box_add (hbox, topic);
 	g_signal_connect (G_OBJECT (topic), "activate",

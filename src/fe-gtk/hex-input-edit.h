@@ -71,6 +71,10 @@ void        hex_input_edit_insert_text  (HexInputEdit *edit, const char *text,
 /* Configuration */
 void        hex_input_edit_set_max_lines (HexInputEdit *edit, int max_lines);
 void        hex_input_edit_set_multiline (HexInputEdit *edit, gboolean multiline);
+void        hex_input_edit_set_editable  (HexInputEdit *edit, gboolean editable);
+void        hex_input_edit_set_max_chars (HexInputEdit *edit, int max_chars);
+void        hex_input_edit_set_width_chars (HexInputEdit *edit, int width_chars);
+void        hex_input_edit_set_max_width_chars (HexInputEdit *edit, int max_width_chars);
 
 /* Emoji sprite cache (shared with xtext) */
 typedef struct _xtext_emoji_cache xtext_emoji_cache;
@@ -80,6 +84,12 @@ void        hex_input_edit_set_emoji_cache (HexInputEdit *edit,
 /* Palette (shared with xtext) */
 void        hex_input_edit_set_palette (HexInputEdit *edit,
                                         const GdkRGBA *palette);
+
+/* Spell checking */
+void        hex_input_edit_set_checked        (HexInputEdit *edit, gboolean checked);
+gboolean    hex_input_edit_is_checked         (HexInputEdit *edit);
+void        hex_input_edit_activate_default_languages (HexInputEdit *edit);
+void        hex_input_edit_deactivate_language (HexInputEdit *edit, const gchar *lang);
 
 /* Layout line queries (for subline navigation / history integration) */
 int         hex_input_edit_get_cursor_line (HexInputEdit *edit);

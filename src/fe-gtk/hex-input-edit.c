@@ -31,6 +31,7 @@
 #include <gdk/gdk.h>
 #include <pango/pango.h>
 #include <cairo.h>
+#include <glib/gi18n.h>
 
 #include "hex-input-edit.h"
 #include "xtext-render.h"
@@ -39,7 +40,100 @@
 
 #ifdef WIN32
 #include <windows.h>
+#include "../common/typedef.h"
 #endif
+
+#include "../common/cfgfiles.h"
+#include "../common/hexchatc.h"
+#include "../common/url.h"
+#include "../common/fe.h"
+
+/* ── Enchant runtime loading ────────────────────────────────────────── */
+/* File-scoped copies — g_module_open returns the already-loaded handle,
+ * so these coexist safely with hex-input-view.c / sexy-spell-entry.c. */
+
+struct EnchantDict;
+struct EnchantBroker;
+
+typedef void (*EnchantDictDescribeFn) (const char * const lang_tag,
+                                       const char * const provider_name,
+                                       const char * const provider_desc,
+                                       const char * const provider_file,
+                                       void * user_data);
+
+static struct EnchantBroker * (*enchant_broker_init) (void);
+static void (*enchant_broker_free) (struct EnchantBroker * broker);
+static void (*enchant_broker_free_dict) (struct EnchantBroker * broker, struct EnchantDict * dict);
+static void (*enchant_broker_list_dicts) (struct EnchantBroker * broker, EnchantDictDescribeFn fn, void * user_data);
+static struct EnchantDict * (*enchant_broker_request_dict) (struct EnchantBroker * broker, const char *const tag);
+
+static int (*enchant_dict_check) (struct EnchantDict * dict, const char *const word, ssize_t len);
+static char ** (*enchant_dict_suggest) (struct EnchantDict * dict, const char *const word, ssize_t len, size_t * out_n_suggs);
+static void (*enchant_dict_free_suggestions) (struct EnchantDict * dict, char **suggestions);
+static void (*enchant_dict_describe) (struct EnchantDict * dict, EnchantDictDescribeFn fn, void * user_data);
+static void (*enchant_dict_add_to_personal) (struct EnchantDict * dict, const char *const word, ssize_t len);
+
+static gboolean hie_have_enchant = FALSE;
+
+static void
+hie_initialize_enchant (void)
+{
+	GModule *enchant;
+	gpointer funcptr;
+	gsize i;
+	static gboolean initialized = FALSE;
+	const char * const libnames[] = {
+#ifdef G_OS_WIN32
+		"libenchant.dll",
+#endif
+#ifdef G_OS_UNIX
+		"libenchant.so.1",
+		"libenchant.so.2",
+		"libenchant-2.so.2",
+#endif
+#ifdef __APPLE__
+		"libenchant.dylib",
+#endif
+	};
+
+	if (initialized)
+		return;
+	initialized = TRUE;
+
+	for (i = 0; i < G_N_ELEMENTS (libnames); ++i)
+	{
+		enchant = g_module_open (libnames[i], 0);
+		if (enchant)
+		{
+			hie_have_enchant = TRUE;
+			break;
+		}
+	}
+
+	if (!hie_have_enchant)
+		return;
+
+#define LOAD_SYMBOL(name, func) G_STMT_START { \
+	if (!g_module_symbol (enchant, name, &funcptr)) { \
+		hie_have_enchant = FALSE; \
+		return; \
+	} \
+	(func) = funcptr; \
+} G_STMT_END
+
+	LOAD_SYMBOL ("enchant_broker_init", enchant_broker_init);
+	LOAD_SYMBOL ("enchant_broker_free", enchant_broker_free);
+	LOAD_SYMBOL ("enchant_broker_free_dict", enchant_broker_free_dict);
+	LOAD_SYMBOL ("enchant_broker_list_dicts", enchant_broker_list_dicts);
+	LOAD_SYMBOL ("enchant_broker_request_dict", enchant_broker_request_dict);
+	LOAD_SYMBOL ("enchant_dict_check", enchant_dict_check);
+	LOAD_SYMBOL ("enchant_dict_suggest", enchant_dict_suggest);
+	LOAD_SYMBOL ("enchant_dict_free_suggestions", enchant_dict_free_suggestions);
+	LOAD_SYMBOL ("enchant_dict_describe", enchant_dict_describe);
+	LOAD_SYMBOL ("enchant_dict_add_to_personal", enchant_dict_add_to_personal);
+
+#undef LOAD_SYMBOL
+}
 
 /* --- Undo snapshot --- */
 typedef struct {
@@ -73,6 +167,16 @@ enum {
 
 static guint signals[LAST_SIGNAL] = { 0 };
 
+static gboolean
+spell_accumulator (GSignalInvocationHint *hint, GValue *return_accu,
+                   const GValue *handler_return, gpointer data)
+{
+	(void) hint; (void) data;
+	gboolean ret = g_value_get_boolean (handler_return);
+	g_value_set_boolean (return_accu, ret);
+	return ret;
+}
+
 /* --- Private data --- */
 struct _HexInputEditPriv
 {
@@ -103,7 +207,11 @@ struct _HexInputEditPriv
 
 	/* Configuration */
 	gboolean multiline;
+	gboolean editable;		/* whether text can be modified */
 	int max_lines;
+	int max_chars;			/* max character count (0 = unlimited) */
+	int width_chars;		/* preferred width in characters (0 = default) */
+	int max_width_chars;	/* max width in characters (0 = default) */
 	int alloc_width;		/* last allocated width, for detecting resize */
 
 	/* Caret blink */
@@ -122,6 +230,7 @@ struct _HexInputEditPriv
 	const GdkRGBA *palette;	/* points to external palette, not owned */
 
 	/* Scrolling */
+	int scroll_x;			/* pixel offset scrolled left (single-line horiz scroll) */
 	int scroll_y;			/* pixel offset scrolled up (0 = top visible) */
 
 	/* Dirty flags */
@@ -131,11 +240,148 @@ struct _HexInputEditPriv
 	GPtrArray *undo_stack;		/* array of UndoSnapshot* */
 	int undo_pos;				/* current position in stack (-1 = nothing) */
 	gboolean undo_frozen;		/* prevent recording during undo/redo */
+
+	/* Spell checking (Enchant) */
+	struct EnchantBroker *broker;
+	GHashTable           *dict_hash;	/* lang tag → EnchantDict* */
+	GSList               *dict_list;	/* list of active EnchantDict* */
+	gboolean              spell_checked;	/* spell checking enabled */
+
+	/* Spell context menu state (valid while popover is open) */
+	char                 *spell_word;		/* misspelled word (owned) */
+	int                   spell_word_start;	/* raw byte offset of word start */
+	int                   spell_word_end;	/* raw byte offset of word end */
+	char                **spell_suggestions;/* suggestions array (owned by enchant) */
+	size_t                spell_n_suggs;
+	struct EnchantDict   *spell_dict;		/* dict used for suggestions (not owned) */
+
+	/* URL hover tracking (Ctrl+hover cursor feedback) */
+	double last_mouse_x;
+	double last_mouse_y;
+	gboolean mouse_in_widget;
+	GtkEventController *root_key_ctrl;	/* capture-phase key ctrl on toplevel */
 };
 
 G_DEFINE_TYPE (HexInputEdit, hex_input_edit, GTK_TYPE_WIDGET)
 
 static void ensure_cursor_visible (HexInputEdit *edit);
+static void update_url_cursor (HexInputEdit *edit, double x, double y, gboolean ctrl_held);
+
+/* ── Spell checking helpers ──────────────────────────────────────────── */
+
+static gboolean
+default_word_check (HexInputEdit *edit, const gchar *word)
+{
+	gboolean result = TRUE;
+	GSList *li;
+
+	if (!hie_have_enchant)
+		return result;
+
+	if (g_unichar_isalpha (*word) == FALSE)
+		return FALSE;
+
+	for (li = edit->priv->dict_list; li; li = g_slist_next (li))
+	{
+		struct EnchantDict *dict = (struct EnchantDict *) li->data;
+		if (enchant_dict_check (dict, word, strlen (word)) == 0)
+		{
+			result = FALSE;
+			break;
+		}
+	}
+	return result;
+}
+
+static gboolean
+word_misspelled (HexInputEdit *edit, const char *word)
+{
+	gboolean ret = FALSE;
+
+	if (!word || !*word)
+		return FALSE;
+
+	g_signal_emit (edit, signals[SIGNAL_WORD_CHECK], 0, word, &ret);
+	return ret;
+}
+
+/* Append PANGO_UNDERLINE_ERROR attrs for misspelled words in stripped text.
+ * Operates on the stripped string (no mIRC codes), whose byte offsets
+ * map directly to the PangoLayout indices. */
+static void
+spell_check_attrs (HexInputEdit *edit, PangoAttrList *attrs)
+{
+	HexInputEditPriv *priv = edit->priv;
+	const char *text;
+	int text_len, n_chars, n_attrs;
+	PangoLogAttr *log_attrs;
+	const GdkRGBA *pal;
+
+	if (!hie_have_enchant || !priv->spell_checked)
+		return;
+	if (!priv->dict_list)
+		return;
+	if (!priv->stripped_str || priv->stripped_len <= 0)
+		return;
+
+	text = (const char *) priv->stripped_str;
+	text_len = priv->stripped_len;
+	n_chars = g_utf8_strlen (text, text_len);
+	n_attrs = n_chars + 1;
+	log_attrs = g_new0 (PangoLogAttr, n_attrs);
+
+	pango_get_log_attrs (text, text_len, -1,
+	                     pango_language_get_default (),
+	                     log_attrs, n_attrs);
+
+	pal = priv->palette ? priv->palette : colors;
+
+	for (int i = 0; i < n_attrs; i++)
+	{
+		if (log_attrs[i].is_word_start && log_attrs[i].is_word_boundary)
+		{
+			int word_end;
+			for (word_end = i; word_end < n_attrs; word_end++)
+			{
+				if (log_attrs[word_end].is_word_end &&
+				    log_attrs[word_end].is_word_boundary)
+					break;
+			}
+
+			if (word_end > i)
+			{
+				char *ws = g_utf8_offset_to_pointer (text, i);
+				char *we = g_utf8_offset_to_pointer (text, word_end);
+				char *word = g_strndup (ws, we - ws);
+
+				if (word_misspelled (edit, word))
+				{
+					int byte_start = (int)(ws - text);
+					int byte_end = (int)(we - text);
+
+					PangoAttribute *unline =
+						pango_attr_underline_new (PANGO_UNDERLINE_ERROR);
+					unline->start_index = byte_start;
+					unline->end_index = byte_end;
+					pango_attr_list_insert (attrs, unline);
+
+					PangoAttribute *ucolor =
+						pango_attr_underline_color_new (
+							(guint16)(pal[COL_SPELL].red * 65535),
+							(guint16)(pal[COL_SPELL].green * 65535),
+							(guint16)(pal[COL_SPELL].blue * 65535));
+					ucolor->start_index = byte_start;
+					ucolor->end_index = byte_end;
+					pango_attr_list_insert (attrs, ucolor);
+				}
+
+				g_free (word);
+			}
+		}
+	}
+
+	g_free (log_attrs);
+}
 
 /* =============================== */
 /* === Helpers                  === */
@@ -332,6 +578,9 @@ update_layout (HexInputEdit *edit, int width)
 		attrs = pango_attr_list_new ();
 	}
 
+	/* Spell-check: append underline-error attrs for misspelled words */
+	spell_check_attrs (edit, attrs);
+
 	/* Insert preedit string and attributes */
 	if (priv->preedit_str && priv->preedit_str[0])
 	{
@@ -432,7 +681,7 @@ mark_dirty (HexInputEdit *edit)
 	gtk_widget_queue_resize (GTK_WIDGET (edit));
 }
 
-/* Adjust scroll_y so the cursor is within the visible area. */
+/* Adjust scroll offsets so the cursor is within the visible area. */
 static void
 ensure_cursor_visible (HexInputEdit *edit)
 {
@@ -450,29 +699,55 @@ ensure_cursor_visible (HexInputEdit *edit)
 	PangoRectangle strong;
 	pango_layout_get_cursor_pos (priv->layout, stripped_cursor, &strong, NULL);
 
+	/* --- Vertical scrolling (multiline) --- */
 	int cursor_top = PANGO_PIXELS (strong.y);
 	int cursor_bot = cursor_top + PANGO_PIXELS (strong.height);
 
-	/* Content area height (widget minus top/bottom padding) */
 	int content_h = widget_h - 2 * VPAD;
-	if (content_h <= 0)
-		return;
+	if (content_h > 0)
+	{
+		if (cursor_bot > priv->scroll_y + content_h)
+			priv->scroll_y = cursor_bot - content_h;
+		if (cursor_top < priv->scroll_y)
+			priv->scroll_y = cursor_top;
 
-	/* Scroll down if cursor is below visible area */
-	if (cursor_bot > priv->scroll_y + content_h)
-		priv->scroll_y = cursor_bot - content_h;
+		int layout_h = 0;
+		pango_layout_get_pixel_size (priv->layout, NULL, &layout_h);
+		int max_scroll = layout_h - content_h;
+		if (max_scroll < 0) max_scroll = 0;
+		if (priv->scroll_y > max_scroll) priv->scroll_y = max_scroll;
+		if (priv->scroll_y < 0) priv->scroll_y = 0;
+	}
 
-	/* Scroll up if cursor is above visible area */
-	if (cursor_top < priv->scroll_y)
-		priv->scroll_y = cursor_top;
+	/* --- Horizontal scrolling (single-line) --- */
+	if (!priv->multiline)
+	{
+		int content_w = widget_w - 2 * HPAD;
+		if (content_w > 0)
+		{
+			int cursor_x = PANGO_PIXELS (strong.x);
 
-	/* Clamp */
-	int layout_h = 0;
-	pango_layout_get_pixel_size (priv->layout, NULL, &layout_h);
-	int max_scroll = layout_h - content_h;
-	if (max_scroll < 0) max_scroll = 0;
-	if (priv->scroll_y > max_scroll) priv->scroll_y = max_scroll;
-	if (priv->scroll_y < 0) priv->scroll_y = 0;
+			/* Scroll right if cursor is past the visible area */
+			if (cursor_x > priv->scroll_x + content_w)
+				priv->scroll_x = cursor_x - content_w;
+
+			/* Scroll left if cursor is before the visible area */
+			if (cursor_x < priv->scroll_x)
+				priv->scroll_x = cursor_x;
+
+			/* Clamp */
+			int layout_w = 0;
+			pango_layout_get_pixel_size (priv->layout, &layout_w, NULL);
+			int max_scroll_x = layout_w - content_w;
+			if (max_scroll_x < 0) max_scroll_x = 0;
+			if (priv->scroll_x > max_scroll_x) priv->scroll_x = max_scroll_x;
+			if (priv->scroll_x < 0) priv->scroll_x = 0;
+		}
+	}
+	else
+	{
+		priv->scroll_x = 0;
+	}
 }
 
 /* Delete the current selection. Returns TRUE if something was deleted. */
@@ -482,6 +757,8 @@ delete_selection (HexInputEdit *edit)
 	HexInputEditPriv *priv = edit->priv;
 	int sel_start, sel_end;
 
+	if (!priv->editable)
+		return FALSE;
 	if (!get_selection_bytes (priv, &sel_start, &sel_end))
 		return FALSE;
 
@@ -498,9 +775,64 @@ static void
 insert_at_cursor (HexInputEdit *edit, const char *str, int len)
 {
 	HexInputEditPriv *priv = edit->priv;
+	char *filtered = NULL;
+
+	if (!priv->editable)
+		return;
 
 	if (len < 0)
 		len = (int) strlen (str);
+
+	/* Single-line: strip newlines from pasted/committed text */
+	if (!priv->multiline)
+	{
+		const char *p;
+		gboolean has_nl = FALSE;
+		for (p = str; p < str + len; p++)
+		{
+			if (*p == '\n' || *p == '\r')
+			{
+				has_nl = TRUE;
+				break;
+			}
+		}
+		if (has_nl)
+		{
+			GString *f = g_string_sized_new (len);
+			for (p = str; p < str + len; p++)
+			{
+				if (*p != '\n' && *p != '\r')
+					g_string_append_c (f, *p);
+			}
+			filtered = g_string_free (f, FALSE);
+			str = filtered;
+			len = (int) strlen (str);
+		}
+	}
+
+	/* Enforce max_chars limit */
+	if (priv->max_chars > 0)
+	{
+		int cur_chars = (int) g_utf8_strlen (priv->text->str, priv->text->len);
+		int sel_chars = 0;
+		int sel_s, sel_e;
+		if (get_selection_bytes (priv, &sel_s, &sel_e))
+			sel_chars = (int) g_utf8_strlen (priv->text->str + sel_s,
+			                                  sel_e - sel_s);
+		int avail = priv->max_chars - (cur_chars - sel_chars);
+		if (avail <= 0)
+		{
+			g_free (filtered);
+			return;
+		}
+		int insert_chars = (int) g_utf8_strlen (str, len);
+		if (insert_chars > avail)
+		{
+			/* Truncate to avail characters */
+			const char *end = g_utf8_offset_to_pointer (str, avail);
+			len = (int)(end - str);
+		}
+	}
 
 	/* push_undo_snapshot before delete_selection would double-push if
 	 * there's a selection, so only push here if no selection active. */
@@ -514,6 +846,7 @@ insert_at_cursor (HexInputEdit *edit, const char *str, int len)
 	priv->cursor_byte += len;
 	priv->sel_anchor_byte = -1;
 	mark_dirty (edit);
+	g_free (filtered);
 }
 
 /* =============================== */
@@ -872,6 +1205,171 @@ action_redo (GtkWidget *widget, const char *name, GVariant *param)
 	do_redo (HEX_INPUT_EDIT (widget));
 }
 
+/* Free spell suggestion state from a previous context menu. */
+static void
+spell_menu_cleanup (HexInputEdit *edit)
+{
+	HexInputEditPriv *priv = edit->priv;
+
+	if (priv->spell_suggestions && priv->spell_dict)
+		enchant_dict_free_suggestions (priv->spell_dict, priv->spell_suggestions);
+	priv->spell_suggestions = NULL;
+	priv->spell_n_suggs = 0;
+	priv->spell_dict = NULL;
+	g_free (priv->spell_word);
+	priv->spell_word = NULL;
+}
+
+/* Find the misspelled word at widget coordinates (x, y).
+ * If found, populates priv->spell_word/suggestions/dict and returns TRUE. */
+static gboolean
+spell_word_at_xy (HexInputEdit *edit, double x, double y)
+{
+	HexInputEditPriv *priv = edit->priv;
+	const char *text;
+	int text_len, n_chars, n_attrs;
+	PangoLogAttr *log_attrs;
+	int click_stripped;
+
+	spell_menu_cleanup (edit);
+
+	if (!hie_have_enchant || !priv->spell_checked || !priv->dict_list)
+		return FALSE;
+	if (!priv->stripped_str || priv->stripped_len <= 0)
+		return FALSE;
+	if (!priv->layout)
+		return FALSE;
+
+	/* Get stripped-text byte offset at click position */
+	{
+		int layout_h = 0;
+		int widget_h = gtk_widget_get_height (GTK_WIDGET (edit));
+		pango_layout_get_pixel_size (priv->layout, NULL, &layout_h);
+		int content_h = widget_h - 2 * VPAD;
+		double text_y;
+		if (layout_h <= content_h)
+		{
+			text_y = (widget_h - layout_h) * 0.53;
+			if (text_y < VPAD) text_y = VPAD;
+		}
+		else
+		{
+			text_y = VPAD - priv->scroll_y;
+		}
+
+		int lx = (int)((x - HPAD + priv->scroll_x) * PANGO_SCALE);
+		int ly = (int)((y - text_y) * PANGO_SCALE);
+		int index, trailing;
+		pango_layout_xy_to_index (priv->layout, lx, ly, &index, &trailing);
+		click_stripped = index;  /* byte offset in stripped text */
+	}
+
+	text = (const char *) priv->stripped_str;
+	text_len = priv->stripped_len;
+	n_chars = g_utf8_strlen (text, text_len);
+	n_attrs = n_chars + 1;
+	log_attrs = g_new0 (PangoLogAttr, n_attrs);
+
+	pango_get_log_attrs (text, text_len, -1,
+	                     pango_language_get_default (),
+	                     log_attrs, n_attrs);
+
+	/* Convert click byte offset to char offset */
+	int click_char = (int) g_utf8_pointer_to_offset (text, text + click_stripped);
+	if (click_char < 0) click_char = 0;
+	if (click_char >= n_attrs) click_char = n_attrs - 1;
+
+	/* Find the word containing this character */
+	int ws_char = click_char, we_char = click_char;
+
+	/* Scan back to word start */
+	while (ws_char > 0 &&
+	       !(log_attrs[ws_char].is_word_start && log_attrs[ws_char].is_word_boundary))
+		ws_char--;
+
+	/* Scan forward to word end */
+	while (we_char < n_attrs &&
+	       !(log_attrs[we_char].is_word_end && log_attrs[we_char].is_word_boundary))
+		we_char++;
+
+	gboolean found = FALSE;
+
+	if (we_char > ws_char)
+	{
+		char *word_start = g_utf8_offset_to_pointer (text, ws_char);
+		char *word_end = g_utf8_offset_to_pointer (text, we_char);
+		char *word = g_strndup (word_start, word_end - word_start);
+
+		if (word_misspelled (edit, word))
+		{
+			int stripped_byte_start = (int)(word_start - text);
+			int stripped_byte_end = (int)(word_end - text);
+
+			/* Convert stripped byte offsets to raw byte offsets */
+			int raw_start = xtext_stripped_to_raw (priv->raw_to_stripped_map,
+			                                       (int) priv->text->len,
+			                                       stripped_byte_start);
+			int raw_end = xtext_stripped_to_raw (priv->raw_to_stripped_map,
+			                                     (int) priv->text->len,
+			                                     stripped_byte_end);
+
+			priv->spell_word = word;
+			priv->spell_word_start = raw_start;
+			priv->spell_word_end = raw_end;
+			priv->spell_dict = (struct EnchantDict *) priv->dict_list->data;
+			priv->spell_suggestions = enchant_dict_suggest (
+				priv->spell_dict, word, -1, &priv->spell_n_suggs);
+			found = TRUE;
+		}
+		else
+		{
+			g_free (word);
+		}
+	}
+
+	g_free (log_attrs);
+	return found;
+}
+
+/* Replace misspelled word with a suggestion */
+static void
+action_spell_replace (GtkWidget *widget, const char *name, GVariant *param)
+{
+	HexInputEdit *edit = HEX_INPUT_EDIT (widget);
+	HexInputEditPriv *priv = edit->priv;
+	const char *replacement;
+
+	if (!param || !priv->spell_word)
+		return;
+
+	replacement = g_variant_get_string (param, NULL);
+	if (!replacement || !*replacement)
+		return;
+
+	push_undo_snapshot (edit);
+	int rlen = (int) strlen (replacement);
+	int old_len = priv->spell_word_end - priv->spell_word_start;
+	g_string_erase (priv->text, priv->spell_word_start, old_len);
+	g_string_insert_len (priv->text, priv->spell_word_start, replacement, rlen);
+	priv->cursor_byte = priv->spell_word_start + rlen;
+	priv->sel_anchor_byte = -1;
+	mark_dirty (edit);
+}
+
+/* Add word to personal dictionary */
+static void
+action_spell_add (GtkWidget *widget, const char *name, GVariant *param)
+{
+	HexInputEdit *edit = HEX_INPUT_EDIT (widget);
+	HexInputEditPriv *priv = edit->priv;
+
+	if (!hie_have_enchant || !priv->spell_word || !priv->spell_dict)
+		return;
+
+	enchant_dict_add_to_personal (priv->spell_dict, priv->spell_word, -1);
+	mark_dirty (edit);  /* recheck to remove underline */
+}
+
 static void
 show_context_menu (HexInputEdit *edit, double x, double y)
 {
@@ -890,8 +1388,48 @@ show_context_menu (HexInputEdit *edit, double x, double y)
 	gtk_widget_action_set_enabled (GTK_WIDGET (edit), "edit.select-all",
 	                               priv->text->len > 0);
 
+	/* Check for misspelled word under click */
+	gboolean has_spell = spell_word_at_xy (edit, x, y);
+
 	/* Menu model */
 	GMenu *menu = g_menu_new ();
+
+	/* Spell suggestions section (at the top) */
+	if (has_spell)
+	{
+		GMenu *spell_section = g_menu_new ();
+
+		if (priv->spell_suggestions && priv->spell_n_suggs > 0)
+		{
+			size_t i;
+			for (i = 0; i < priv->spell_n_suggs && i < 10; i++)
+			{
+				GMenuItem *item = g_menu_item_new (
+					priv->spell_suggestions[i], NULL);
+				g_menu_item_set_action_and_target (item, "spell.replace",
+					"s", priv->spell_suggestions[i]);
+				g_menu_append_item (spell_section, item);
+				g_object_unref (item);
+			}
+		}
+		else
+		{
+			g_menu_append (spell_section, _("(no suggestions)"), NULL);
+		}
+
+		g_menu_append_section (menu, NULL, G_MENU_MODEL (spell_section));
+		g_object_unref (spell_section);
+
+		/* Add to dictionary */
+		GMenu *add_section = g_menu_new ();
+		char *add_label = g_strdup_printf (_("Add \"%s\" to Dictionary"),
+		                                    priv->spell_word);
+		g_menu_append (add_section, add_label, "spell.add");
+		g_free (add_label);
+		g_menu_append_section (menu, NULL, G_MENU_MODEL (add_section));
+		g_object_unref (add_section);
+	}
+
 	GMenu *section1 = g_menu_new ();
 	g_menu_append (section1, "_Undo", "edit.undo");
 	g_menu_append (section1, "_Redo", "edit.redo");
@@ -1196,8 +1734,8 @@ xy_to_byte_offset (HexInputEdit *edit, double x, double y)
 		text_y = VPAD - priv->scroll_y;
 	}
 
-	/* Adjust for padding */
-	int lx = (int)((x - HPAD) * PANGO_SCALE);
+	/* Adjust for padding and scroll offset */
+	int lx = (int)((x - HPAD + priv->scroll_x) * PANGO_SCALE);
 	int ly = (int)((y - text_y) * PANGO_SCALE);
 
 	int index, trailing;
@@ -1214,6 +1752,42 @@ xy_to_byte_offset (HexInputEdit *edit, double x, double y)
 	return CLAMP (raw_off, 0, (int) priv->text->len);
 }
 
+/* Extract the whitespace-delimited word at a byte offset in raw text.
+ * Returns a newly allocated string, or NULL if no word found. */
+static char *
+word_at_byte (const char *str, int len, int byte_off)
+{
+	int ws = byte_off, we = byte_off;
+
+	while (ws > 0)
+	{
+		const char *prev = g_utf8_find_prev_char (str, str + ws);
+		if (!prev)
+			break;
+		gunichar ch = g_utf8_get_char (prev);
+		if (g_unichar_isspace (ch))
+			break;
+		ws = (int)(prev - str);
+	}
+
+	{
+		const char *p = str + we;
+		const char *end = str + len;
+		while (p < end)
+		{
+			gunichar ch = g_utf8_get_char (p);
+			if (g_unichar_isspace (ch))
+				break;
+			p = g_utf8_next_char (p);
+		}
+		we = (int)(p - str);
+	}
+
+	if (we <= ws)
+		return NULL;
+	return g_strndup (str + ws, we - ws);
+}
+
 static void
 click_pressed_cb (GtkGestureClick *gesture, int n_press, double x, double y,
                   gpointer data)
@@ -1225,6 +1799,29 @@ click_pressed_cb (GtkGestureClick *gesture, int n_press, double x, double y,
 	gtk_widget_grab_focus (GTK_WIDGET (edit));
 
 	int byte_off = xy_to_byte_offset (edit, x, y);
+
+	/* Ctrl+click: open URL at click position */
+	{
+		GdkModifierType state = gtk_event_controller_get_current_event_state (
+			GTK_EVENT_CONTROLLER (gesture));
+		if ((state & GDK_CONTROL_MASK) && n_press == 1)
+		{
+			char *word = word_at_byte (priv->text->str, priv->text->len, byte_off);
+			if (word)
+			{
+				int url_type = url_check_word (word);
+				if (url_type == WORD_URL || url_type == WORD_EMAIL ||
+				    url_type == WORD_HOST || url_type == WORD_HOST6 ||
+				    url_type == WORD_PATH)
+				{
+					fe_open_url (word);
+					g_free (word);
+					return;
+				}
+				g_free (word);
+			}
+		}
+	}
 
 	if (n_press == 1)
 	{
@@ -1312,6 +1909,7 @@ drag_update_cb (GtkGestureDrag *gesture, double offset_x, double offset_y,
 	int byte_off = xy_to_byte_offset (edit, start_x + offset_x, start_y + offset_y);
 	priv->cursor_byte = byte_off;
 
+	ensure_cursor_visible (edit);
 	gtk_widget_queue_draw (GTK_WIDGET (edit));
 }
 
@@ -1392,6 +1990,9 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 	cairo_rectangle (cr, 1, 1, width - 2, height - 2);
 	cairo_clip (cr);
 
+	/* Horizontal text origin (HPAD with single-line scroll offset) */
+	double text_x = HPAD - priv->scroll_x;
+
 	/* Selection highlight */
 	int sel_start_byte, sel_end_byte;
 	if (get_selection_bytes (priv, &sel_start_byte, &sel_end_byte) &&
@@ -1427,7 +2028,7 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 
 				gdk_cairo_set_source_rgba (cr, &pal[XTEXT_MARK_BG]);
 				cairo_rectangle (cr,
-				                 HPAD + PANGO_PIXELS (sx), line_y,
+				                 text_x + PANGO_PIXELS (sx), line_y,
 				                 PANGO_PIXELS (ex - sx), line_h);
 				cairo_fill (cr);
 			}
@@ -1436,7 +2037,7 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 	}
 
 	/* Text */
-	cairo_move_to (cr, HPAD, text_y);
+	cairo_move_to (cr, text_x, text_y);
 	gdk_cairo_set_source_rgba (cr, &pal[XTEXT_FG]);
 	pango_cairo_show_layout (cr, priv->layout);
 
@@ -1509,7 +2110,7 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 			PangoRectangle pos;
 			pango_layout_index_to_pos (priv->layout, em->stripped_off, &pos);
 
-			double ex = HPAD + PANGO_PIXELS (pos.x);
+			double ex = text_x + PANGO_PIXELS (pos.x);
 			double ey = text_y + PANGO_PIXELS (pos.y);
 			double ew = PANGO_PIXELS (pos.width);
 			double eh = PANGO_PIXELS (pos.height);
@@ -1546,7 +2147,7 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 		PangoRectangle strong;
 		pango_layout_get_cursor_pos (priv->layout, stripped_cursor, &strong, NULL);
 
-		double cx = HPAD + PANGO_PIXELS (strong.x);
+		double cx = text_x + PANGO_PIXELS (strong.x);
 		double cy = text_y + PANGO_PIXELS (strong.y);
 		double ch = PANGO_PIXELS (strong.height);
 
@@ -1579,8 +2180,28 @@ hex_input_edit_measure (GtkWidget *widget, GtkOrientation orientation,
 
 	if (orientation == GTK_ORIENTATION_HORIZONTAL)
 	{
-		*minimum = 50;
-		*natural = 200;
+		/* Compute character width from font metrics */
+		int char_w = 0;
+		if (priv->width_chars > 0 || priv->max_width_chars > 0)
+		{
+			PangoContext *pctx = gtk_widget_get_pango_context (widget);
+			PangoFontDescription *desc = priv->font_desc
+				? priv->font_desc
+				: (PangoFontDescription *) pango_context_get_font_description (pctx);
+			PangoFontMetrics *m = pango_context_get_metrics (pctx, desc, NULL);
+			char_w = pango_font_metrics_get_approximate_char_width (m) / PANGO_SCALE;
+			pango_font_metrics_unref (m);
+		}
+
+		if (priv->width_chars > 0)
+			*minimum = priv->width_chars * char_w + 2 * HPAD;
+		else
+			*minimum = 50;
+
+		if (priv->max_width_chars > 0)
+			*natural = priv->max_width_chars * char_w + 2 * HPAD;
+		else
+			*natural = MAX (*minimum, 200);
 	}
 	else
 	{
@@ -1666,8 +2287,28 @@ hex_input_edit_finalize (GObject *obj)
 
 	if (priv->blink_timer)
 		g_source_remove (priv->blink_timer);
+	/* root_key_ctrl is owned by the toplevel — removed via on_root_notify
+	 * when widget is unrooted, or destroyed with the toplevel. */
 	if (priv->undo_stack)
 		g_ptr_array_free (priv->undo_stack, TRUE);
+
+	/* Spell menu state cleanup */
+	if (priv->spell_suggestions && priv->spell_dict)
+		enchant_dict_free_suggestions (priv->spell_dict, priv->spell_suggestions);
+	g_free (priv->spell_word);
+
+	/* Spell checking cleanup */
+	if (priv->dict_hash)
+		g_hash_table_destroy (priv->dict_hash);
+	if (hie_have_enchant && priv->broker)
+	{
+		GSList *li;
+		for (li = priv->dict_list; li; li = g_slist_next (li))
+			enchant_broker_free_dict (priv->broker, (struct EnchantDict *) li->data);
+		g_slist_free (priv->dict_list);
+		enchant_broker_free (priv->broker);
+	}
+
 	g_string_free (priv->text, TRUE);
 	g_free (priv->cached_text);
 	g_free (priv->stripped_str);
@@ -1712,6 +2353,122 @@ scroll_cb (GtkEventControllerScroll *controller, double dx, double dy,
 	return TRUE;
 }
 
+/* Update mouse cursor: pointer over URLs when Ctrl is held, otherwise text cursor.
+ * Called from motion_cb and key press/release to keep cursor in sync with Ctrl state. */
+static void
+update_url_cursor (HexInputEdit *edit, double x, double y, gboolean ctrl_held)
+{
+	HexInputEditPriv *priv = edit->priv;
+
+	if (ctrl_held && priv->text->len > 0)
+	{
+		int byte_off = xy_to_byte_offset (edit, x, y);
+		char *word = word_at_byte (priv->text->str, priv->text->len, byte_off);
+		if (word)
+		{
+			int url_type = url_check_word (word);
+			g_free (word);
+			if (url_type == WORD_URL || url_type == WORD_EMAIL ||
+			    url_type == WORD_HOST || url_type == WORD_HOST6 ||
+			    url_type == WORD_PATH)
+			{
+				gtk_widget_set_cursor_from_name (GTK_WIDGET (edit), "pointer");
+				return;
+			}
+		}
+	}
+	gtk_widget_set_cursor_from_name (GTK_WIDGET (edit), "text");
+}
+
+static void
+motion_cb (GtkEventControllerMotion *controller, double x, double y, gpointer data)
+{
+	HexInputEdit *edit = HEX_INPUT_EDIT (data);
+	edit->priv->last_mouse_x = x;
+	edit->priv->last_mouse_y = y;
+
+	GdkModifierType state = gtk_event_controller_get_current_event_state (
+		GTK_EVENT_CONTROLLER (controller));
+	update_url_cursor (edit, x, y, (state & GDK_CONTROL_MASK) != 0);
+}
+
+static void
+motion_enter_cb (GtkEventControllerMotion *controller, double x, double y, gpointer data)
+{
+	HexInputEdit *edit = HEX_INPUT_EDIT (data);
+	edit->priv->mouse_in_widget = TRUE;
+	edit->priv->last_mouse_x = x;
+	edit->priv->last_mouse_y = y;
+}
+
+static void
+motion_leave_cb (GtkEventControllerMotion *controller, gpointer data)
+{
+	HexInputEdit *edit = HEX_INPUT_EDIT (data);
+	edit->priv->mouse_in_widget = FALSE;
+	gtk_widget_set_cursor_from_name (GTK_WIDGET (edit), "text");
+}
+
+/* Capture-phase key handler on toplevel: catches Ctrl press/release regardless
+ * of which child has focus, so we can update the URL cursor immediately. */
+static gboolean
+root_key_pressed_cb (GtkEventControllerKey *controller, guint keyval,
+                     guint keycode, GdkModifierType state, gpointer data)
+{
+	HexInputEdit *edit = HEX_INPUT_EDIT (data);
+	if ((keyval == GDK_KEY_Control_L || keyval == GDK_KEY_Control_R) &&
+	    edit->priv->mouse_in_widget)
+	{
+		update_url_cursor (edit, edit->priv->last_mouse_x,
+		                   edit->priv->last_mouse_y, TRUE);
+	}
+	return FALSE;
+}
+
+static void
+root_key_released_cb (GtkEventControllerKey *controller, guint keyval,
+                      guint keycode, GdkModifierType state, gpointer data)
+{
+	HexInputEdit *edit = HEX_INPUT_EDIT (data);
+	if ((keyval == GDK_KEY_Control_L || keyval == GDK_KEY_Control_R) &&
+	    edit->priv->mouse_in_widget)
+	{
+		update_url_cursor (edit, edit->priv->last_mouse_x,
+		                   edit->priv->last_mouse_y, FALSE);
+	}
+}
+
+static void
+on_root_notify (GObject *object, GParamSpec *pspec, gpointer data)
+{
+	(void) pspec; (void) data;
+	HexInputEdit *edit = HEX_INPUT_EDIT (object);
+	HexInputEditPriv *priv = edit->priv;
+
+	/* Remove old controller from previous root */
+	if (priv->root_key_ctrl)
+	{
+		GtkWidget *old_root = gtk_event_controller_get_widget (priv->root_key_ctrl);
+		if (old_root)
+			gtk_widget_remove_controller (old_root, priv->root_key_ctrl);
+		priv->root_key_ctrl = NULL;
+	}
+
+	/* Attach to new root */
+	GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (edit));
+	if (root && GTK_IS_WIDGET (root))
+	{
+		GtkEventController *ctrl = gtk_event_controller_key_new ();
+		gtk_event_controller_set_propagation_phase (ctrl, GTK_PHASE_CAPTURE);
+		g_signal_connect (ctrl, "key-pressed",
+		                  G_CALLBACK (root_key_pressed_cb), edit);
+		g_signal_connect (ctrl, "key-released",
+		                  G_CALLBACK (root_key_released_cb), edit);
+		gtk_widget_add_controller (GTK_WIDGET (root), ctrl);
+		priv->root_key_ctrl = ctrl;
+	}
+}
+
 static void
 hex_input_edit_init (HexInputEdit *edit)
 {
@@ -1722,12 +2479,23 @@ hex_input_edit_init (HexInputEdit *edit)
 	priv->cursor_byte = 0;
 	priv->sel_anchor_byte = -1;
 	priv->multiline = TRUE;
+	priv->editable = TRUE;
 	priv->max_lines = 5;
 	priv->parse_dirty = TRUE;
 	priv->caret_visible = TRUE;
 	priv->undo_stack = NULL;
 	priv->undo_pos = -1;
 	priv->undo_frozen = FALSE;
+
+	/* Spell checking */
+	priv->dict_hash = g_hash_table_new_full (g_str_hash, g_str_equal,
+	                                          g_free, NULL);
+	hie_initialize_enchant ();
+	if (hie_have_enchant)
+	{
+		hex_input_edit_activate_default_languages (edit);
+		priv->spell_checked = prefs.hex_gui_input_spell;
+	}
 
 	/* Make focusable */
 	gtk_widget_set_focusable (GTK_WIDGET (edit), TRUE);
@@ -1786,6 +2554,16 @@ hex_input_edit_init (HexInputEdit *edit)
 	                  G_CALLBACK (scroll_cb), edit);
 	gtk_widget_add_controller (GTK_WIDGET (edit), scroll_ctrl);
 
+	/* Motion controller (for Ctrl+hover URL cursor) */
+	GtkEventController *motion_ctrl = gtk_event_controller_motion_new ();
+	g_signal_connect (motion_ctrl, "motion",
+	                  G_CALLBACK (motion_cb), edit);
+	g_signal_connect (motion_ctrl, "enter",
+	                  G_CALLBACK (motion_enter_cb), edit);
+	g_signal_connect (motion_ctrl, "leave",
+	                  G_CALLBACK (motion_leave_cb), edit);
+	gtk_widget_add_controller (GTK_WIDGET (edit), motion_ctrl);
+
 	/* Focus controller */
 	GtkEventController *focus_ctrl = gtk_event_controller_focus_new ();
 	g_signal_connect (focus_ctrl, "enter",
@@ -1793,6 +2571,11 @@ hex_input_edit_init (HexInputEdit *edit)
 	g_signal_connect (focus_ctrl, "leave",
 	                  G_CALLBACK (focus_leave_cb), edit);
 	gtk_widget_add_controller (GTK_WIDGET (edit), focus_ctrl);
+
+	/* Attach capture-phase key controller to toplevel when rooted,
+	 * so we catch Ctrl press/release for URL cursor feedback. */
+	g_signal_connect (edit, "notify::root",
+	                  G_CALLBACK (on_root_notify), NULL);
 
 	/* Set cursor to text cursor */
 	gtk_widget_set_cursor_from_name (GTK_WIDGET (edit), "text");
@@ -1816,6 +2599,8 @@ hex_input_edit_class_init (HexInputEditClass *klass)
 	widget_class->unrealize = hex_input_edit_unrealize;
 	widget_class->get_request_mode = hex_input_edit_get_request_mode;
 
+	klass->word_check = default_word_check;
+
 	gtk_widget_class_set_css_name (widget_class, "entry");
 
 	/* Widget-class actions for context menu */
@@ -1825,6 +2610,8 @@ hex_input_edit_class_init (HexInputEditClass *klass)
 	gtk_widget_class_install_action (widget_class, "edit.copy", NULL, action_copy);
 	gtk_widget_class_install_action (widget_class, "edit.paste", NULL, action_paste);
 	gtk_widget_class_install_action (widget_class, "edit.select-all", NULL, action_select_all);
+	gtk_widget_class_install_action (widget_class, "spell.replace", "s", action_spell_replace);
+	gtk_widget_class_install_action (widget_class, "spell.add", NULL, action_spell_add);
 
 	/* Suppress theme background — we draw our own from the xtext palette,
 	 * but keep the theme's border, focus ring, and other entry styling. */
@@ -1852,7 +2639,7 @@ hex_input_edit_class_init (HexInputEditClass *klass)
 		G_TYPE_FROM_CLASS (klass),
 		G_SIGNAL_RUN_LAST,
 		G_STRUCT_OFFSET (HexInputEditClass, word_check),
-		NULL, NULL,
+		(GSignalAccumulator) spell_accumulator, NULL,
 		g_cclosure_marshal_generic,
 		G_TYPE_BOOLEAN, 1, G_TYPE_STRING);
 }
@@ -1942,6 +2729,36 @@ hex_input_edit_set_multiline (HexInputEdit *edit, gboolean multiline)
 {
 	g_return_if_fail (HEX_IS_INPUT_EDIT (edit));
 	edit->priv->multiline = multiline;
+	gtk_widget_queue_resize (GTK_WIDGET (edit));
+}
+
+void
+hex_input_edit_set_editable (HexInputEdit *edit, gboolean editable)
+{
+	g_return_if_fail (HEX_IS_INPUT_EDIT (edit));
+	edit->priv->editable = editable;
+}
+
+void
+hex_input_edit_set_max_chars (HexInputEdit *edit, int max_chars)
+{
+	g_return_if_fail (HEX_IS_INPUT_EDIT (edit));
+	edit->priv->max_chars = max_chars > 0 ? max_chars : 0;
+}
+
+void
+hex_input_edit_set_width_chars (HexInputEdit *edit, int width_chars)
+{
+	g_return_if_fail (HEX_IS_INPUT_EDIT (edit));
+	edit->priv->width_chars = width_chars > 0 ? width_chars : 0;
+	gtk_widget_queue_resize (GTK_WIDGET (edit));
+}
+
+void
+hex_input_edit_set_max_width_chars (HexInputEdit *edit, int max_width_chars)
+{
+	g_return_if_fail (HEX_IS_INPUT_EDIT (edit));
+	edit->priv->max_width_chars = max_width_chars > 0 ? max_width_chars : 0;
 	gtk_widget_queue_resize (GTK_WIDGET (edit));
 }
 
@@ -2087,4 +2904,140 @@ hex_input_edit_move_cursor_down (HexInputEdit *edit)
 	priv->sel_anchor_byte = -1;
 	reset_blink (edit);
 	return TRUE;
+}
+
+/* =============================== */
+/* === Spell checking API       === */
+/* =============================== */
+
+static void
+enumerate_dicts_cb (const char * const lang_tag,
+                    const char * const provider_name,
+                    const char * const provider_desc,
+                    const char * const provider_file,
+                    void * user_data)
+{
+	(void) provider_name; (void) provider_desc; (void) provider_file;
+	GSList **langs = (GSList **) user_data;
+	*langs = g_slist_append (*langs, g_strdup (lang_tag));
+}
+
+static gboolean
+enchant_has_lang (const gchar *lang, GSList *langs)
+{
+	GSList *i;
+	for (i = langs; i; i = g_slist_next (i))
+	{
+		if (strcmp (lang, i->data) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+static gboolean
+activate_language_internal (HexInputEdit *edit, const gchar *lang)
+{
+	struct EnchantDict *dict;
+	HexInputEditPriv *priv = edit->priv;
+
+	if (!hie_have_enchant || !priv->broker)
+		return FALSE;
+
+	if (g_hash_table_lookup (priv->dict_hash, lang))
+		return TRUE;
+
+	dict = enchant_broker_request_dict (priv->broker, lang);
+	if (!dict)
+		return FALSE;
+
+	priv->dict_list = g_slist_append (priv->dict_list, dict);
+	g_hash_table_insert (priv->dict_hash, g_strdup (lang), dict);
+	return TRUE;
+}
+
+void
+hex_input_edit_set_checked (HexInputEdit *edit, gboolean checked)
+{
+	g_return_if_fail (HEX_IS_INPUT_EDIT (edit));
+	edit->priv->spell_checked = checked;
+	mark_dirty (edit);
+}
+
+gboolean
+hex_input_edit_is_checked (HexInputEdit *edit)
+{
+	g_return_val_if_fail (HEX_IS_INPUT_EDIT (edit), FALSE);
+	return edit->priv->spell_checked;
+}
+
+void
+hex_input_edit_activate_default_languages (HexInputEdit *edit)
+{
+	GSList *enchant_langs = NULL;
+	char **langs, **i;
+	HexInputEditPriv *priv;
+
+	g_return_if_fail (HEX_IS_INPUT_EDIT (edit));
+	priv = edit->priv;
+
+	if (!hie_have_enchant)
+		return;
+
+	if (!priv->broker)
+		priv->broker = enchant_broker_init ();
+
+	enchant_broker_list_dicts (priv->broker, enumerate_dicts_cb,
+	                           &enchant_langs);
+
+	langs = g_strsplit_set (prefs.hex_text_spell_langs, ", \t", 0);
+
+	for (i = langs; *i; i++)
+	{
+		if (enchant_has_lang (*i, enchant_langs))
+			activate_language_internal (edit, *i);
+	}
+
+	g_slist_free_full (enchant_langs, g_free);
+	g_strfreev (langs);
+
+	if (priv->dict_list == NULL)
+		activate_language_internal (edit, "en");
+
+	mark_dirty (edit);
+}
+
+void
+hex_input_edit_deactivate_language (HexInputEdit *edit, const gchar *lang)
+{
+	HexInputEditPriv *priv;
+
+	g_return_if_fail (HEX_IS_INPUT_EDIT (edit));
+	priv = edit->priv;
+
+	if (!hie_have_enchant || !priv->dict_list)
+		return;
+
+	if (lang)
+	{
+		struct EnchantDict *dict = g_hash_table_lookup (priv->dict_hash, lang);
+		if (!dict)
+			return;
+		enchant_broker_free_dict (priv->broker, dict);
+		priv->dict_list = g_slist_remove (priv->dict_list, dict);
+		g_hash_table_remove (priv->dict_hash, lang);
+	}
+	else
+	{
+		/* Deactivate all */
+		GSList *li;
+		for (li = priv->dict_list; li; li = g_slist_next (li))
+			enchant_broker_free_dict (priv->broker, (struct EnchantDict *) li->data);
+		g_slist_free (priv->dict_list);
+		g_hash_table_destroy (priv->dict_hash);
+		priv->dict_hash = g_hash_table_new_full (g_str_hash, g_str_equal,
+		                                          g_free, NULL);
+		priv->dict_list = NULL;
+	}
+
+	mark_dirty (edit);
 }

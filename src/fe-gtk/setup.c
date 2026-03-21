@@ -2087,7 +2087,10 @@ setup_apply_to_sess (session_gui *gui)
 	/* update active languages */
 	if (HEX_IS_INPUT_EDIT (gui->input_box))
 	{
+		hex_input_edit_deactivate_language (HEX_INPUT_EDIT (gui->input_box), NULL);
+		hex_input_edit_activate_default_languages (HEX_INPUT_EDIT (gui->input_box));
 		hex_input_edit_set_max_lines (HEX_INPUT_EDIT (gui->input_box), prefs.hex_gui_input_lines);
+		hex_input_edit_set_checked (HEX_INPUT_EDIT (gui->input_box), prefs.hex_gui_input_spell);
 		hex_input_edit_set_emoji_cache (HEX_INPUT_EDIT (gui->input_box),
 		                                GTK_XTEXT (gui->xtext)->emoji_cache);
 		hex_input_edit_set_palette (HEX_INPUT_EDIT (gui->input_box),
