@@ -3134,6 +3134,69 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 			}
 		}
 
+		/* --- Search highlight overlay --- */
+		if (ent->marks)
+		{
+			gboolean highlight_all = (xtext->buffer->search_flags & highlight) != 0;
+			GList *gl;
+			int raw_end = raw_offset + raw_len;
+
+			for (gl = g_list_first (ent->marks); gl; gl = g_list_next (gl))
+			{
+				gboolean is_current = (gl == xtext->buffer->curmark);
+
+				/* Skip non-current matches unless highlight-all is on */
+				if (!is_current && !highlight_all)
+					continue;
+
+				offsets_t o;
+				o.u = GPOINTER_TO_UINT (gl->data);
+				int m_start = o.o.start;  /* raw offset */
+				int m_end = o.o.end;      /* raw offset */
+
+				/* Clip to this subline's raw range */
+				if (m_start < raw_offset) m_start = raw_offset;
+				if (m_end > raw_end) m_end = raw_end;
+				if (m_start >= m_end)
+					continue;
+
+				/* Convert to stripped offsets local to this subline */
+				int ms = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+				                                ent->str_len, m_start);
+				int me = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+				                                ent->str_len, m_end);
+				int ms_local = ms - sub_start;
+				int me_local = me - sub_start;
+
+				/* Get pixel positions from Pango */
+				PangoRectangle r1, r2;
+				pango_layout_index_to_pos (xtext->layout, ms_local, &r1);
+				pango_layout_index_to_pos (xtext->layout, me_local, &r2);
+				int hl_x1 = x + PANGO_PIXELS (r1.x);
+				int hl_x2 = (me_local >= sub_len)
+				            ? x + text_width
+				            : x + PANGO_PIXELS (r2.x);
+
+				/* Draw highlight background */
+				GdkRGBA hl_bg = xtext->palette[XTEXT_MARK_BG];
+				if (!is_current)
+					hl_bg.alpha = 0.4;  /* translucent for non-current matches */
+				gdk_cairo_set_source_rgba (xtext->cr, &hl_bg);
+				cairo_rectangle (xtext->cr, hl_x1, y - xtext->font->ascent,
+				                 hl_x2 - hl_x1, xtext->fontsize);
+				cairo_fill (xtext->cr);
+
+				/* Current match: draw underline */
+				if (is_current)
+				{
+					xtext_set_source_color (xtext, XTEXT_FG);
+					cairo_move_to (xtext->cr, hl_x1, y + 1 + 0.5);
+					cairo_line_to (xtext->cr, hl_x2 - 1, y + 1 + 0.5);
+					cairo_stroke (xtext->cr);
+				}
+			}
+		}
+
 		/* --- URL underline overlay --- */
 		if (xtext->hilight_ent == ent)
 		{
