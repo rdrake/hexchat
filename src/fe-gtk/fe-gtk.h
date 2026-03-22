@@ -137,7 +137,7 @@ typedef struct session_gui
 		*topic_entry,
 		*note_book,
 		*main_table,
-		*user_tree,	/* GtkTreeView */
+		*user_tree,	/* GtkColumnView */
 		*user_box,	/* userlist box */
 		*button_box_parent,
 		*button_box,	/* userlist buttons' box */

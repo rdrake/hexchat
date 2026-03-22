@@ -1344,13 +1344,13 @@ servlist_check_cb (GtkWidget *but, gpointer num_p)
 	if ((1 << num) == FLAG_CYCLE || (1 << num) == FLAG_USE_PROXY)
 	{
 		/* these ones are reversed, so it's compat with 2.0.x */
-		if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (but)))
+		if (gtk_check_button_get_active (GTK_CHECK_BUTTON (but)))
 			selected_net->flags &= ~(1 << num);
 		else
 			selected_net->flags |= (1 << num);
 	} else
 	{
-		if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (but)))
+		if (gtk_check_button_get_active (GTK_CHECK_BUTTON (but)))
 			selected_net->flags |= (1 << num);
 		else
 			selected_net->flags &= ~(1 << num);
@@ -1358,7 +1358,7 @@ servlist_check_cb (GtkWidget *but, gpointer num_p)
 
 	if ((1 << num) == FLAG_USE_GLOBAL)
 	{
-		servlist_toggle_global_user (!gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (but)));
+		servlist_toggle_global_user (!gtk_check_button_get_active (GTK_CHECK_BUTTON (but)));
 	}
 }
 
@@ -1758,7 +1758,7 @@ servlist_create_logintypecombo (GtkWidget *data)
 static void
 no_servlist (GtkWidget * igad, gpointer serv)
 {
-	if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (igad)))
+	if (gtk_check_button_get_active (GTK_CHECK_BUTTON (igad)))
 		prefs.hex_gui_slist_skip = TRUE;
 	else
 		prefs.hex_gui_slist_skip = FALSE;
@@ -1767,7 +1767,7 @@ no_servlist (GtkWidget * igad, gpointer serv)
 static void
 fav_servlist (GtkWidget * igad, gpointer serv)
 {
-	if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (igad)))
+	if (gtk_check_button_get_active (GTK_CHECK_BUTTON (igad)))
 		prefs.hex_gui_slist_fav = TRUE;
 	else
 		prefs.hex_gui_slist_fav = FALSE;

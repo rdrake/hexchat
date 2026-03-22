@@ -532,7 +532,7 @@ mg_show_generic_tab (GtkWidget *box)
 
 	num = hc_page_container_get_page_num (mg_gui->note_book, box);
 	hc_page_container_set_current_page (mg_gui->note_book, num);
-	gtk_tree_view_set_model (GTK_TREE_VIEW (mg_gui->user_tree), NULL);
+	gtk_column_view_set_model (GTK_COLUMN_VIEW (mg_gui->user_tree), NULL);
 	gtk_window_set_title (GTK_WINDOW (mg_gui->window),
 								 g_object_get_data (G_OBJECT (box), "title"));
 	gtk_widget_set_sensitive (mg_gui->menu, FALSE);
@@ -2944,8 +2944,8 @@ mg_create_userlist (session_gui *gui, GtkWidget *box)
 	gtk_box_append (GTK_BOX (box), vbox);
 
 	frame = gtk_frame_new (NULL);
-	if (prefs.hex_gui_ulist_count)
-		gtk_box_append (GTK_BOX (vbox), frame);
+	gtk_box_append (GTK_BOX (vbox), frame);
+	gtk_widget_set_visible (frame, prefs.hex_gui_ulist_count);
 
 	gui->namelistinfo = gtk_label_new (NULL);
 	gtk_label_set_ellipsize (GTK_LABEL (gui->namelistinfo), PANGO_ELLIPSIZE_END);
@@ -3587,9 +3587,9 @@ mg_search_handle_next(GtkWidget *wid, session *sess)
 }
 
 static void
-search_set_option (GtkToggleButton *but, guint *pref)
+search_set_option (GtkCheckButton *but, guint *pref)
 {
-	*pref = gtk_toggle_button_get_active(but);
+	*pref = gtk_check_button_get_active(but);
 	save_config();
 }
 

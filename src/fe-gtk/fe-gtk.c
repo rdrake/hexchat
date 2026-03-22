@@ -492,10 +492,10 @@ apply_tree_css (void)
 		"  font-family: \"%s\"; "
 		"  font-size: %dpt; "
 		"} "
-		"#hexchat-userlist > row:selected { "
+		"#hexchat-userlist row:selected { "
 		"  background-color: rgb(%d, %d, %d); "
 		"} "
-		"#hexchat-userlist > row:selected label { "
+		"#hexchat-userlist row:selected label { "
 		"  color: rgb(%d, %d, %d); "
 		"} "
 		/* Dialog list/column views named hexchat-list */
@@ -608,6 +608,30 @@ apply_tree_css (void)
 		(int)(colors[COL_MARK_FG].green * 255),
 		(int)(colors[COL_MARK_FG].blue * 255));
 
+	/* Compact mode: add row padding only when NOT compact */
+	if (prefs.hex_gui_compact)
+	{
+		g_strlcat (css_buf,
+			"#hexchat-userlist row, "
+			"#hexchat-userlist row cell, "
+			"#hexchat-tree row, "
+			"#hexchat-tree row cell { "
+			"  padding: 0; "
+			"  min-height: 0; "
+			"}", sizeof (css_buf));
+	}
+	else
+	{
+		g_strlcat (css_buf,
+			"#hexchat-userlist row, "
+			"#hexchat-userlist row cell, "
+			"#hexchat-tree row, "
+			"#hexchat-tree row cell { "
+			"  padding-top: 1px; "
+			"  padding-bottom: 1px; "
+			"}", sizeof (css_buf));
+	}
+
 	gtk_css_provider_load_from_data (tree_css_provider, css_buf, -1);
 }
 
@@ -658,26 +682,7 @@ fe_init (void)
 				GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 		}
 
-		/* Compact mode CSS - add row padding when NOT in compact mode */
-		if (!prefs.hex_gui_compact)
-		{
-			static GtkCssProvider *spacing_css = NULL;
-			if (!spacing_css)
-			{
-				spacing_css = gtk_css_provider_new ();
-				gtk_css_provider_load_from_string (spacing_css,
-					/* Add vertical padding to userlist and channel tree rows */
-					"#hexchat-userlist row, "
-					"#hexchat-tree row { "
-					"  padding-top: 4px; "
-					"  padding-bottom: 4px; "
-					"}");
-				gtk_style_context_add_provider_for_display (
-					gdk_display_get_default (),
-					GTK_STYLE_PROVIDER (spacing_css),
-					GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-			}
-		}
+		/* Compact mode row padding is now in apply_tree_css() for live updates */
 	}
 }
 

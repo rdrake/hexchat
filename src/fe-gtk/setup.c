@@ -37,6 +37,7 @@
 #include "maingui.h"
 #include "palette.h"
 #include "pixmaps.h"
+#include "userlistgui.h"
 #include "menu.h"
 #include "plugin-tray.h"
 #include "notifications/notification-backend.h"
@@ -682,13 +683,13 @@ static const setting identd_settings[] =
 
 
 static void
-setup_3oggle_cb (GtkToggleButton *but, unsigned int *setting)
+setup_3oggle_cb (GtkCheckButton *but, unsigned int *setting)
 {
 	/* In GTK4, toggle signals can fire during widget destruction.
 	 * Ignore callbacks after we've started applying settings. */
 	if (setup_applying)
 		return;
-	*setting = gtk_toggle_button_get_active (but);
+	*setting = gtk_check_button_get_active (but);
 }
 
 static void
@@ -760,7 +761,7 @@ setup_create_3oggle (GtkWidget *tab, int row, const setting *set)
 }
 
 static void
-setup_toggle_cb (GtkToggleButton *but, const setting *set)
+setup_toggle_cb (GtkCheckButton *but, const setting *set)
 {
 	GtkWidget *label, *disable_wid;
 	int active_val;
@@ -770,8 +771,7 @@ setup_toggle_cb (GtkToggleButton *but, const setting *set)
 	if (setup_applying)
 		return;
 
-	active_val = gtk_toggle_button_get_active (but);
-	hc_debug_log ("setup_toggle_cb: %s offset=%d active=%d", set->label, set->offset, active_val);
+	active_val = gtk_check_button_get_active (but);
 	setup_set_int (&setup_prefs, set, active_val);
 
 	/* does this toggle also enable/disable another widget? */
@@ -785,9 +785,9 @@ setup_toggle_cb (GtkToggleButton *but, const setting *set)
 }
 
 static void
-setup_toggle_sensitive_cb (GtkToggleButton *but, GtkWidget *wid)
+setup_toggle_sensitive_cb (GtkCheckButton *but, GtkWidget *wid)
 {
-	gtk_widget_set_sensitive (wid, gtk_toggle_button_get_active (but));
+	gtk_widget_set_sensitive (wid, gtk_check_button_get_active (but));
 }
 
 static void
@@ -1334,7 +1334,7 @@ setup_create_page (const setting *set)
 			if (GTK_IS_WIDGET (parentwid))
 			{
 				g_signal_connect (G_OBJECT (parentwid), "toggled", G_CALLBACK(setup_toggle_sensitive_cb), wid);
-				gtk_widget_set_sensitive (wid, gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (parentwid)));
+				gtk_widget_set_sensitive (wid, gtk_check_button_get_active (GTK_CHECK_BUTTON (parentwid)));
 				do_disable--;
 				if (!do_disable)
 					parentwid = NULL;
@@ -2281,6 +2281,11 @@ setup_apply_real (int new_pix, int do_ulist, int do_layout, int do_identd)
 	input_style = create_input_style (input_style);
 	apply_tree_css ();
 
+	/* Apply userlist pref changes (column visibility, sort, count) early
+	 * so they're visible before the slower per-session xtext updates. */
+	if (current_tab)
+		userlist_apply_prefs (current_tab);
+
 	list = sess_list;
 	while (list)
 	{
@@ -2340,8 +2345,6 @@ setup_apply (struct hexchatprefs *pr)
 	if (DIFF (hex_gui_lang))
 		noapply = TRUE;
 #endif
-	if (DIFF (hex_gui_compact))
-		noapply = TRUE;
 	if (DIFF (hex_gui_input_icon))
 		noapply = TRUE;
 	if (DIFF (hex_gui_input_nick))
@@ -2360,16 +2363,12 @@ setup_apply (struct hexchatprefs *pr)
 		noapply = TRUE;
 	if (DIFF (hex_gui_throttlemeter))
 		noapply = TRUE;
-	if (DIFF (hex_gui_ulist_count))
-		noapply = TRUE;
-	if (DIFF (hex_gui_ulist_icons))
-		noapply = TRUE;
-	if (DIFF (hex_gui_ulist_style))
-		noapply = TRUE;
-	if (DIFF (hex_gui_ulist_sort))
-		noapply = TRUE;
 	if (DIFF (hex_gui_input_style) && prefs.hex_gui_input_style == TRUE)
 		noapply = TRUE; /* Requires restart to *disable* */
+
+	/* Userlist prefs applied live via userlist_apply_prefs() */
+	if (DIFF (hex_gui_ulist_icons))
+		do_ulist = TRUE;	/* rehash to update nick text (prefix char) */
 
 	if (DIFF (hex_gui_tab_dots))
 		do_layout = TRUE;
@@ -2443,14 +2442,19 @@ setup_apply (struct hexchatprefs *pr)
 static void
 setup_ok_cb (GtkWidget *but, GtkWidget *win)
 {
-	hc_debug_log ("setup_ok_cb: setup_prefs.hex_gui_ulist_color=%d", setup_prefs.hex_gui_ulist_color);
 	/* Set flag to prevent toggle callbacks from corrupting settings during window destruction */
 	setup_applying = TRUE;
 	hc_window_destroy_fn (GTK_WINDOW (win));
+
+	/* Apply must happen BEFORE memcpy, because setup_apply uses DIFF(a) =
+	 * (pr->a != prefs.a) to detect what changed.  If we copy first, all
+	 * diffs would be FALSE and nothing would be applied. */
 	setup_apply (&setup_prefs);
-	hc_debug_log ("setup_ok_cb: after apply, prefs.hex_gui_ulist_color=%d", prefs.hex_gui_ulist_color);
+
+	memcpy (&prefs, &setup_prefs, sizeof (prefs));
 	save_config ();
 	palette_save ();
+
 	setup_applying = FALSE;
 }
 

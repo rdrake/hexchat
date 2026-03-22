@@ -956,7 +956,7 @@ dcc_exp_cb (GtkWidget *exp, GtkWidget *box)
 static void
 dcc_toggle (GtkWidget *item, gpointer data)
 {
-	if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (item)))
+	if (gtk_check_button_get_active (GTK_CHECK_BUTTON (item)))
 	{
 		view_mode = GPOINTER_TO_INT (data);
 		dcc_fill_window (GPOINTER_TO_INT (data));
