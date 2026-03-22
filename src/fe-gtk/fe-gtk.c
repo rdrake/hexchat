@@ -508,6 +508,26 @@ apply_tree_css (void)
 		"} "
 		"#hexchat-list row:selected label { "
 		"  color: rgb(%d, %d, %d); "
+		"} "
+		"#hexchat-list cell { "
+		"  padding: 0; "
+		"} "
+		"#hexchat-list .favorite { "
+		"  font-weight: 800; "
+		"} "
+		"#hexchat-list editablelabel { "
+		"  padding: 4px 8px; "
+		"} "
+		"#hexchat-editable text { "
+		"  background: rgb(%d, %d, %d); "
+		"  color: rgb(%d, %d, %d); "
+		"  caret-color: rgb(%d, %d, %d); "
+		"  outline: 1px solid rgb(%d, %d, %d); "
+		"  outline-offset: -1px; "
+		"} "
+		"#hexchat-editable text selection { "
+		"  background-color: rgb(%d, %d, %d); "
+		"  color: rgb(%d, %d, %d); "
 		"}",
 		/* #hexchat-tree bg */
 		(int)(colors[COL_BG].red * 255),
@@ -560,6 +580,30 @@ apply_tree_css (void)
 		(int)(colors[COL_MARK_BG].green * 255),
 		(int)(colors[COL_MARK_BG].blue * 255),
 		/* #hexchat-list row:selected label fg */
+		(int)(colors[COL_MARK_FG].red * 255),
+		(int)(colors[COL_MARK_FG].green * 255),
+		(int)(colors[COL_MARK_FG].blue * 255),
+		/* #hexchat-list editablelabel text bg */
+		(int)(colors[COL_BG].red * 255),
+		(int)(colors[COL_BG].green * 255),
+		(int)(colors[COL_BG].blue * 255),
+		/* #hexchat-list editablelabel text fg */
+		(int)(colors[COL_FG].red * 255),
+		(int)(colors[COL_FG].green * 255),
+		(int)(colors[COL_FG].blue * 255),
+		/* #hexchat-list editablelabel text caret */
+		(int)(colors[COL_FG].red * 255),
+		(int)(colors[COL_FG].green * 255),
+		(int)(colors[COL_FG].blue * 255),
+		/* #hexchat-editable text outline */
+		(int)(colors[COL_MARK_FG].red * 255),
+		(int)(colors[COL_MARK_FG].green * 255),
+		(int)(colors[COL_MARK_FG].blue * 255),
+		/* #hexchat-editable text selection bg */
+		(int)(colors[COL_MARK_BG].red * 255),
+		(int)(colors[COL_MARK_BG].green * 255),
+		(int)(colors[COL_MARK_BG].blue * 255),
+		/* #hexchat-editable text selection fg */
 		(int)(colors[COL_MARK_FG].red * 255),
 		(int)(colors[COL_MARK_FG].green * 255),
 		(int)(colors[COL_MARK_FG].blue * 255));

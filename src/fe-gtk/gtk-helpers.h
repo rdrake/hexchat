@@ -607,6 +607,26 @@ hc_column_view_new_simple (GListModel *model, GtkSelectionMode selection_mode)
 	return view;
 }
 
+/* Hide the column header row in a GtkColumnView.
+ * GtkColumnView always creates a header; this walks the widget tree
+ * to find it and hides it. */
+static inline void
+hc_column_view_hide_headers (GtkColumnView *view)
+{
+	GtkWidget *child;
+	for (child = gtk_widget_get_first_child (GTK_WIDGET (view));
+	     child != NULL;
+	     child = gtk_widget_get_next_sibling (child))
+	{
+		const char *name = gtk_widget_get_css_name (child);
+		if (name && g_str_equal (name, "header"))
+		{
+			gtk_widget_set_visible (child, FALSE);
+			break;
+		}
+	}
+}
+
 static inline GtkColumnViewColumn *
 hc_column_view_add_column (GtkColumnView *view,
                            const char *title,
@@ -848,6 +868,136 @@ hc_debug_log (const char *fmt, ...)
 #define GTK_ICON_SIZE_BUTTON        GTK_ICON_SIZE_NORMAL
 #define GTK_ICON_SIZE_DND           GTK_ICON_SIZE_LARGE
 #define GTK_ICON_SIZE_DIALOG        GTK_ICON_SIZE_LARGE
+
+/* =============================================================================
+ * Editable Label for GtkColumnView
+ * =============================================================================
+ *
+ * GtkEditableLabel's built-in click gesture toggles editing on every click,
+ * which conflicts with row selection in a GtkColumnView. These helpers create
+ * an editable label that only enters edit mode on double-click and properly
+ * selects the row on single click.
+ *
+ * Usage:
+ *   static GtkEditableLabel *my_editing_label = NULL;
+ *
+ *   // In factory setup:
+ *   GtkWidget *label = hc_editable_label_new (list_item, &my_editing_label);
+ *   gtk_list_item_set_child (list_item, label);
+ */
+
+static GtkEditableLabel *hc_editable__dummy_ = NULL;  /* suppress unused warnings */
+
+static inline void
+hc_editable_label_stop_current (GtkEditableLabel **editing_label)
+{
+	if (*editing_label && gtk_editable_label_get_editing (*editing_label))
+		gtk_editable_label_stop_editing (*editing_label, FALSE);
+	*editing_label = NULL;
+}
+
+typedef struct {
+	GtkListItem *list_item;
+	GtkEditableLabel **editing_label;
+} HcEditableClickData;
+
+static inline gboolean
+hc_editable_label_start_idle (gpointer user_data)
+{
+	GtkEditableLabel *label = GTK_EDITABLE_LABEL (user_data);
+	if (gtk_widget_get_parent (GTK_WIDGET (label)) != NULL
+		&& !gtk_editable_label_get_editing (label))
+		gtk_editable_label_start_editing (label);
+	return G_SOURCE_REMOVE;
+}
+
+static inline void
+hc_editable_label_click_cb (GtkGestureClick *gesture, int n_press,
+                             double x, double y, gpointer user_data)
+{
+	HcEditableClickData *data = (HcEditableClickData *)user_data;
+	GtkWidget *widget, *label;
+	guint pos;
+
+	pos = gtk_list_item_get_position (data->list_item);
+	label = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (gesture));
+
+	/* If already editing, let clicks through for cursor positioning */
+	if (gtk_editable_label_get_editing (GTK_EDITABLE_LABEL (label)))
+		return;
+
+	hc_editable_label_stop_current (data->editing_label);
+
+	/* Walk up to find the GtkColumnView and select the row */
+	widget = label;
+	while (widget && !GTK_IS_COLUMN_VIEW (widget))
+		widget = gtk_widget_get_parent (widget);
+
+	if (GTK_IS_COLUMN_VIEW (widget))
+	{
+		GtkSelectionModel *sel = gtk_column_view_get_model (GTK_COLUMN_VIEW (widget));
+		gtk_selection_model_select_item (sel, pos, TRUE);
+	}
+
+	gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+
+	if (n_press == 2)
+	{
+		*data->editing_label = GTK_EDITABLE_LABEL (label);
+		g_idle_add (hc_editable_label_start_idle, label);
+	}
+}
+
+static inline void
+hc_editable_click_data_free (gpointer data, GClosure *closure)
+{
+	(void)closure;
+	g_free (data);
+}
+
+static inline GtkWidget *
+hc_editable_label_new (GtkListItem *list_item, GtkEditableLabel **editing_label)
+{
+	GtkWidget *label = gtk_editable_label_new ("");
+	GtkGesture *click;
+	HcEditableClickData *data;
+
+	gtk_widget_set_name (label, "hexchat-editable");
+	gtk_widget_set_hexpand (label, TRUE);
+	gtk_widget_set_vexpand (label, TRUE);
+	gtk_widget_set_halign (label, GTK_ALIGN_FILL);
+	gtk_widget_set_valign (label, GTK_ALIGN_FILL);
+
+	/* Remove GtkEditableLabel's built-in click gesture */
+	{
+		GListModel *clist = gtk_widget_observe_controllers (label);
+		guint i, n = g_list_model_get_n_items (clist);
+		for (i = 0; i < n; i++)
+		{
+			GtkEventController *controller = g_list_model_get_item (clist, i);
+			if (GTK_IS_GESTURE_CLICK (controller))
+			{
+				gtk_widget_remove_controller (label, controller);
+				g_object_unref (controller);
+				break;
+			}
+			g_object_unref (controller);
+		}
+		g_object_unref (clist);
+	}
+
+	data = g_new (HcEditableClickData, 1);
+	data->list_item = list_item;
+	data->editing_label = editing_label;
+
+	click = gtk_gesture_click_new ();
+	gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (click), GTK_PHASE_CAPTURE);
+	g_signal_connect_data (click, "pressed", G_CALLBACK (hc_editable_label_click_cb),
+	                       data, hc_editable_click_data_free, 0);
+	gtk_widget_add_controller (label, GTK_EVENT_CONTROLLER (click));
+
+	return label;
+}
 
 /* GTK4 renamed GDK_MOD1_MASK → GDK_ALT_MASK */
 #ifndef GDK_MOD1_MASK

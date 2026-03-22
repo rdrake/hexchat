@@ -33,6 +33,7 @@
 #include "fe-gtk.h"
 #include "hex-input-edit.h"
 #include "gtkutil.h"
+#include "gtk-helpers.h"
 #include "maingui.h"
 #include "palette.h"
 #include "pixmaps.h"
@@ -1559,92 +1560,163 @@ static int ignore_changed = FALSE;
 extern struct text_event te[]; /* text.c */
 extern char *sound_files[];
 
+/* Sound events item for GtkColumnView */
+#define HC_TYPE_SOUND_ITEM (hc_sound_item_get_type())
+G_DECLARE_FINAL_TYPE (HcSoundItem, hc_sound_item, HC, SOUND_ITEM, GObject)
+
+struct _HcSoundItem {
+	GObject parent;
+	char *event_name;
+	char *sound_file;
+	int index;
+};
+
+G_DEFINE_TYPE (HcSoundItem, hc_sound_item, G_TYPE_OBJECT)
+
 static void
-setup_snd_populate (GtkTreeView * treeview)
+hc_sound_item_finalize (GObject *obj)
 {
-	GtkListStore *store;
-	GtkTreeIter iter;
-	GtkTreeSelection *sel;
-	GtkTreePath *path;
+	HcSoundItem *item = HC_SOUND_ITEM (obj);
+	g_free (item->event_name);
+	g_free (item->sound_file);
+	G_OBJECT_CLASS (hc_sound_item_parent_class)->finalize (obj);
+}
+
+static void hc_sound_item_class_init (HcSoundItemClass *klass) { G_OBJECT_CLASS (klass)->finalize = hc_sound_item_finalize; }
+static void hc_sound_item_init (HcSoundItem *item) { }
+
+static HcSoundItem *
+hc_sound_item_new (const char *event_name, const char *sound_file, int index)
+{
+	HcSoundItem *item = g_object_new (HC_TYPE_SOUND_ITEM, NULL);
+	item->event_name = g_strdup (event_name ? event_name : "");
+	item->sound_file = g_strdup (sound_file ? sound_file : "");
+	item->index = index;
+	return item;
+}
+
+/* Settings category item for GtkListView tree */
+#define HC_TYPE_SETTINGS_CAT (hc_settings_cat_get_type())
+G_DECLARE_FINAL_TYPE (HcSettingsCat, hc_settings_cat, HC, SETTINGS_CAT, GObject)
+
+struct _HcSettingsCat {
+	GObject parent;
+	char *name;
+	int page_index;		/* -1 for header categories */
+	GListStore *children;	/* non-NULL for parent categories */
+};
+
+G_DEFINE_TYPE (HcSettingsCat, hc_settings_cat, G_TYPE_OBJECT)
+
+static void
+hc_settings_cat_finalize (GObject *obj)
+{
+	HcSettingsCat *item = HC_SETTINGS_CAT (obj);
+	g_free (item->name);
+	g_clear_object (&item->children);
+	G_OBJECT_CLASS (hc_settings_cat_parent_class)->finalize (obj);
+}
+
+static void hc_settings_cat_class_init (HcSettingsCatClass *klass) { G_OBJECT_CLASS (klass)->finalize = hc_settings_cat_finalize; }
+static void hc_settings_cat_init (HcSettingsCat *item) { }
+
+static HcSettingsCat *
+hc_settings_cat_new (const char *name, int page_index)
+{
+	HcSettingsCat *item = g_object_new (HC_TYPE_SETTINGS_CAT, NULL);
+	item->name = g_strdup (name ? name : "");
+	item->page_index = page_index;
+	item->children = NULL;
+	return item;
+}
+
+static GListStore *sound_store = NULL;
+static GtkWidget *sound_column_view = NULL;
+
+static void
+setup_snd_populate (void)
+{
+	GtkSelectionModel *sel_model;
 	int i;
 
-	sel = gtk_tree_view_get_selection (treeview);
-	store = (GtkListStore *)gtk_tree_view_get_model (treeview);
+	g_list_store_remove_all (sound_store);
 
-	for (i = NUM_XP-1; i >= 0; i--)
+	for (i = 0; i < NUM_XP; i++)
 	{
-		gtk_list_store_prepend (store, &iter);
-		if (sound_files[i])
-			gtk_list_store_set (store, &iter, 0, te[i].name, 1, sound_files[i], 2, i, -1);
-		else
-			gtk_list_store_set (store, &iter, 0, te[i].name, 1, "", 2, i, -1);
-		if (i == last_selected_row)
-		{
-			gtk_tree_selection_select_iter (sel, &iter);
-			path = gtk_tree_model_get_path (GTK_TREE_MODEL (store), &iter);
-			if (path)
-			{
-				gtk_tree_view_scroll_to_cell (treeview, path, NULL, TRUE, 0.5, 0.5);
-				gtk_tree_view_set_cursor (treeview, path, NULL, FALSE);
-				gtk_tree_path_free (path);
-			}
-		}
+		HcSoundItem *item = hc_sound_item_new (te[i].name, sound_files[i], i);
+		g_list_store_append (sound_store, item);
+		g_object_unref (item);
 	}
-}
 
-static int
-setup_snd_get_selected (GtkTreeSelection *sel, GtkTreeIter *iter)
-{
-	int n;
-	GtkTreeModel *model;
-
-	if (!gtk_tree_selection_get_selected (sel, &model, iter))
-		return -1;
-
-	gtk_tree_model_get (model, iter, 2, &n, -1);
-	return n;
+	sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (sound_column_view));
+	if (last_selected_row >= 0 && last_selected_row < NUM_XP)
+		gtk_selection_model_select_item (sel_model, last_selected_row, TRUE);
+	else if (g_list_model_get_n_items (G_LIST_MODEL (sound_store)) > 0)
+		gtk_selection_model_select_item (sel_model, 0, TRUE);
 }
 
 static void
-setup_snd_row_cb (GtkTreeSelection *sel, gpointer user_data)
+setup_snd_row_cb (GtkSelectionModel *sel_model, guint position, guint n_items, gpointer user_data)
 {
-	int n;
-	GtkTreeIter iter;
+	guint pos;
+	HcSoundItem *item;
 
-	n = setup_snd_get_selected (sel, &iter);
-	if (n == -1)
+	(void)position; (void)n_items; (void)user_data;
+
+	pos = hc_selection_model_get_selected_position (sel_model);
+	if (pos == GTK_INVALID_LIST_POSITION)
 		return;
-	last_selected_row = n;
+
+	item = g_list_model_get_item (G_LIST_MODEL (sound_store), pos);
+	if (!item)
+		return;
+
+	last_selected_row = item->index;
 
 	ignore_changed = TRUE;
-	if (sound_files[n])
-		hc_entry_set_text (sndfile_entry, sound_files[n]);
+	if (sound_files[item->index])
+		hc_entry_set_text (sndfile_entry, sound_files[item->index]);
 	else
 		hc_entry_set_text (sndfile_entry, "");
 	ignore_changed = FALSE;
+
+	g_object_unref (item);
+}
+
+/* Factory callbacks for sound event name column (read-only) */
+static void
+setup_snd_event_setup_cb (GtkListItemFactory *factory, GtkListItem *list_item, gpointer user_data)
+{
+	GtkWidget *label = gtk_label_new ("");
+	gtk_label_set_xalign (GTK_LABEL (label), 0.0f);
+	gtk_widget_set_hexpand (label, TRUE);
+	gtk_list_item_set_child (list_item, label);
 }
 
 static void
-setup_snd_add_columns (GtkTreeView * treeview)
+setup_snd_event_bind_cb (GtkListItemFactory *factory, GtkListItem *list_item, gpointer user_data)
 {
-	GtkCellRenderer *renderer;
-	GtkTreeModel *model;
+	GtkWidget *label = gtk_list_item_get_child (list_item);
+	HcSoundItem *item = gtk_list_item_get_item (list_item);
+	gtk_label_set_text (GTK_LABEL (label), item->event_name);
+}
 
-	/* event column */
-	renderer = gtk_cell_renderer_text_new ();
-	gtk_tree_view_insert_column_with_attributes (GTK_TREE_VIEW (treeview),
-																-1, _("Event"), renderer,
-																"text", 0, NULL);
+/* Factory callbacks for sound file column (read-only) */
+static void
+setup_snd_file_setup_cb (GtkListItemFactory *factory, GtkListItem *list_item, gpointer user_data)
+{
+	GtkWidget *label = gtk_label_new ("");
+	gtk_label_set_xalign (GTK_LABEL (label), 0.0f);
+	gtk_widget_set_hexpand (label, TRUE);
+	gtk_list_item_set_child (list_item, label);
+}
 
-	/* file column */
-	renderer = gtk_cell_renderer_text_new ();
-	gtk_tree_view_insert_column_with_attributes (GTK_TREE_VIEW (treeview),
-																-1, _("Sound file"), renderer,
-																"text", 1, NULL);
-
-	model = GTK_TREE_MODEL (gtk_list_store_new (3, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_INT));
-	gtk_tree_view_set_model (GTK_TREE_VIEW (treeview), model);
-	g_object_unref (model);
+static void
+setup_snd_file_bind_cb (GtkListItemFactory *factory, GtkListItem *list_item, gpointer user_data)
+{
+	GtkWidget *label = gtk_list_item_get_child (list_item);
+	HcSoundItem *item = gtk_list_item_get_item (list_item);
+	gtk_label_set_text (GTK_LABEL (label), item->sound_file);
 }
 
 static void
@@ -1695,28 +1767,37 @@ setup_snd_play_cb (GtkWidget *button, GtkEntry *entry)
 }
 
 static void
-setup_snd_changed_cb (GtkEntry *ent, GtkTreeView *tree)
+setup_snd_changed_cb (GtkEntry *ent, gpointer user_data)
 {
-	int n;
-	GtkTreeIter iter;
-	GtkListStore *store;
-	GtkTreeSelection *sel;
+	GtkSelectionModel *sel_model;
+	guint pos;
+	HcSoundItem *item;
 
 	if (ignore_changed)
 		return;
 
-	sel = gtk_tree_view_get_selection (tree);
-	n = setup_snd_get_selected (sel, &iter);
-	if (n == -1)
+	sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (sound_column_view));
+	pos = hc_selection_model_get_selected_position (sel_model);
+	if (pos == GTK_INVALID_LIST_POSITION)
+		return;
+
+	item = g_list_model_get_item (G_LIST_MODEL (sound_store), pos);
+	if (!item)
 		return;
 
 	/* get the new sound file */
-	g_free (sound_files[n]);
-	sound_files[n] = g_strdup (hc_entry_get_text (GTK_WIDGET (ent)));
+	g_free (sound_files[item->index]);
+	sound_files[item->index] = g_strdup (hc_entry_get_text (GTK_WIDGET (ent)));
 
-	/* update the TreeView list */
-	store = (GtkListStore *)gtk_tree_view_get_model (tree);
-	gtk_list_store_set (store, &iter, 1, sound_files[n], -1);
+	/* update the item and force rebind */
+	g_free (item->sound_file);
+	item->sound_file = g_strdup (sound_files[item->index]);
+	g_object_ref (item);
+	g_list_store_remove (sound_store, pos);
+	g_list_store_insert (sound_store, pos, item);
+	g_object_unref (item);
+	g_object_unref (item);
+	gtk_selection_model_select_item (sel_model, pos, TRUE);
 
 	gtk_widget_set_sensitive (cancel_button, FALSE);
 }
@@ -1727,12 +1808,13 @@ setup_create_sound_page (void)
 	GtkWidget *vbox1;
 	GtkWidget *vbox2;
 	GtkWidget *scrolledwindow1;
-	GtkWidget *sound_tree;
 	GtkWidget *table1;
 	GtkWidget *sound_label;
 	GtkWidget *sound_browse;
 	GtkWidget *sound_play;
-	GtkTreeSelection *sel;
+	GtkListItemFactory *factory;
+	GtkColumnViewColumn *col;
+	GtkSelectionModel *sel_model;
 
 	vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	hc_widget_set_margin_all (vbox1, 6);
@@ -1743,21 +1825,41 @@ setup_create_sound_page (void)
 	gtk_box_append (GTK_BOX (vbox1), vbox2);
 
 	scrolledwindow1 = gtk_scrolled_window_new ();
+	gtk_widget_set_vexpand (scrolledwindow1, TRUE);
 	gtk_widget_show (scrolledwindow1);
 	gtk_box_append (GTK_BOX (vbox2), scrolledwindow1);
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolledwindow1),
 											  GTK_POLICY_AUTOMATIC, GTK_POLICY_ALWAYS);
 
-	sound_tree = gtk_tree_view_new ();
-	gtk_widget_set_name (sound_tree, "hexchat-list");
-	sel = gtk_tree_view_get_selection (GTK_TREE_VIEW (sound_tree));
-	gtk_tree_selection_set_mode (sel, GTK_SELECTION_SINGLE);
-	setup_snd_add_columns (GTK_TREE_VIEW (sound_tree));
-	setup_snd_populate (GTK_TREE_VIEW (sound_tree));
-	g_signal_connect (G_OBJECT (sel), "changed",
-							G_CALLBACK (setup_snd_row_cb), NULL);
-	gtk_widget_show (sound_tree);
-	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow1), sound_tree);
+	/* Sound Events (GtkColumnView) */
+	sound_store = g_list_store_new (HC_TYPE_SOUND_ITEM);
+	sound_column_view = hc_column_view_new_simple (G_LIST_MODEL (sound_store), GTK_SELECTION_SINGLE);
+
+	/* Event name column */
+	factory = gtk_signal_list_item_factory_new ();
+	g_signal_connect (factory, "setup", G_CALLBACK (setup_snd_event_setup_cb), NULL);
+	g_signal_connect (factory, "bind", G_CALLBACK (setup_snd_event_bind_cb), NULL);
+	col = gtk_column_view_column_new (_("Event"), factory);
+	gtk_column_view_column_set_expand (col, TRUE);
+	gtk_column_view_append_column (GTK_COLUMN_VIEW (sound_column_view), col);
+	g_object_unref (col);
+
+	/* Sound file column */
+	factory = gtk_signal_list_item_factory_new ();
+	g_signal_connect (factory, "setup", G_CALLBACK (setup_snd_file_setup_cb), NULL);
+	g_signal_connect (factory, "bind", G_CALLBACK (setup_snd_file_bind_cb), NULL);
+	col = gtk_column_view_column_new (_("Sound file"), factory);
+	gtk_column_view_column_set_expand (col, TRUE);
+	gtk_column_view_append_column (GTK_COLUMN_VIEW (sound_column_view), col);
+	g_object_unref (col);
+
+	setup_snd_populate ();
+
+	sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (sound_column_view));
+	g_signal_connect (sel_model, "selection-changed", G_CALLBACK (setup_snd_row_cb), NULL);
+
+	gtk_widget_show (sound_column_view);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow1), sound_column_view);
 
 	table1 = gtk_grid_new ();
 	gtk_widget_show (table1);
@@ -1774,7 +1876,7 @@ setup_create_sound_page (void)
 
 	sndfile_entry = gtk_entry_new ();
 	g_signal_connect (G_OBJECT (sndfile_entry), "changed",
-							G_CALLBACK (setup_snd_changed_cb), sound_tree);
+							G_CALLBACK (setup_snd_changed_cb), NULL);
 	gtk_widget_show (sndfile_entry);
 	gtk_widget_set_hexpand (sndfile_entry, TRUE);
 	gtk_grid_attach (GTK_GRID (table1), sndfile_entry, 0, 1, 1, 1);
@@ -1791,7 +1893,8 @@ setup_create_sound_page (void)
 	gtk_widget_show (sound_play);
 	gtk_grid_attach (GTK_GRID (table1), sound_play, 2, 1, 1, 1);
 
-	setup_snd_row_cb (sel, NULL);
+	/* Trigger initial selection update */
+	setup_snd_row_cb (sel_model, 0, 0, NULL);
 
 	return vbox1;
 }
@@ -1906,99 +2009,212 @@ setup_create_pages (GtkWidget *box)
 	return book;
 }
 
-static void
-setup_tree_cb (GtkTreeView *treeview, GtkWidget *book)
+/* GtkTreeListModel child model callback */
+static GListModel *
+setup_tree_create_child_model (gpointer item, gpointer user_data)
 {
-	GtkTreeSelection *selection = gtk_tree_view_get_selection (treeview);
-	GtkTreeIter iter;
-	GtkTreeModel *model;
-	int page;
-
-	if (gtk_tree_selection_get_selected (selection, &model, &iter))
-	{
-		gtk_tree_model_get (model, &iter, 1, &page, -1);
-		if (page != -1)
-		{
-			hc_page_container_set_current_page (book, page);
-			last_selected_page = page;
-		}
-	}
+	HcSettingsCat *cat = HC_SETTINGS_CAT (item);
+	if (cat->children)
+		return G_LIST_MODEL (g_object_ref (cat->children));
+	return NULL;
 }
 
-static gboolean
-setup_tree_select_filter (GtkTreeSelection *selection, GtkTreeModel *model,
-								  GtkTreePath *path, gboolean path_selected,
-								  gpointer data)
+/* Factory setup: GtkTreeExpander with label */
+static void
+setup_tree_factory_setup_cb (GtkListItemFactory *factory, GtkListItem *list_item, gpointer user_data)
 {
-	if (gtk_tree_path_get_depth (path) > 1)
-		return TRUE;
-	return FALSE;
+	GtkWidget *expander, *label;
+
+	expander = gtk_tree_expander_new ();
+	gtk_tree_expander_set_indent_for_depth (GTK_TREE_EXPANDER (expander), TRUE);
+	gtk_tree_expander_set_hide_expander (GTK_TREE_EXPANDER (expander), TRUE);
+	gtk_widget_set_hexpand (expander, TRUE);
+
+	label = gtk_label_new (NULL);
+	gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+	gtk_widget_set_hexpand (label, TRUE);
+
+	gtk_tree_expander_set_child (GTK_TREE_EXPANDER (expander), label);
+	gtk_list_item_set_child (list_item, expander);
+
+	g_object_set_data (G_OBJECT (list_item), "expander", expander);
+	g_object_set_data (G_OBJECT (list_item), "label", label);
+}
+
+/* Factory bind: set text, bold for headers */
+static void
+setup_tree_factory_bind_cb (GtkListItemFactory *factory, GtkListItem *list_item, gpointer user_data)
+{
+	GtkWidget *expander, *label;
+	GtkTreeListRow *row;
+	HcSettingsCat *cat;
+
+	expander = g_object_get_data (G_OBJECT (list_item), "expander");
+	label = g_object_get_data (G_OBJECT (list_item), "label");
+	if (!expander || !label)
+		return;
+
+	row = gtk_list_item_get_item (list_item);
+	if (!row)
+		return;
+
+	gtk_tree_expander_set_list_row (GTK_TREE_EXPANDER (expander), row);
+
+	cat = gtk_tree_list_row_get_item (row);
+	if (!cat)
+		return;
+
+	gtk_label_set_text (GTK_LABEL (label), cat->name);
+
+	/* Bold headers, normal children */
+	if (cat->page_index == -1)
+	{
+		PangoAttrList *attrs = pango_attr_list_new ();
+		pango_attr_list_insert (attrs, pango_attr_weight_new (PANGO_WEIGHT_BOLD));
+		gtk_label_set_attributes (GTK_LABEL (label), attrs);
+		pango_attr_list_unref (attrs);
+		gtk_list_item_set_selectable (list_item, FALSE);
+	}
+	else
+	{
+		gtk_label_set_attributes (GTK_LABEL (label), NULL);
+		gtk_list_item_set_selectable (list_item, TRUE);
+	}
+
+	g_object_unref (cat);
+}
+
+/* Factory unbind */
+static void
+setup_tree_factory_unbind_cb (GtkListItemFactory *factory, GtkListItem *list_item, gpointer user_data)
+{
+	GtkWidget *expander = g_object_get_data (G_OBJECT (list_item), "expander");
+	if (expander)
+		gtk_tree_expander_set_list_row (GTK_TREE_EXPANDER (expander), NULL);
+}
+
+/* Selection changed: switch page */
+static void
+setup_tree_sel_cb (GtkSelectionModel *sel_model, guint position, guint n_items, GtkWidget *book)
+{
+	guint pos;
+	GtkTreeListRow *row;
+	HcSettingsCat *cat;
+
+	(void)position; (void)n_items;
+
+	pos = hc_selection_model_get_selected_position (sel_model);
+	if (pos == GTK_INVALID_LIST_POSITION)
+		return;
+
+	row = g_list_model_get_item (G_LIST_MODEL (sel_model), pos);
+	if (!row)
+		return;
+
+	cat = gtk_tree_list_row_get_item (row);
+	g_object_unref (row);
+	if (!cat)
+		return;
+
+	if (cat->page_index != -1)
+	{
+		hc_page_container_set_current_page (book, cat->page_index);
+		last_selected_page = cat->page_index;
+	}
+
+	g_object_unref (cat);
 }
 
 static void
 setup_create_tree (GtkWidget *box, GtkWidget *book)
 {
-	GtkWidget *tree;
-	GtkWidget *frame;
-	GtkTreeStore *model;
-	GtkTreeIter iter;
-	GtkTreeIter child_iter;
-	GtkTreeIter *sel_iter = NULL;
-	GtkCellRenderer *renderer;
-	GtkTreeSelection *sel;
+	GtkWidget *view, *frame;
+	GtkListItemFactory *factory;
+	GtkTreeListModel *tree_model;
+	GtkSingleSelection *sel_model;
+	GListStore *root_store;
 	int i, page;
+	guint sel_pos = 0;
 
-	model = gtk_tree_store_new (2, G_TYPE_STRING, G_TYPE_INT);
+	/* Build the category model */
+	root_store = g_list_store_new (HC_TYPE_SETTINGS_CAT);
 
 	i = 0;
 	page = 0;
 	do
 	{
-		gtk_tree_store_append (model, &iter, NULL);
-		gtk_tree_store_set (model, &iter, 0, _(cata[i]), 1, -1, -1);
+		HcSettingsCat *parent = hc_settings_cat_new (_(cata[i]), -1);
+		parent->children = g_list_store_new (HC_TYPE_SETTINGS_CAT);
 		i++;
 
 		do
 		{
-			gtk_tree_store_append (model, &child_iter, &iter);
-			gtk_tree_store_set (model, &child_iter, 0, _(cata[i]), 1, page, -1);
-			if (page == last_selected_page)
-				sel_iter = gtk_tree_iter_copy (&child_iter);
+			HcSettingsCat *child = hc_settings_cat_new (_(cata[i]), page);
+			g_list_store_append (parent->children, child);
+			g_object_unref (child);
 			page++;
 			i++;
 		} while (cata[i]);
 
+		g_list_store_append (root_store, parent);
+		g_object_unref (parent);
 		i++;
 
 	} while (cata[i]);
 
-	tree = gtk_tree_view_new_with_model (GTK_TREE_MODEL (model));
-	gtk_widget_set_name (tree, "hexchat-list");
-	g_object_unref (G_OBJECT (model));
-	sel = gtk_tree_view_get_selection (GTK_TREE_VIEW (tree));
-	gtk_tree_selection_set_mode (sel, GTK_SELECTION_BROWSE);
-	gtk_tree_selection_set_select_function (sel, setup_tree_select_filter,
-														 NULL, NULL);
-	g_signal_connect (G_OBJECT (tree), "cursor_changed",
-							G_CALLBACK (setup_tree_cb), book);
+	/* Create tree list model (autoexpand) */
+	tree_model = gtk_tree_list_model_new (
+		G_LIST_MODEL (root_store),
+		FALSE,	/* passthrough */
+		TRUE,	/* autoexpand */
+		setup_tree_create_child_model,
+		NULL, NULL);
 
-	renderer = gtk_cell_renderer_text_new ();
-	gtk_tree_view_insert_column_with_attributes (GTK_TREE_VIEW (tree),
-							    -1, _("Categories"), renderer, "text", 0, NULL);
-	gtk_tree_view_expand_all (GTK_TREE_VIEW (tree));
+	/* Find the position of last_selected_page in the flattened model */
+	{
+		guint n = g_list_model_get_n_items (G_LIST_MODEL (tree_model));
+		for (guint j = 0; j < n; j++)
+		{
+			GtkTreeListRow *row = g_list_model_get_item (G_LIST_MODEL (tree_model), j);
+			if (row)
+			{
+				HcSettingsCat *cat = gtk_tree_list_row_get_item (row);
+				if (cat && cat->page_index == last_selected_page)
+				{
+					sel_pos = j;
+					g_object_unref (cat);
+					g_object_unref (row);
+					break;
+				}
+				if (cat) g_object_unref (cat);
+				g_object_unref (row);
+			}
+		}
+	}
+
+	sel_model = gtk_single_selection_new (G_LIST_MODEL (tree_model));
+
+	/* Factory */
+	factory = gtk_signal_list_item_factory_new ();
+	g_signal_connect (factory, "setup", G_CALLBACK (setup_tree_factory_setup_cb), NULL);
+	g_signal_connect (factory, "bind", G_CALLBACK (setup_tree_factory_bind_cb), NULL);
+	g_signal_connect (factory, "unbind", G_CALLBACK (setup_tree_factory_unbind_cb), NULL);
+
+	/* Create list view */
+	view = gtk_list_view_new (GTK_SELECTION_MODEL (sel_model), factory);
+	gtk_widget_set_name (view, "hexchat-list");
+
+	g_signal_connect (sel_model, "selection-changed",
+	                  G_CALLBACK (setup_tree_sel_cb), book);
 
 	frame = gtk_frame_new (NULL);
-	gtk_frame_set_child (GTK_FRAME (frame), tree);
-	/* Tree frame expands vertically but not horizontally */
+	gtk_frame_set_child (GTK_FRAME (frame), view);
 	gtk_widget_set_vexpand (frame, TRUE);
 	gtk_box_append (GTK_BOX (box), frame);
 	hc_box_reorder_child (GTK_BOX (box), frame, 0);
 
-	if (sel_iter)
-	{
-		gtk_tree_selection_select_iter (sel, sel_iter);
-		gtk_tree_iter_free (sel_iter);
-	}
+	/* Select remembered page */
+	gtk_single_selection_set_selected (sel_model, sel_pos);
 }
 
 static void
