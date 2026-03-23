@@ -1178,18 +1178,20 @@ fe_redact_message (session *sess, const char *msgid,
 	ent = gtk_xtext_find_by_msgid (buf, msgid);
 	if (!ent)
 	{
-		/* Original message not loaded — show a notice at the redact time.
-		 * Use display_only so it doesn't get saved to scrollback (the
-		 * redaction metadata on the original message handles persistence). */
-		sess->display_only = TRUE;
+		/* Original message not loaded — insert a notice at the correct
+		 * chronological position (not appended at the end). */
+		char *notice;
 		if (reason && *reason)
-			PrintTextTimeStampf (sess, redact_time,
-			                     "\017*\t[Message redacted by %s: %s]\n",
-			                     redacted_by, reason);
+			notice = g_strdup_printf ("\017[Message redacted by %s: %s]",
+			                          redacted_by, reason);
 		else
-			PrintTextTimeStampf (sess, redact_time,
-			                     "\017*\t[Message redacted by %s]\n",
-			                     redacted_by);
+			notice = g_strdup_printf ("\017[Message redacted by %s]",
+			                          redacted_by);
+		gtk_xtext_insert_sorted_indent (buf,
+		                                (unsigned char *)"*", 1,
+		                                (unsigned char *)notice, -1,
+		                                redact_time);
+		g_free (notice);
 		return;
 	}
 	if (gtk_xtext_entry_get_state (ent) == XTEXT_STATE_REDACTED)
