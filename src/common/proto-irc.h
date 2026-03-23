@@ -54,6 +54,7 @@ typedef struct
 } message_tags_data;
 
 void message_tags_data_free (message_tags_data *tags_data);
+char *escape_tag_value (const char *value);
 
 void proto_fill_her_up (server *serv);
 

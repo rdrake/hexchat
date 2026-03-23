@@ -40,6 +40,17 @@ struct text_event
 void scrollback_close (session *sess);
 void scrollback_load (session *sess);
 
+/* IRCv3 reactions/replies scrollback persistence */
+void scrollback_save_reaction_for_session (session *sess, const char *target_msgid,
+                                           const char *reaction_text, const char *nick,
+                                           gboolean is_self);
+void scrollback_remove_reaction_for_session (session *sess, const char *target_msgid,
+                                             const char *reaction_text, const char *nick);
+void scrollback_save_reply_for_session (session *sess, const char *msgid,
+                                        const char *target_msgid, const char *target_nick,
+                                        const char *target_preview);
+void scrollback_confirm_pending (session *sess, const char *label, const char *real_msgid);
+
 int text_word_check (char *word, int len);
 void PrintText (session *sess, char *text);
 void PrintTextTimeStamp (session *sess, char *text, time_t timestamp);

@@ -114,6 +114,14 @@ time_t scrollback_get_newest_time (scrollback_db *db, const char *channel);
 gboolean scrollback_has_msgid (scrollback_db *db, const char *msgid);
 
 /**
+ * Update a pending placeholder msgid to the real server-assigned msgid.
+ * Used by echo-message confirmation: pending entry saved with "pending:<label>"
+ * gets updated to the real msgid when the echo arrives.
+ */
+gboolean scrollback_update_pending_msgid (scrollback_db *db, const char *channel,
+                                           const char *pending_msgid, const char *real_msgid);
+
+/**
  * Clear all messages for a channel.
  *
  * @param db Database handle
@@ -145,6 +153,58 @@ void scrollback_msg_list_free (GSList *list);
  * @return Number of messages migrated, or -1 on error
  */
 int scrollback_migrate (scrollback_db *db, const char *network, const char *channel);
+
+/* IRCv3 reaction record from scrollback */
+typedef struct {
+	char *target_msgid;      /* msgid of the message reacted to */
+	char *reaction_text;     /* reaction content (emoji or text) */
+	char *nick;              /* who reacted */
+	gboolean is_self;        /* was this our own reaction? */
+} scrollback_reaction;
+
+/* IRCv3 reply record from scrollback */
+typedef struct {
+	char *msgid;             /* msgid of the reply message */
+	char *target_msgid;      /* msgid of the message being replied to */
+	char *target_nick;       /* nick of the original message */
+	char *target_preview;    /* truncated preview of original message */
+} scrollback_reply;
+
+/**
+ * Save a reaction to scrollback.
+ */
+gboolean scrollback_save_reaction (scrollback_db *db, const char *channel,
+                                   const char *target_msgid, const char *reaction_text,
+                                   const char *nick, gboolean is_self, time_t timestamp);
+
+/**
+ * Remove a reaction from scrollback.
+ */
+gboolean scrollback_remove_reaction (scrollback_db *db, const char *target_msgid,
+                                     const char *reaction_text, const char *nick);
+
+/**
+ * Load all reactions for a channel.
+ * @return GSList of scrollback_reaction* (caller frees with scrollback_reaction_list_free)
+ */
+GSList *scrollback_load_reactions (scrollback_db *db, const char *channel);
+void scrollback_reaction_free (scrollback_reaction *r);
+void scrollback_reaction_list_free (GSList *list);
+
+/**
+ * Save reply context for a message.
+ */
+gboolean scrollback_save_reply (scrollback_db *db, const char *msgid,
+                                const char *target_msgid, const char *target_nick,
+                                const char *target_preview);
+
+/**
+ * Load all reply contexts for messages in a channel.
+ * @return GSList of scrollback_reply* (caller frees with scrollback_reply_list_free)
+ */
+GSList *scrollback_load_replies (scrollback_db *db, const char *channel);
+void scrollback_reply_free (scrollback_reply *r);
+void scrollback_reply_list_free (GSList *list);
 
 /**
  * Initialize the scrollback subsystem.

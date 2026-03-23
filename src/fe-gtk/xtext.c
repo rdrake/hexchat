@@ -25,6 +25,10 @@
 #define MARGIN 2						/* dont touch. */
 #define REFRESH_TIMEOUT 20
 
+/* Total line count for an entry: text sublines + extra lines for reply context / reaction badges */
+#define ENT_TOTAL_LINES(ent) \
+	(g_slist_length ((ent)->sublines) + (ent)->extra_lines_above + (ent)->extra_lines_below)
+
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -84,6 +88,26 @@ typedef struct xtext_redaction_info {
 	time_t redaction_time;
 } xtext_redaction_info;
 
+/* IRCv3 reactions: one entry per distinct reaction text on a message */
+typedef struct xtext_reaction {
+	char *text;				/* reaction content (emoji or arbitrary string) */
+	GHashTable *nicks;		/* nick string → GINT_TO_POINTER(is_self) for lookup + unreact */
+	int count;				/* cached g_hash_table_size(nicks) */
+} xtext_reaction;
+
+typedef struct xtext_reactions_info {
+	GPtrArray *reactions;	/* array of xtext_reaction* — one per distinct text */
+	int total_count;		/* sum of all counts (cache for rendering decisions) */
+} xtext_reactions_info;
+
+/* IRCv3 reply context: what message this entry is replying to */
+typedef struct xtext_reply_info {
+	char *target_msgid;			/* msgid of referenced message */
+	guint64 target_entry_id;	/* resolved entry_id (0 = not found in buffer) */
+	char *target_nick;			/* nick of original message (for display) */
+	char *target_preview;		/* truncated original text (~80 chars, stripped) */
+} xtext_reply_info;
+
 /* Format span types and rendering functions shared with hex-input-edit */
 #include "xtext-render.h"
 
@@ -109,9 +133,16 @@ struct textentry
 	/* IRCv3 modernization: stable entry identification (Phase 1) */
 	char *msgid;		/* Server-assigned message ID (may be NULL) */
 	guint64 entry_id;	/* Local unique ID (always set, monotonic) */
+	guint64 group_id;	/* Multiline group: entries with same non-zero group_id are one message */
 
 	/* Phase 4: redaction accountability (lazy-allocated, NULL for most entries) */
 	struct xtext_redaction_info *redaction;
+
+	/* IRCv3 reactions and reply context (lazy-allocated, NULL for most entries) */
+	struct xtext_reactions_info *reactions;
+	struct xtext_reply_info *reply;
+	guint8 extra_lines_above;		/* reply context lines (0 or 1) */
+	guint8 extra_lines_below;		/* reaction badge lines (0 or 1) */
 
 	/* Pre-parsed rendering data (built once at entry creation) */
 	unsigned char *stripped_str;       /* text with format codes removed, emoji → U+FFFC */
@@ -144,7 +175,7 @@ static guint xtext_signals[LAST_SIGNAL];
 char *nocasestrstr (const char *text, const char *tofind);	/* util.c */
 int xtext_get_stamp_str (time_t, char **);
 static void gtk_xtext_render_page (GtkXText * xtext);
-static void gtk_xtext_calc_lines (xtext_buffer *buf, int);
+void gtk_xtext_calc_lines (xtext_buffer *buf, int);
 static gboolean gtk_xtext_is_selecting (GtkXText *xtext);
 static char *gtk_xtext_selection_get_text (GtkXText *xtext, int *len_ret);
 static textentry *gtk_xtext_nth (GtkXText *xtext, int line, int *subline);
@@ -200,6 +231,14 @@ static void gtk_xtext_search_textentry_fini (gpointer, gpointer);
 static void gtk_xtext_search_fini (xtext_buffer *);
 static gboolean gtk_xtext_search_init (xtext_buffer *buf, const gchar *text, gtk_xtext_search_flags flags, GError **perr);
 static char * gtk_xtext_get_word (GtkXText * xtext, int x, int y, textentry ** ret_ent, int *ret_off, int *ret_len, GSList **slp);
+
+/* Click zone enum and forward declaration (used by motion handler) */
+typedef enum {
+	XTEXT_ZONE_REPLY   = 0,
+	XTEXT_ZONE_TEXT    = 1,
+	XTEXT_ZONE_REACT   = 2
+} xtext_click_zone;
+static xtext_click_zone gtk_xtext_get_click_zone (GtkXText *xtext, int y, textentry **ent_out);
 
 /* GTK4 event controller callbacks - forward declarations */
 static void gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double x, double y, gpointer user_data);
@@ -765,6 +804,12 @@ gtk_xtext_dispose (GObject * object)
 		xtext->scroll_top_debounce_tag = 0;
 	}
 
+	if (xtext->flash_tag)
+	{
+		g_source_remove (xtext->flash_tag);
+		xtext->flash_tag = 0;
+	}
+
 	if (xtext->io_tag)
 	{
 		g_source_remove (xtext->io_tag);
@@ -807,6 +852,11 @@ gtk_xtext_dispose (GObject * object)
 	}
 
 	/* GdkGC objects removed in GTK3 - no cleanup needed */
+
+	g_free (xtext->reaction_click_msgid);
+	xtext->reaction_click_msgid = NULL;
+	g_free (xtext->reaction_click_text);
+	xtext->reaction_click_text = NULL;
 
 	if (xtext->hand_cursor)
 	{
@@ -1236,8 +1286,8 @@ gtk_xtext_draw_marker (GtkXText * xtext, textentry * ent, int y)
 	}
 	else if (ent->next != NULL && xtext->buffer->marker_pos_id == ent->next->entry_id)
 	{
-		/* We're rendering the last read entry - draw marker after all sublines */
-		render_y = y + xtext->fontsize * g_slist_length (ent->sublines) + 4;
+		/* We're rendering the last read entry - draw marker after all lines */
+		render_y = y + xtext->fontsize * ENT_TOTAL_LINES (ent) + 4;
 	}
 	else return;
 
@@ -1926,6 +1976,20 @@ gtk_xtext_leave_common (GtkXText *xtext)
 		gtk_widget_set_cursor (widget, NULL);
 		xtext->hilight_ent = NULL;
 	}
+
+}
+
+/* Clear hover state — only called on actual widget leave, not on URL check fallthrough */
+static void
+gtk_xtext_leave_hover (GtkXText *xtext)
+{
+	if (xtext->hover_ent || xtext->hover_reply_target)
+	{
+		xtext->hover_ent = NULL;
+		xtext->hover_reply_target = NULL;
+		xtext->hover_btn_size = 0;
+		gtk_widget_queue_draw (GTK_WIDGET (xtext));
+	}
 }
 
 /*
@@ -1938,6 +2002,7 @@ gtk_xtext_leave_notify (GtkEventControllerMotion *controller, gpointer user_data
 {
 	GtkXText *xtext = GTK_XTEXT (user_data);
 	gtk_xtext_leave_common (xtext);
+	gtk_xtext_leave_hover (xtext);
 }
 
 /* check if we should mark time stamps, and if a redraw is needed */
@@ -2089,6 +2154,38 @@ gtk_xtext_motion_notify (GtkEventControllerMotion *controller, double event_x, d
 				xtext->cursor_resize = TRUE;
 			}
 			return;
+		}
+	}
+
+	/* Track hovered entry for reply button and reply context target */
+	{
+		textentry *new_hover = NULL;
+		textentry *new_reply_target = NULL;
+		int hover_off;
+		new_hover = gtk_xtext_find_char (xtext, x, y, &hover_off, NULL);
+
+		/* If hovering over a reply context zone, resolve the target entry */
+		if (new_hover && new_hover->reply)
+		{
+			textentry *zone_ent;
+			xtext_click_zone zone = gtk_xtext_get_click_zone (xtext, y, &zone_ent);
+			if (zone == XTEXT_ZONE_REPLY && zone_ent == new_hover)
+			{
+				if (new_hover->reply->target_entry_id)
+					new_reply_target = gtk_xtext_find_by_id (xtext->buffer,
+					                                          new_hover->reply->target_entry_id);
+				else if (new_hover->reply->target_msgid)
+					new_reply_target = gtk_xtext_find_by_msgid (xtext->buffer,
+					                                             new_hover->reply->target_msgid);
+			}
+		}
+
+		if (new_hover != xtext->hover_ent ||
+		    new_reply_target != xtext->hover_reply_target)
+		{
+			xtext->hover_ent = new_hover;
+			xtext->hover_reply_target = new_reply_target;
+			gtk_widget_queue_draw (widget);
 		}
 	}
 
@@ -2255,6 +2352,14 @@ gtk_xtext_button_release (GtkGestureClick *gesture, int n_press, double x, doubl
 			xtext->scroll_tag = 0;
 		}
 
+		/* If button_press already handled this click (reply button, reaction
+		 * badge, reply context line), skip all release-side processing. */
+		if (xtext->press_handled)
+		{
+			xtext->press_handled = FALSE;
+			return;
+		}
+
 		/* got a new selection? */
 		if (xtext->buffer->last_ent_start_id)
 		{
@@ -2297,6 +2402,146 @@ gtk_xtext_button_release (GtkGestureClick *gesture, int n_press, double x, doubl
 	}
 }
 
+/* Determine which zone of an entry a y-coordinate hits.
+ * Returns: 0 = reply context line, 1 = normal text, 2 = reaction badges.
+ * Also sets *ent_out to the entry found, and *subline_out to the subline within that zone. */
+static xtext_click_zone
+gtk_xtext_get_click_zone (GtkXText *xtext, int y, textentry **ent_out)
+{
+	textentry *ent;
+	int line, subline, text_sublines;
+
+	if (y < 0)
+		y -= xtext->fontsize;
+
+	line = (y + xtext->pixel_offset) / xtext->fontsize;
+	ent = gtk_xtext_nth (xtext, line + (int)gtk_adjustment_get_value (xtext->adj), &subline);
+
+	if (ent_out)
+		*ent_out = ent;
+
+	if (!ent)
+		return XTEXT_ZONE_TEXT;
+
+	/* subline is now an offset into total lines: [extra_above | text_sublines | extra_below] */
+	if (subline < ent->extra_lines_above)
+		return XTEXT_ZONE_REPLY;
+
+	text_sublines = g_slist_length (ent->sublines);
+	if (subline >= ent->extra_lines_above + text_sublines)
+		return XTEXT_ZONE_REACT;
+
+	return XTEXT_ZONE_TEXT;
+}
+
+/* Flash highlight timeout — clear after brief display */
+static gboolean
+gtk_xtext_flash_timeout (gpointer data)
+{
+	GtkXText *xtext = GTK_XTEXT (data);
+	xtext->flash_ent = NULL;
+	xtext->flash_tag = 0;
+	gtk_widget_queue_draw (GTK_WIDGET (xtext));
+	return G_SOURCE_REMOVE;
+}
+
+/* Handle a click on the reply context line: scroll to the referenced message */
+static void
+gtk_xtext_click_reply_context (GtkXText *xtext, textentry *ent)
+{
+	textentry *target;
+
+	if (!ent || !ent->reply)
+		return;
+
+	/* Try to find the target by entry_id first, then by msgid */
+	if (ent->reply->target_entry_id)
+		target = gtk_xtext_find_by_id (xtext->buffer, ent->reply->target_entry_id);
+	else if (ent->reply->target_msgid)
+		target = gtk_xtext_find_by_msgid (xtext->buffer, ent->reply->target_msgid);
+	else
+		return;
+
+	if (!target)
+		return;
+
+	/* Scroll to target entry and flash-highlight it */
+	gtk_xtext_scroll_to_entry (xtext->buffer, target);
+
+	if (xtext->flash_tag)
+		g_source_remove (xtext->flash_tag);
+	xtext->flash_ent = target;
+	xtext->flash_tag = g_timeout_add (1500, gtk_xtext_flash_timeout, xtext);
+	gtk_widget_queue_draw (GTK_WIDGET (xtext));
+}
+
+/* Handle a click on a reaction badge: determine which badge was hit by x-coord.
+ * If self-reaction: send unreact. If not: send react with same text. */
+static void
+gtk_xtext_click_reaction_badge (GtkXText *xtext, textentry *ent, int click_x)
+{
+	struct xtext_reactions_info *ri;
+	int badge_x, pad_x;
+	guint i;
+
+	if (!ent || !ent->reactions)
+		return;
+
+	ri = ent->reactions;
+	pad_x = 6;
+
+	/* Right-align: compute starting x from total badge width */
+	{
+		int win_width = gtk_widget_get_width (GTK_WIDGET (xtext)) - MARGIN;
+		int total_width = gtk_xtext_measure_reaction_badges (xtext, ri, win_width);
+		badge_x = win_width - total_width;
+	}
+
+	for (i = 0; i < ri->reactions->len; i++)
+	{
+		struct xtext_reaction *react = g_ptr_array_index (ri->reactions, i);
+		PangoRectangle logical;
+		int badge_width;
+		char *label;
+
+		if (react->count <= 0)
+			continue;
+
+		if (react->count > 1)
+			label = g_strdup_printf ("%s %d", react->text, react->count);
+		else
+			label = g_strdup (react->text);
+
+		pango_layout_set_text (xtext->layout, label, -1);
+		pango_layout_set_attributes (xtext->layout, NULL);
+		pango_layout_get_extents (xtext->layout, NULL, &logical);
+		badge_width = PANGO_PIXELS (logical.width) + pad_x * 2;
+		g_free (label);
+
+		if (click_x >= badge_x && click_x < badge_x + badge_width)
+		{
+			/* Found the clicked badge — store info and invoke callback */
+			const char *msgid = ent->msgid;
+			if (msgid)
+			{
+				g_free (xtext->reaction_click_msgid);
+				xtext->reaction_click_msgid = g_strdup (msgid);
+				g_free (xtext->reaction_click_text);
+				xtext->reaction_click_text = g_strdup (react->text);
+				xtext->reaction_click_is_self = gtk_xtext_entry_has_self_reaction (ent, react->text);
+
+				if (xtext->reaction_click_cb)
+					xtext->reaction_click_cb (xtext, msgid, react->text,
+					                          xtext->reaction_click_is_self,
+					                          xtext->reaction_click_userdata);
+			}
+			return;
+		}
+
+		badge_x += badge_width + 4;
+	}
+}
+
 /*
  * Button press event handler
  * GTK3: widget_class vfunc with GdkEventButton
@@ -2316,6 +2561,7 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 	x = (int)event_x;
 	y = (int)event_y;
 	mask = gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (gesture));
+	xtext->press_handled = FALSE;
 
 	if (button == 3 || button == 2) /* right/middle click */
 	{
@@ -2338,6 +2584,105 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 
 	if (button != 1)		  /* we only want left button */
 		return;
+
+	/* Check if click lands on status strip dismiss button */
+	if (n_press == 1 && xtext->status_strip_visible)
+	{
+		int height = gtk_widget_get_height (GTK_WIDGET (xtext));
+		int strip_h = xtext->fontsize * 2 / 3 + 4;
+		int strip_y = height - strip_h;
+
+		if (y >= strip_y)
+		{
+			int si;
+			for (si = 0; si < xtext->status_item_count; si++)
+			{
+				xtext_status_item *item = &xtext->status_items[si];
+				if (item->dismiss_cb && item->dismiss_w > 0 &&
+				    x >= item->dismiss_x && x < item->dismiss_x + item->dismiss_w)
+				{
+					item->dismiss_cb (xtext, item->key, item->dismiss_userdata);
+					xtext->press_handled = TRUE;
+					return;
+				}
+			}
+			/* Click was in strip but not on dismiss — ignore */
+			xtext->press_handled = TRUE;
+			return;
+		}
+	}
+
+	/* Check if click lands on any hover button (reply, react-text, react-emoji) */
+	if (n_press == 1 && xtext->hover_ent && xtext->hover_ent->msgid &&
+	    xtext->hover_btn_size > 0 &&
+	    y >= xtext->hover_btn_y - 4 && y < xtext->hover_btn_y + xtext->hover_btn_size + 4)
+	{
+		typedef void (*hover_btn_cb) (GtkXText *, const char *, const char *, gpointer);
+		hover_btn_cb cb = NULL;
+		gpointer ud = NULL;
+		int bs = xtext->hover_btn_size;
+
+		if (x >= xtext->reply_btn_x - 4 && x < xtext->reply_btn_x + bs + 4)
+		{
+			cb = xtext->reply_button_cb;
+			ud = xtext->reply_button_userdata;
+		}
+		else if (x >= xtext->react_text_btn_x - 4 && x < xtext->react_text_btn_x + bs + 4)
+		{
+			cb = xtext->react_text_button_cb;
+			ud = xtext->react_text_button_userdata;
+		}
+		else if (x >= xtext->react_emoji_btn_x - 4 && x < xtext->react_emoji_btn_x + bs + 4)
+		{
+			cb = xtext->react_emoji_button_cb;
+			ud = xtext->react_emoji_button_userdata;
+		}
+
+		if (cb)
+		{
+			textentry *ent = xtext->hover_ent;
+			const unsigned char *str = gtk_xtext_entry_get_str (ent);
+			int left_len = gtk_xtext_entry_get_left_len (ent);
+			char *nick_raw = g_strndup ((const char *)str, left_len);
+			char *nick = strip_color (nick_raw, -1, STRIP_ALL);
+			g_free (nick_raw);
+			/* Trim surrounding whitespace/brackets from nick (e.g. "<nick>") */
+			g_strstrip (nick);
+			{
+				char *p = nick;
+				int len = strlen (p);
+				if (len > 2 && p[0] == '<' && p[len - 1] == '>')
+				{
+					memmove (p, p + 1, len - 2);
+					p[len - 2] = '\0';
+				}
+			}
+			cb (xtext, ent->msgid, nick, ud);
+			g_free (nick);
+			xtext->press_handled = TRUE;
+			return;
+		}
+	}
+
+	/* Check if click lands on reply context or reaction badges */
+	if (n_press == 1)
+	{
+		textentry *zone_ent;
+		xtext_click_zone zone = gtk_xtext_get_click_zone (xtext, y, &zone_ent);
+
+		if (zone == XTEXT_ZONE_REPLY && zone_ent)
+		{
+			gtk_xtext_click_reply_context (xtext, zone_ent);
+			xtext->press_handled = TRUE;
+			return;
+		}
+		if (zone == XTEXT_ZONE_REACT && zone_ent)
+		{
+			gtk_xtext_click_reaction_badge (xtext, zone_ent, x);
+			xtext->press_handled = TRUE;
+			return;
+		}
+	}
 
 	if (n_press == 2)	/* WORD select (double click) */
 	{
@@ -3292,18 +3637,39 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 			int avail = win_width - indent;
 			PangoLayoutLine *pline;
 			int consumed;
+			int pango_off = stripped_start;  /* start of text fed to Pango */
+			int pango_len = sub_len;         /* length of text fed to Pango */
 
 			if (avail < 1)
 				avail = 1;
 
+			/* For the first subline, exclude the nick (left) text from the
+			 * Pango layout.  The nick is rendered separately in the left
+			 * margin; including it causes PANGO_WRAP_WORD_CHAR to word-break
+			 * between nick and message, pushing a long first word entirely
+			 * to the next line and leaving the nick line blank on the right. */
+			if (raw_offset == 0 && ent->left_len > 0)
+			{
+				int right_start = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+				                      ent->str_len, ent->left_len + 1);
+				if (right_start > stripped_start && right_start < sub_end)
+				{
+					pango_off = right_start;
+					pango_len = sub_end - right_start;
+					avail = win_width - xtext->buffer->indent;
+					if (avail < 1)
+						avail = 1;
+				}
+			}
+
 			/* Build attributes and set up layout for Pango-based wrapping */
 			xtext_format_data fd_wrap = xtext_fdata_from_entry (ent);
-			PangoAttrList *attrs = xtext_build_attrlist (&fd_wrap, stripped_start,
-			                           sub_len, xtext->palette, xtext->fontsize,
+			PangoAttrList *attrs = xtext_build_attrlist (&fd_wrap, pango_off,
+			                           pango_len, xtext->palette, xtext->fontsize,
 			                           xtext->font->ascent);
 
 			pango_layout_set_text (xtext->layout,
-			                       (char *)(sstr + stripped_start), sub_len);
+			                       (char *)(sstr + pango_off), pango_len);
 			pango_layout_set_attributes (xtext->layout, attrs);
 			pango_layout_set_width (xtext->layout, avail * PANGO_SCALE);
 			pango_layout_set_wrap (xtext->layout, PANGO_WRAP_WORD_CHAR);
@@ -3317,18 +3683,29 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 			pango_layout_set_attributes (xtext->layout, NULL);
 			pango_attr_list_unref (attrs);
 
-			if (consumed >= sub_len)
+			if (consumed >= pango_len)
 			{
 				/* Everything fits (including newline if present) */
 				si = sub_end;
 			}
 			else
 			{
-				si = stripped_start + consumed;
+				si = pango_off + consumed;
 			}
 
-			ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
-			                            ent->str_len, si) - raw_offset;
+			/* Skip past \n so the next subline starts at content,
+			 * not at a newline that would render as a blank line */
+			while (si < slen && sstr[si] == '\n')
+				si++;
+
+			/* If all stripped (visible) text is consumed, take the rest of
+			 * the raw string — trailing formatting codes belong to the last
+			 * subline, not to a phantom empty one. */
+			if (si >= slen)
+				ret = ent->str_len - raw_offset;
+			else
+				ret = xtext_stripped_to_raw (ent->raw_to_stripped_map,
+				                            ent->str_len, si) - raw_offset;
 		}
 	}
 	/* no parsed data — shouldn't happen, all entries are parsed */
@@ -3473,6 +3850,338 @@ gtk_xtext_render_stamp (GtkXText * xtext, textentry * ent,
 	g_free (r2s);
 }
 
+/* Render a reply context line above a message: "\xe2\x86\xa9 nick: preview text..."
+ * Draws at reduced alpha to visually distinguish from message text. */
+static void
+gtk_xtext_render_reply_context (GtkXText *xtext, textentry *ent, int line, int win_width)
+{
+	struct xtext_reply_info *reply = ent->reply;
+	char *text;
+	int y, x;
+	PangoLayoutLine *pango_line;
+	double saved_alpha;
+
+	if (!reply || !xtext->cr)
+		return;
+
+	/* Build display text */
+	if (reply->target_nick && reply->target_nick[0] && reply->target_preview && reply->target_preview[0])
+		text = g_strdup_printf ("\xe2\x86\xa9 %s: %s", reply->target_nick, reply->target_preview);
+	else if (reply->target_nick && reply->target_nick[0])
+		text = g_strdup_printf ("\xe2\x86\xa9 %s", reply->target_nick);
+	else
+		text = g_strdup ("\xe2\x86\xa9 (unknown message)");
+
+	y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
+	x = xtext->buffer->indent;
+
+	/* Tinted background: shift BG toward mid-gray for subtle visual distinction.
+	 * Uses neutral gray (0.5) so it darkens light themes and lightens dark themes,
+	 * distinct from the hover highlight which uses the FG color. */
+	xtext_draw_bg (xtext, 0, y - xtext->font->ascent, win_width + MARGIN, xtext->fontsize);
+	{
+		GdkRGBA tint = { 0.5, 0.5, 0.5, 0.08 };
+		gdk_cairo_set_source_rgba (xtext->cr, &tint);
+		cairo_rectangle (xtext->cr, 0, y - xtext->font->ascent, win_width + MARGIN, xtext->fontsize);
+		cairo_fill (xtext->cr);
+	}
+
+	/* Set up layout with plain text (no format codes) */
+	pango_layout_set_text (xtext->layout, text, -1);
+	pango_layout_set_attributes (xtext->layout, NULL);
+	pango_layout_set_width (xtext->layout, (win_width - x) * PANGO_SCALE);
+	pango_layout_set_ellipsize (xtext->layout, PANGO_ELLIPSIZE_END);
+
+	/* Draw at reduced alpha for muted appearance */
+	saved_alpha = xtext->render_alpha;
+	xtext->render_alpha = 0.5;
+	xtext_set_source_color (xtext, XTEXT_FG);
+	xtext->render_alpha = saved_alpha;
+
+	pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
+	xtext_draw_layout_line (xtext, x, y, pango_line);
+
+	/* Reset layout state */
+	pango_layout_set_width (xtext->layout, -1);
+	pango_layout_set_ellipsize (xtext->layout, PANGO_ELLIPSIZE_NONE);
+
+	g_free (text);
+}
+
+/* Build a display string for reaction text, replacing emoji with U+FFFC placeholders.
+ * Returns the display string and populates emoji_positions array with sprite info.
+ * Caller must g_free the returned string. */
+typedef struct {
+	int byte_offset;		/* offset of U+FFFC in display string */
+	char filename[64];		/* sprite filename */
+} reaction_emoji_pos;
+
+static char *
+reaction_build_display (const char *text, xtext_emoji_cache *cache,
+                        reaction_emoji_pos **out_emojis, int *out_emoji_count)
+{
+	GString *display;
+	GArray *positions;
+	const unsigned char *p;
+	int remaining;
+
+	display = g_string_sized_new (strlen (text) + 16);
+	positions = g_array_new (FALSE, FALSE, sizeof (reaction_emoji_pos));
+
+	p = (const unsigned char *) text;
+	remaining = strlen (text);
+
+	while (remaining > 0)
+	{
+		int emoji_bytes = 0;
+		char filename[64];
+		gboolean is_emoji = FALSE;
+
+		if (cache)
+			is_emoji = xtext_emoji_detect (p, remaining, &emoji_bytes, filename, sizeof (filename));
+
+		if (is_emoji && xtext_emoji_cache_get (cache, filename))
+		{
+			reaction_emoji_pos pos;
+			pos.byte_offset = display->len;
+			g_strlcpy (pos.filename, filename, sizeof (pos.filename));
+			g_array_append_val (positions, pos);
+
+			/* U+FFFC = EF BF BC in UTF-8 */
+			g_string_append (display, "\xef\xbf\xbc");
+			p += emoji_bytes;
+			remaining -= emoji_bytes;
+		}
+		else
+		{
+			/* Copy one UTF-8 character */
+			int char_len = g_utf8_next_char ((const char *)p) - (const char *)p;
+			if (char_len > remaining) char_len = remaining;
+			g_string_append_len (display, (const char *)p, char_len);
+			p += char_len;
+			remaining -= char_len;
+		}
+	}
+
+	*out_emoji_count = positions->len;
+	*out_emojis = (reaction_emoji_pos *) g_array_free (positions, FALSE);
+	return g_string_free (display, FALSE);
+}
+
+/* Measure total width of all reaction badges (for right-alignment and click detection).
+ * Uses Pango to measure each badge label. Returns total width including inter-badge gaps. */
+static int
+gtk_xtext_measure_reaction_badges (GtkXText *xtext, struct xtext_reactions_info *ri, int win_width)
+{
+	int total_width = 0;
+	int pad_x = 6;
+	guint i;
+	int badge_count = 0;
+
+	for (i = 0; i < ri->reactions->len; i++)
+	{
+		struct xtext_reaction *react = g_ptr_array_index (ri->reactions, i);
+		PangoRectangle logical;
+		char *label;
+		int content_width, badge_width;
+		reaction_emoji_pos *emojis;
+		int emoji_count, j;
+		char *base_display;
+
+		if (react->count <= 0)
+			continue;
+
+		base_display = reaction_build_display (react->text, xtext->emoji_cache,
+		                                       &emojis, &emoji_count);
+		if (react->count > 1)
+		{
+			label = g_strdup_printf ("%s %d", base_display, react->count);
+			g_free (base_display);
+		}
+		else
+		{
+			label = base_display;
+		}
+
+		pango_layout_set_text (xtext->layout, label, -1);
+		pango_layout_set_attributes (xtext->layout, NULL);
+		pango_layout_get_extents (xtext->layout, NULL, &logical);
+
+		content_width = PANGO_PIXELS (logical.width);
+		for (j = 0; j < emoji_count; j++)
+		{
+			PangoRectangle fffc_pos;
+			pango_layout_index_to_pos (xtext->layout, emojis[j].byte_offset, &fffc_pos);
+			content_width += xtext->fontsize - PANGO_PIXELS (fffc_pos.width);
+		}
+
+		badge_width = content_width + pad_x * 2;
+
+		if (total_width + badge_width > win_width)
+		{
+			g_free (label);
+			g_free (emojis);
+			break;
+		}
+
+		total_width += badge_width;
+		badge_count++;
+
+		g_free (label);
+		g_free (emojis);
+	}
+
+	/* Add inter-badge gaps */
+	if (badge_count > 1)
+		total_width += (badge_count - 1) * 4;
+
+	return total_width;
+}
+
+/* Render reaction badges below a message: [emoji 2] [text] [emoji emoji 3] ...
+ * Each badge is a rounded rect. Emoji are rendered as sprites when available,
+ * with Pango fallback for text and unsupported emoji. Right-aligned. */
+static void
+gtk_xtext_render_reaction_badges (GtkXText *xtext, textentry *ent, int line, int win_width)
+{
+	struct xtext_reactions_info *ri = ent->reactions;
+	int y, badge_x;
+	double saved_alpha;
+	guint i;
+	int total_width;
+
+	if (!ri || ri->total_count == 0 || !xtext->cr)
+		return;
+
+	y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
+
+	/* Right-align: measure total width, then start from right edge */
+	total_width = gtk_xtext_measure_reaction_badges (xtext, ri, win_width);
+	badge_x = win_width - total_width;
+
+	/* Clear background for full line */
+	xtext_draw_bg (xtext, 0, y - xtext->font->ascent, win_width + MARGIN, xtext->fontsize);
+
+	for (i = 0; i < ri->reactions->len; i++)
+	{
+		struct xtext_reaction *react = g_ptr_array_index (ri->reactions, i);
+		int badge_width, badge_height, pad_x, pad_y;
+		int content_width;
+		gboolean is_self;
+		char *display_text;
+		reaction_emoji_pos *emojis;
+		int emoji_count;
+		PangoRectangle logical;
+		PangoLayoutLine *pango_line;
+		int j;
+
+		if (react->count <= 0)
+			continue;
+
+		/* Build display string with U+FFFC for sprite emoji */
+		{
+			char *base_display;
+			base_display = reaction_build_display (react->text, xtext->emoji_cache,
+			                                       &emojis, &emoji_count);
+			if (react->count > 1)
+			{
+				display_text = g_strdup_printf ("%s %d", base_display, react->count);
+				g_free (base_display);
+			}
+			else
+			{
+				display_text = base_display;
+			}
+		}
+
+		/* Measure via Pango (U+FFFC gets a placeholder width from the font) */
+		pango_layout_set_text (xtext->layout, display_text, -1);
+		pango_layout_set_attributes (xtext->layout, NULL);
+		pango_layout_get_extents (xtext->layout, NULL, &logical);
+
+		/* If we have sprite emoji, account for sprite width vs U+FFFC glyph width.
+		 * Each sprite is fontsize pixels wide. Compute width adjustment. */
+		content_width = PANGO_PIXELS (logical.width);
+		for (j = 0; j < emoji_count; j++)
+		{
+			PangoRectangle fffc_pos;
+			pango_layout_index_to_pos (xtext->layout, emojis[j].byte_offset, &fffc_pos);
+			content_width += xtext->fontsize - PANGO_PIXELS (fffc_pos.width);
+		}
+
+		pad_x = 6;
+		pad_y = 1;
+		badge_width = content_width + pad_x * 2;
+		badge_height = xtext->fontsize - pad_y * 2;
+
+		/* Clip if badges exceed width */
+		if (badge_x + badge_width > win_width)
+		{
+			g_free (display_text);
+			g_free (emojis);
+			break;
+		}
+
+		is_self = gtk_xtext_entry_has_self_reaction (ent, react->text);
+
+		/* Draw rounded rect background */
+		{
+			double rx = badge_x;
+			double ry = y - xtext->font->ascent + pad_y;
+			double rw = badge_width;
+			double rh = badge_height;
+			double radius = 4.0;
+			GdkRGBA bg;
+
+			bg = xtext->palette[XTEXT_FG];
+			bg.alpha = is_self ? 0.2 : 0.1;
+
+			cairo_new_sub_path (xtext->cr);
+			cairo_arc (xtext->cr, rx + rw - radius, ry + radius, radius, -G_PI/2, 0);
+			cairo_arc (xtext->cr, rx + rw - radius, ry + rh - radius, radius, 0, G_PI/2);
+			cairo_arc (xtext->cr, rx + radius, ry + rh - radius, radius, G_PI/2, G_PI);
+			cairo_arc (xtext->cr, rx + radius, ry + radius, radius, G_PI, 3*G_PI/2);
+			cairo_close_path (xtext->cr);
+			gdk_cairo_set_source_rgba (xtext->cr, &bg);
+			cairo_fill (xtext->cr);
+		}
+
+		/* Draw text content via Pango */
+		saved_alpha = xtext->render_alpha;
+		xtext->render_alpha = is_self ? 1.0 : 0.7;
+		xtext_set_source_color (xtext, XTEXT_FG);
+		xtext->render_alpha = saved_alpha;
+
+		pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
+		xtext_draw_layout_line (xtext, badge_x + pad_x, y, pango_line);
+
+		/* Overlay sprite emoji on top of U+FFFC placeholders */
+		for (j = 0; j < emoji_count; j++)
+		{
+			cairo_surface_t *sprite = xtext_emoji_cache_get (xtext->emoji_cache,
+			                                                  emojis[j].filename);
+			if (sprite)
+			{
+				PangoRectangle pos;
+				int sprite_x, sprite_y;
+				pango_layout_index_to_pos (xtext->layout, emojis[j].byte_offset, &pos);
+				sprite_x = badge_x + pad_x + PANGO_PIXELS (pos.x);
+				sprite_y = y - xtext->font->ascent;
+
+				/* Clear U+FFFC glyph area */
+				xtext_draw_bg (xtext, sprite_x, sprite_y, xtext->fontsize, xtext->fontsize);
+				cairo_set_source_surface (xtext->cr, sprite, sprite_x, sprite_y);
+				cairo_paint_with_alpha (xtext->cr, 0.92); /* subtle alpha to let bg tint through */
+			}
+		}
+
+		badge_x += badge_width + 4; /* 4px gap between badges */
+
+		g_free (display_text);
+		g_free (emojis);
+	}
+}
+
 /* render a single line, which may wrap to more lines */
 
 static int
@@ -3482,6 +4191,8 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 	unsigned char *str;
 	int indent, taken, entline, len, y, start_subline;
 	int raw_offset;
+	int text_subline; /* subline offset into text sublines (after extra_lines_above) */
+	int first_subline_y = 0; /* y position of the first rendered text subline (for reply button) */
 
 	entline = taken = 0;
 	str = ent->str;
@@ -3489,28 +4200,52 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 	indent = ent->indent;
 	start_subline = subline;
 
-	/* draw the timestamp */
-	if (xtext->auto_indent && xtext->buffer->time_stamp &&
-		 (!xtext->skip_stamp || xtext->mark_stamp || xtext->force_stamp) &&
-		 ent->left_len != 0)
+	/* --- Reply context line above the message --- */
+	if (ent->extra_lines_above > 0)
 	{
-		char *time_str;
-		int len;
-
-		len = xtext_get_stamp_str (ent->stamp, &time_str);
-		gtk_xtext_render_stamp (xtext, ent, time_str, len, line, win_width);
-		g_free (time_str);
-	}
-	else if (xtext->auto_indent && xtext->buffer->time_stamp &&
-				ent->left_len == 0)
-	{
-		/* Continuation line (multiline message) - fill stamp area with background */
-		int y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
-		xtext_draw_bg (xtext, 0, y - xtext->font->ascent,
-							xtext->stamp_width, xtext->fontsize);
+		if (subline == 0)
+		{
+			/* Render the reply context line */
+			gtk_xtext_render_reply_context (xtext, ent, line, win_width);
+			line++;
+			taken++;
+			if (line >= lines_max)
+				return taken;
+		}
+		else
+		{
+			/* Skipping the reply context line */
+			subline--;
+		}
 	}
 
-	/* draw each line one by one */
+	/* Convert remaining subline to text subline offset */
+	text_subline = subline;
+
+	/* draw the timestamp (only on the first text subline) */
+	if (text_subline == 0)
+	{
+		if (xtext->auto_indent && xtext->buffer->time_stamp &&
+			 (!xtext->skip_stamp || xtext->mark_stamp || xtext->force_stamp) &&
+			 ent->left_len != 0)
+		{
+			char *time_str;
+			int ts_len;
+
+			ts_len = xtext_get_stamp_str (ent->stamp, &time_str);
+			gtk_xtext_render_stamp (xtext, ent, time_str, ts_len, line, win_width);
+			g_free (time_str);
+		}
+		else if (xtext->auto_indent && xtext->buffer->time_stamp &&
+					ent->left_len == 0)
+		{
+			int bg_y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
+			xtext_draw_bg (xtext, 0, bg_y - xtext->font->ascent,
+								xtext->stamp_width, xtext->fontsize);
+		}
+	}
+
+	/* draw each text subline one by one */
 	do
 	{
 		if (entline > 0)
@@ -3521,22 +4256,23 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 		entline++;
 
 		y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
-		if (!subline)
+		if (!text_subline)
 		{
 			if (!gtk_xtext_render_subline (xtext, y, ent, raw_offset, len,
 			                               win_width, indent, line, FALSE, NULL))
 			{
 				/* small optimization */
 				gtk_xtext_draw_marker (xtext, ent, y - xtext->fontsize * (taken + start_subline + 1));
-				return g_slist_length (ent->sublines) - subline;
+				return ENT_TOTAL_LINES (ent) - start_subline;
 			}
+
+			/* Save y of first text subline for reply button (drawn after loop) */
+			if (entline == 1)
+				first_subline_y = y;
 		} else
 		{
-			/* Skipping sublines before the visible region — no rendering needed.
-			 * The old code used dont_render to advance emphasis state through
-			 * render_str, but the new renderer uses pre-computed format spans
-			 * so there's no state to advance. */
-			subline--;
+			/* Skipping sublines before the visible region */
+			text_subline--;
 			line--;
 			taken--;
 		}
@@ -3554,6 +4290,128 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 	while (str < ent->str + ent->str_len);
 
 	gtk_xtext_draw_marker (xtext, ent, y - xtext->fontsize * (taken + start_subline));
+
+	/* --- Hover buttons: reply, react-text, react-emoji --- */
+	if (ent == xtext->hover_ent && ent->msgid && first_subline_y && xtext->cr)
+	{
+		int btn_size = xtext->fontsize + 2;
+		int gap = 2;
+		int total_w = btn_size * 3 + gap * 2;
+		int base_x = win_width - total_w - 4;
+		int btn_y = first_subline_y - xtext->font->ascent;
+		GdkRGBA btn_bg, fg;
+		PangoLayoutLine *pango_line;
+		PangoRectangle glyph_rect;
+		/* Button labels: ↩ reply, Aa react-text, 😀 react-emoji */
+		static const char *labels[] = { "\xe2\x86\xa9", "Aa", "\xf0\x9f\x98\x80" };
+		int btn_xs[3];
+		int i;
+
+		btn_xs[0] = base_x;
+		btn_xs[1] = base_x + btn_size + gap;
+		btn_xs[2] = base_x + (btn_size + gap) * 2;
+
+		btn_bg = xtext->palette[XTEXT_FG];
+		btn_bg.alpha = 0.15;
+		fg = xtext->palette[XTEXT_FG];
+		fg.alpha = 0.7;
+
+		for (i = 0; i < 3; i++)
+		{
+			int bx = btn_xs[i];
+
+			/* Rounded rect background */
+			cairo_new_sub_path (xtext->cr);
+			cairo_arc (xtext->cr, bx + btn_size - 4, btn_y + 4, 4, -G_PI/2, 0);
+			cairo_arc (xtext->cr, bx + btn_size - 4, btn_y + btn_size - 4, 4, 0, G_PI/2);
+			cairo_arc (xtext->cr, bx + 4, btn_y + btn_size - 4, 4, G_PI/2, G_PI);
+			cairo_arc (xtext->cr, bx + 4, btn_y + 4, 4, G_PI, 3*G_PI/2);
+			cairo_close_path (xtext->cr);
+			gdk_cairo_set_source_rgba (xtext->cr, &btn_bg);
+			cairo_fill (xtext->cr);
+
+			/* Emoji button: use sprite from cache for consistent Twemoji rendering */
+			if (i == 2 && xtext->emoji_cache)
+			{
+				int emoji_bytes = 0;
+				char emoji_fn[64];
+				const unsigned char *emoji_str = (const unsigned char *) labels[2];
+				int emoji_len = strlen (labels[2]);
+
+				if (xtext_emoji_detect (emoji_str, emoji_len, &emoji_bytes, emoji_fn, sizeof (emoji_fn)))
+				{
+					cairo_surface_t *sprite = xtext_emoji_cache_get (xtext->emoji_cache, emoji_fn);
+					if (sprite)
+					{
+						int sprite_sz = btn_size - 4; /* slight padding inside button */
+						int sx = bx + (btn_size - sprite_sz) / 2;
+						int sy = btn_y + (btn_size - sprite_sz) / 2;
+						double scale = (double) sprite_sz / cairo_image_surface_get_width (sprite);
+
+						cairo_save (xtext->cr);
+						cairo_translate (xtext->cr, sx, sy);
+						cairo_scale (xtext->cr, scale, scale);
+						cairo_set_source_surface (xtext->cr, sprite, 0, 0);
+						cairo_paint_with_alpha (xtext->cr, 0.85);
+						cairo_restore (xtext->cr);
+						continue;
+					}
+				}
+			}
+
+			/* Text label (reply ↩, react-text Aa, or emoji fallback) */
+			pango_layout_set_text (xtext->layout, labels[i], -1);
+			pango_layout_set_attributes (xtext->layout, NULL);
+			gdk_cairo_set_source_rgba (xtext->cr, &fg);
+			pango_layout_get_extents (xtext->layout, NULL, &glyph_rect);
+			pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
+			xtext_draw_layout_line (xtext,
+				bx + (btn_size - PANGO_PIXELS (glyph_rect.width)) / 2,
+				first_subline_y, pango_line);
+		}
+
+		/* Store button positions for click detection */
+		xtext->reply_btn_x = btn_xs[0];
+		xtext->react_text_btn_x = btn_xs[1];
+		xtext->react_emoji_btn_x = btn_xs[2];
+		xtext->hover_btn_y = btn_y;
+		xtext->hover_btn_size = btn_size;
+	}
+
+	/* --- Reaction badges below the message --- */
+	if (ent->extra_lines_below > 0 && line < lines_max)
+	{
+		gtk_xtext_render_reaction_badges (xtext, ent, line, win_width);
+		line++;
+		taken++;
+	}
+
+	/* --- Hover / flash highlight overlay (drawn after all content) --- */
+	{
+		gboolean is_hover = (ent == xtext->hover_ent ||
+		                     ent == xtext->hover_reply_target);
+		gboolean is_flash = (ent == xtext->flash_ent);
+
+		/* Check group_id match for multiline messages */
+		if (!is_hover && !is_flash && ent->group_id != 0)
+		{
+			if (xtext->hover_ent && xtext->hover_ent->group_id == ent->group_id)
+				is_hover = TRUE;
+			if (xtext->flash_ent && xtext->flash_ent->group_id == ent->group_id)
+				is_flash = TRUE;
+		}
+
+		if (xtext->cr && taken > 0 && (is_hover || is_flash))
+		{
+			int hl_y_top = xtext->fontsize * (line - taken) - xtext->pixel_offset;
+			int hl_height = xtext->fontsize * taken;
+			GdkRGBA hl = xtext->palette[XTEXT_FG];
+			hl.alpha = is_flash ? 0.12 : 0.06;
+			gdk_cairo_set_source_rgba (xtext->cr, &hl);
+			cairo_rectangle (xtext->cr, 0, hl_y_top, win_width + MARGIN, hl_height);
+			cairo_fill (xtext->cr);
+		}
+	}
 
 	return taken;
 }
@@ -3729,7 +4587,8 @@ gtk_xtext_lines_taken (xtext_buffer *buf, textentry * ent)
 	ent->sublines = NULL;
 	win_width = buf->window_width - MARGIN;
 
-	if (win_width >= ent->indent + ent->str_width)
+	if (win_width >= ent->indent + ent->str_width &&
+	    !(ent->stripped_str && memchr (ent->stripped_str, '\n', ent->stripped_len)))
 	{
 		ent->sublines = g_slist_append (ent->sublines, GINT_TO_POINTER (ent->str_len));
 		return 1;
@@ -3753,7 +4612,7 @@ gtk_xtext_lines_taken (xtext_buffer *buf, textentry * ent)
 /* Calculate number of actual lines (with wraps), to set adj->lower. *
  * This should only be called when the window resizes.               */
 
-static void
+void
 gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal)
 {
 	textentry *ent;
@@ -3773,6 +4632,7 @@ gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal)
 	while (ent)
 	{
 		lines += gtk_xtext_lines_taken (buf, ent);
+		lines += ent->extra_lines_above + ent->extra_lines_below;
 		ent = ent->next;
 	}
 
@@ -3820,7 +4680,7 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 				ent = ent->prev;
 				if (!ent)
 					break;
-				lines -= g_slist_length (ent->sublines);
+				lines -= ENT_TOTAL_LINES (ent);
 			}
 			return NULL;
 		}
@@ -3829,10 +4689,10 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 
 	while (ent)
 	{
-		lines += g_slist_length (ent->sublines);
+		lines += ENT_TOTAL_LINES (ent);
 		if (lines > line)
 		{
-			*subline = g_slist_length (ent->sublines) - (lines - line);
+			*subline = ENT_TOTAL_LINES (ent) - (lines - line);
 			return ent;
 		}
 		ent = ent->next;
@@ -3927,7 +4787,7 @@ gtk_xtext_render_ents (GtkXText * xtext, textentry * enta, textentry * entb)
 				line -= subline;
 				subline = 0;
 			}
-			line += g_slist_length (ent->sublines);
+			line += ENT_TOTAL_LINES (ent);
 		}
 
 		if (ent == entb)
@@ -4137,6 +4997,23 @@ gtk_xtext_draw_status_strip (GtkXText *xtext, int width, int height)
 	if (left_count > 0)
 	{
 		GString *lstr = g_string_new (NULL);
+		gboolean has_dismiss = FALSE;
+		int dismiss_pad = 0;
+
+		/* Check if any left item has a dismiss callback */
+		for (i = 0; i < left_count; i++)
+		{
+			if (left_items[i]->dismiss_cb)
+			{
+				has_dismiss = TRUE;
+				break;
+			}
+		}
+
+		/* Reserve space for × button if needed */
+		if (has_dismiss)
+			dismiss_pad = strip_h + 4; /* square button + gap */
+
 		for (i = 0; i < left_count; i++)
 		{
 			if (lstr->len > 0)
@@ -4145,13 +5022,46 @@ gtk_xtext_draw_status_strip (GtkXText *xtext, int width, int height)
 		}
 		left_x = 6;
 		pango_layout_set_text (layout, lstr->str, -1);
-		/* Ellipsize if it would overlap the right zone */
-		pango_layout_set_width (layout, (right_zone_left - left_x - 12) * PANGO_SCALE);
+		/* Ellipsize if it would overlap the right zone (minus dismiss button space) */
+		pango_layout_set_width (layout, (right_zone_left - left_x - 12 - dismiss_pad) * PANGO_SCALE);
 		pango_layout_set_ellipsize (layout, PANGO_ELLIPSIZE_END);
 		pango_layout_get_pixel_extents (layout, NULL, &logical);
 		text_y = y + (strip_h - logical.height) / 2;
 		cairo_move_to (cr, left_x, text_y);
 		pango_cairo_show_layout (cr, layout);
+
+		/* Draw × dismiss button for dismissable items */
+		if (has_dismiss)
+		{
+			int btn_x = left_x + logical.width + 6;
+			int btn_sz = strip_h - 2;
+			PangoRectangle x_rect;
+
+			/* × glyph */
+			pango_layout_set_width (layout, -1);
+			pango_layout_set_ellipsize (layout, PANGO_ELLIPSIZE_NONE);
+			pango_layout_set_text (layout, "\xc3\x97", -1);  /* × (U+00D7) */
+			pango_layout_get_pixel_extents (layout, NULL, &x_rect);
+			cairo_set_source_rgba (cr,
+			                       xtext->palette[XTEXT_FG].red,
+			                       xtext->palette[XTEXT_FG].green,
+			                       xtext->palette[XTEXT_FG].blue,
+			                       0.5);
+			cairo_move_to (cr, btn_x + (btn_sz - x_rect.width) / 2,
+			               y + (strip_h - x_rect.height) / 2);
+			pango_cairo_show_layout (cr, layout);
+
+			/* Store dismiss hit area for all dismissable left items */
+			for (i = 0; i < left_count; i++)
+			{
+				if (left_items[i]->dismiss_cb)
+				{
+					left_items[i]->dismiss_x = btn_x;
+					left_items[i]->dismiss_w = btn_sz;
+				}
+			}
+		}
+
 		pango_layout_set_width (layout, -1);
 		pango_layout_set_ellipsize (layout, PANGO_ELLIPSIZE_NONE);
 		g_string_free (lstr, TRUE);
@@ -4269,12 +5179,32 @@ gtk_xtext_status_set (GtkXText *xtext, const char *key, const char *text,
 
 		if (was_visible != xtext->status_strip_visible)
 		{
+			/* Preserve scroll position when status strip visibility changes.
+			 * The adjustment recalc shrinks page_size which can falsely clamp
+			 * the value and set scrollbar_down — save and restore it. */
+			gboolean was_down = xtext->buffer->scrollbar_down;
 			gtk_xtext_adjustment_set (xtext->buffer, TRUE);
-			if (xtext->buffer->scrollbar_down)
+			if (was_down)
 				gtk_adjustment_set_value (xtext->adj,
 					gtk_adjustment_get_upper (xtext->adj) -
 					gtk_adjustment_get_page_size (xtext->adj));
+			else
+				xtext->buffer->scrollbar_down = FALSE;
 		}
+		gtk_widget_queue_draw (GTK_WIDGET (xtext));
+	}
+}
+
+void
+gtk_xtext_status_set_dismiss (GtkXText *xtext, const char *key,
+                              void (*cb) (GtkXText *, const char *, gpointer),
+                              gpointer userdata)
+{
+	int idx = xtext_status_find (xtext, key);
+	if (idx >= 0)
+	{
+		xtext->status_items[idx].dismiss_cb = cb;
+		xtext->status_items[idx].dismiss_userdata = userdata;
 		gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	}
 }
@@ -4299,11 +5229,14 @@ gtk_xtext_status_remove (GtkXText *xtext, const char *key)
 		xtext->status_strip_visible = (xtext->status_item_count > 0);
 		if (was_visible != xtext->status_strip_visible)
 		{
+			gboolean was_down = xtext->buffer->scrollbar_down;
 			gtk_xtext_adjustment_set (xtext->buffer, TRUE);
-			if (xtext->buffer->scrollbar_down)
+			if (was_down)
 				gtk_adjustment_set_value (xtext->adj,
 					gtk_adjustment_get_upper (xtext->adj) -
 					gtk_adjustment_get_page_size (xtext->adj));
+			else
+				xtext->buffer->scrollbar_down = FALSE;
 		}
 	}
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
@@ -4629,6 +5562,12 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 
 	if (ent == buffer->pagetop_ent)
 		buffer->pagetop_ent = NULL;
+	if (ent == buffer->xtext->hover_ent)
+		buffer->xtext->hover_ent = NULL;
+	if (ent == buffer->xtext->hover_reply_target)
+		buffer->xtext->hover_reply_target = NULL;
+	if (ent == buffer->xtext->flash_ent)
+		buffer->xtext->flash_ent = NULL;
 
 	/* last_ent_start_id / last_ent_end_id: stale IDs self-heal (resolve to NULL) */
 
@@ -4662,6 +5601,28 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 		g_free (ent->redaction);
 	}
 
+	/* IRCv3 reactions and reply context */
+	if (ent->reactions)
+	{
+		guint i;
+		for (i = 0; i < ent->reactions->reactions->len; i++)
+		{
+			xtext_reaction *r = g_ptr_array_index (ent->reactions->reactions, i);
+			g_free (r->text);
+			g_hash_table_destroy (r->nicks);
+			g_free (r);
+		}
+		g_ptr_array_free (ent->reactions->reactions, TRUE);
+		g_free (ent->reactions);
+	}
+	if (ent->reply)
+	{
+		g_free (ent->reply->target_msgid);
+		g_free (ent->reply->target_nick);
+		g_free (ent->reply->target_preview);
+		g_free (ent->reply);
+	}
+
 	g_slist_free_full (ent->slp, g_free);
 	g_slist_free (ent->sublines);
 
@@ -4684,23 +5645,26 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 	ent = buffer->text_first;
 	if (!ent)
 		return;
-	buffer->num_lines -= g_slist_length (ent->sublines);
-	buffer->pagetop_line -= g_slist_length (ent->sublines);
-	buffer->last_pixel_pos -= (g_slist_length (ent->sublines) * buffer->xtext->fontsize);
-	buffer->text_first = ent->next;
-	if (buffer->text_first)
-		buffer->text_first->prev = NULL;
-	else
-		buffer->text_last = NULL;
-
-	buffer->old_value -= g_slist_length (ent->sublines);
-	if (buffer->xtext->buffer == buffer)	/* is it the current buffer? */
 	{
-		g_signal_handler_block (buffer->xtext->adj, buffer->xtext->vc_signal_tag);
-		gtk_adjustment_set_value (buffer->xtext->adj,
-			gtk_adjustment_get_value (buffer->xtext->adj) - g_slist_length (ent->sublines));
-		g_signal_handler_unblock (buffer->xtext->adj, buffer->xtext->vc_signal_tag);
-		buffer->xtext->select_start_adj -= g_slist_length (ent->sublines);
+		int ent_lines = ENT_TOTAL_LINES (ent);
+		buffer->num_lines -= ent_lines;
+		buffer->pagetop_line -= ent_lines;
+		buffer->last_pixel_pos -= (ent_lines * buffer->xtext->fontsize);
+		buffer->text_first = ent->next;
+		if (buffer->text_first)
+			buffer->text_first->prev = NULL;
+		else
+			buffer->text_last = NULL;
+
+		buffer->old_value -= ent_lines;
+		if (buffer->xtext->buffer == buffer)	/* is it the current buffer? */
+		{
+			g_signal_handler_block (buffer->xtext->adj, buffer->xtext->vc_signal_tag);
+			gtk_adjustment_set_value (buffer->xtext->adj,
+				gtk_adjustment_get_value (buffer->xtext->adj) - ent_lines);
+			g_signal_handler_unblock (buffer->xtext->adj, buffer->xtext->vc_signal_tag);
+			buffer->xtext->select_start_adj -= ent_lines;
+		}
 	}
 
 	if (gtk_xtext_kill_ent (buffer, ent))
@@ -4730,7 +5694,7 @@ gtk_xtext_remove_bottom (xtext_buffer *buffer)
 	ent = buffer->text_last;
 	if (!ent)
 		return;
-	buffer->num_lines -= g_slist_length (ent->sublines);
+	buffer->num_lines -= ENT_TOTAL_LINES (ent);
 	buffer->text_last = ent->prev;
 	if (buffer->text_last)
 		buffer->text_last->next = NULL;
@@ -4850,9 +5814,9 @@ gtk_xtext_check_ent_visibility (GtkXText * xtext, textentry *find_ent, int add)
 	}
 	/* Loop through line positions looking for find_ent */
 	lines = ((height + xtext->pixel_offset) / xtext->fontsize) + buf->pagetop_subline + add;
-	while (ent)	
+	while (ent)
 	{
-		lines -= g_slist_length (ent->sublines);
+		lines -= ENT_TOTAL_LINES (ent);
 		if (lines <= 0)
 		{
 			return FALSE;
@@ -5240,7 +6204,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 		for (value = 0, ent = buf->text_first;
 			  ent && ent != hint; ent = ent->next)
 		{
-			value += g_slist_length (ent->sublines);
+			value += ENT_TOTAL_LINES (ent);
 		}
 		if (value > gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj))
 		{
@@ -5248,7 +6212,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 		}
 		else if ((flags & backward)  && ent)
 		{
-			value -= gtk_adjustment_get_page_size (adj) - g_slist_length (ent->sublines);
+			value -= gtk_adjustment_get_page_size (adj) - ENT_TOTAL_LINES (ent);
 			if (value < 0)
 			{
 				value = 0;
@@ -5354,6 +6318,7 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	ent->msgid = NULL;	/* Will be set later via gtk_xtext_set_msgid() if available */
 	ent->entry_id = buf->next_entry_id++;
+	ent->group_id = buf->current_group_id;	/* non-zero for multiline batch entries */
 	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
 
 	/* Phase 4: entry modification support */
@@ -5487,6 +6452,7 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	ent->msgid = NULL;	/* Will be set later via gtk_xtext_set_msgid() if available */
 	ent->entry_id = buf->next_entry_id++;
+	ent->group_id = buf->current_group_id;
 	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
 
 	/* Phase 4: entry modification support */
@@ -6210,6 +7176,42 @@ gtk_xtext_reset_scroll_top_backoff (GtkXText *xtext)
 	xtext->scroll_top_backoff_ms = 500;
 }
 
+void
+gtk_xtext_set_reply_button_callback (GtkXText *xtext,
+                                     void (*callback) (GtkXText *, const char *, const char *, gpointer),
+                                     gpointer userdata)
+{
+	xtext->reply_button_cb = callback;
+	xtext->reply_button_userdata = userdata;
+}
+
+void
+gtk_xtext_set_react_text_button_callback (GtkXText *xtext,
+                                           void (*callback) (GtkXText *, const char *, const char *, gpointer),
+                                           gpointer userdata)
+{
+	xtext->react_text_button_cb = callback;
+	xtext->react_text_button_userdata = userdata;
+}
+
+void
+gtk_xtext_set_react_emoji_button_callback (GtkXText *xtext,
+                                            void (*callback) (GtkXText *, const char *, const char *, gpointer),
+                                            gpointer userdata)
+{
+	xtext->react_emoji_button_cb = callback;
+	xtext->react_emoji_button_userdata = userdata;
+}
+
+void
+gtk_xtext_set_reaction_click_callback (GtkXText *xtext,
+                                       void (*callback) (GtkXText *, const char *, const char *, gboolean, gpointer),
+                                       gpointer userdata)
+{
+	xtext->reaction_click_cb = callback;
+	xtext->reaction_click_userdata = userdata;
+}
+
 /* Resolve marker_pos_id to a textentry pointer. Returns NULL if not set or stale. */
 static textentry *
 xtext_resolve_marker (xtext_buffer *buf)
@@ -6261,7 +7263,7 @@ gtk_xtext_moveto_marker_pos (GtkXText *xtext)
 			{
 				if (ent == marker)
 					break;
-				value += g_slist_length (ent->sublines);
+				value += ENT_TOTAL_LINES (ent);
 				ent = ent->next;
 			}
 			if (value >= gtk_adjustment_get_value (adj) && value < gtk_adjustment_get_value (adj) + gtk_adjustment_get_page_size (adj))
@@ -6283,6 +7285,46 @@ gtk_xtext_moveto_marker_pos (GtkXText *xtext)
 		else
 			return MARKER_IS_SET;
 	}
+}
+
+/* Scroll to make a specific entry visible, centered in the viewport. */
+void
+gtk_xtext_scroll_to_entry (xtext_buffer *buf, textentry *target)
+{
+	GtkXText *xtext = buf->xtext;
+	GtkAdjustment *adj = xtext->adj;
+	textentry *ent;
+	gdouble value = 0;
+	gdouble upper, page_size;
+
+	if (!target || !adj)
+		return;
+
+	/* Already visible? */
+	if (gtk_xtext_check_ent_visibility (xtext, target, 1))
+		return;
+
+	/* Calculate line offset of target entry */
+	for (ent = buf->text_first; ent; ent = ent->next)
+	{
+		if (ent == target)
+			break;
+		value += ENT_TOTAL_LINES (ent);
+	}
+	if (!ent)
+		return; /* target not in buffer */
+
+	/* Center the entry in the viewport */
+	upper = gtk_adjustment_get_upper (adj);
+	page_size = gtk_adjustment_get_page_size (adj);
+	value -= page_size / 2;
+	if (value < 0)
+		value = 0;
+	if (value > upper - page_size)
+		value = upper - page_size;
+
+	gtk_adjustment_set_value (adj, value);
+	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 }
 
 void
@@ -6538,6 +7580,20 @@ gtk_xtext_set_msgid (xtext_buffer *buf, textentry *ent, const char *msgid)
 	return ent;
 }
 
+void
+gtk_xtext_begin_group (xtext_buffer *buf)
+{
+	/* Use next_entry_id as a unique group_id (it won't collide with entry_ids
+	 * because group_id and entry_id are separate namespaces) */
+	buf->current_group_id = buf->next_entry_id++;
+}
+
+void
+gtk_xtext_end_group (xtext_buffer *buf)
+{
+	buf->current_group_id = 0;
+}
+
 /**
  * Get the entry_id of an entry.
  * Returns 0 if ent is NULL.
@@ -6586,6 +7642,12 @@ textentry *
 gtk_xtext_entry_get_next (textentry *ent)
 {
 	return ent ? ent->next : NULL;
+}
+
+textentry *
+gtk_xtext_entry_get_prev (textentry *ent)
+{
+	return ent ? ent->prev : NULL;
 }
 
 /* IRCv3 modernization: entry modification (Phase 4) */
@@ -6723,6 +7785,210 @@ gtk_xtext_entry_set_redaction_info (xtext_buffer *buf, textentry *ent,
 	ent->redaction->redaction_time = redact_time;
 }
 
+/* Lookup the textentry at a given y pixel coordinate.
+ * Used by context menus to identify which message was clicked.
+ */
+textentry *
+gtk_xtext_get_entry_at_y (GtkXText *xtext, int y)
+{
+	return gtk_xtext_find_char (xtext, 0, y, NULL, NULL);
+}
+
+/* IRCv3 reactions: add a reaction from nick to this entry.
+ * If the same nick already reacted with the same text, this is a no-op.
+ * Triggers redraw if the reaction state changed.
+ */
+void
+gtk_xtext_entry_add_reaction (xtext_buffer *buf, textentry *ent,
+                              const char *reaction_text, const char *nick,
+                              gboolean is_self)
+{
+	xtext_reactions_info *ri;
+	xtext_reaction *reaction = NULL;
+	guint i;
+
+	if (!ent || !reaction_text || !nick)
+		return;
+
+	/* Lazy-allocate reactions info */
+	if (!ent->reactions)
+	{
+		ri = g_new0 (xtext_reactions_info, 1);
+		ri->reactions = g_ptr_array_new ();
+		ri->total_count = 0;
+		ent->reactions = ri;
+	}
+	ri = ent->reactions;
+
+	/* Find existing reaction with same text */
+	for (i = 0; i < ri->reactions->len; i++)
+	{
+		xtext_reaction *r = g_ptr_array_index (ri->reactions, i);
+		if (!strcmp (r->text, reaction_text))
+		{
+			reaction = r;
+			break;
+		}
+	}
+
+	/* Create new reaction entry if not found */
+	if (!reaction)
+	{
+		reaction = g_new0 (xtext_reaction, 1);
+		reaction->text = g_strdup (reaction_text);
+		reaction->nicks = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+		reaction->count = 0;
+		g_ptr_array_add (ri->reactions, reaction);
+	}
+
+	/* Add nick if not already present */
+	if (!g_hash_table_contains (reaction->nicks, nick))
+	{
+		g_hash_table_insert (reaction->nicks, g_strdup (nick),
+		                     GINT_TO_POINTER (is_self ? 1 : 0));
+		reaction->count++;
+		ri->total_count++;
+
+		/* Update extra line count and trigger redraw */
+		if (ent->extra_lines_below == 0)
+		{
+			ent->extra_lines_below = 1;
+			if (buf)
+				buf->needs_recalc = TRUE;
+		}
+		if (buf && buf->xtext)
+			gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
+	}
+}
+
+/* IRCv3 reactions: remove a reaction from nick on this entry.
+ * If the reaction text or nick is not found, this is a no-op.
+ */
+void
+gtk_xtext_entry_remove_reaction (xtext_buffer *buf, textentry *ent,
+                                 const char *reaction_text, const char *nick)
+{
+	xtext_reactions_info *ri;
+	guint i;
+
+	if (!ent || !ent->reactions || !reaction_text || !nick)
+		return;
+
+	ri = ent->reactions;
+
+	for (i = 0; i < ri->reactions->len; i++)
+	{
+		xtext_reaction *r = g_ptr_array_index (ri->reactions, i);
+		if (!strcmp (r->text, reaction_text))
+		{
+			if (g_hash_table_remove (r->nicks, nick))
+			{
+				r->count--;
+				ri->total_count--;
+
+				/* Remove empty reaction entry */
+				if (r->count <= 0)
+				{
+					g_free (r->text);
+					g_hash_table_destroy (r->nicks);
+					g_free (r);
+					g_ptr_array_remove_index (ri->reactions, i);
+				}
+
+				/* Clear extra line if no reactions remain */
+				if (ri->total_count <= 0)
+				{
+					ent->extra_lines_below = 0;
+					if (buf)
+						buf->needs_recalc = TRUE;
+				}
+
+				if (buf && buf->xtext)
+					gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
+			}
+			return;
+		}
+	}
+}
+
+/* IRCv3 reply context: set reply metadata on an entry.
+ * Called when an incoming PRIVMSG/NOTICE has a +draft/reply tag.
+ */
+void
+gtk_xtext_entry_set_reply (xtext_buffer *buf, textentry *ent,
+                           const char *target_msgid, const char *target_nick,
+                           const char *target_preview, guint64 target_entry_id)
+{
+	if (!ent || !target_msgid)
+		return;
+
+	/* Don't overwrite existing reply info */
+	if (ent->reply)
+		return;
+
+	ent->reply = g_new0 (xtext_reply_info, 1);
+	ent->reply->target_msgid = g_strdup (target_msgid);
+	ent->reply->target_entry_id = target_entry_id;
+	ent->reply->target_nick = target_nick ? g_strdup (target_nick) : NULL;
+	ent->reply->target_preview = target_preview ? g_strdup (target_preview) : NULL;
+
+	ent->extra_lines_above = 1;
+
+	if (buf)
+	{
+		buf->num_lines++;
+		gtk_xtext_adjustment_set (buf, TRUE);
+		if (buf->scrollbar_down && buf->xtext)
+			gtk_adjustment_set_value (buf->xtext->adj,
+				gtk_adjustment_get_upper (buf->xtext->adj) -
+				gtk_adjustment_get_page_size (buf->xtext->adj));
+	}
+	if (buf && buf->xtext)
+		gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
+}
+
+/* IRCv3 reply context: read-only accessors */
+const struct xtext_reply_info *
+gtk_xtext_entry_get_reply (textentry *ent)
+{
+	return ent ? ent->reply : NULL;
+}
+
+const struct xtext_reactions_info *
+gtk_xtext_entry_get_reactions (textentry *ent)
+{
+	return ent ? ent->reactions : NULL;
+}
+
+/* Check whether any reaction on this entry belongs to the given nick */
+gboolean
+gtk_xtext_entry_has_self_reaction (textentry *ent, const char *reaction_text)
+{
+	xtext_reaction *r;
+	guint i;
+
+	if (!ent || !ent->reactions || !reaction_text)
+		return FALSE;
+
+	for (i = 0; i < ent->reactions->reactions->len; i++)
+	{
+		r = g_ptr_array_index (ent->reactions->reactions, i);
+		if (!strcmp (r->text, reaction_text))
+		{
+			GHashTableIter iter;
+			gpointer key, value;
+			g_hash_table_iter_init (&iter, r->nicks);
+			while (g_hash_table_iter_next (&iter, &key, &value))
+			{
+				if (GPOINTER_TO_INT (value))
+					return TRUE;
+			}
+			return FALSE;
+		}
+	}
+	return FALSE;
+}
+
 /* IRCv3 modernization: scroll anchor system (Phase 2)
  * These functions allow saving and restoring scroll position across buffer
  * modifications (prepend, insert, delete). Uses entry_id for stability.
@@ -6756,6 +8022,7 @@ gtk_xtext_entry_get_line (xtext_buffer *buf, textentry *target_ent)
 			lines += g_slist_length (ent->sublines);
 		else
 			lines += 1;  /* Entry not yet rendered, assume 1 line */
+		lines += ent->extra_lines_above + ent->extra_lines_below;
 
 		ent = ent->next;
 	}

@@ -46,6 +46,14 @@ struct scrollback_db {
 	sqlite3_stmt *stmt_newest_time;
 	sqlite3_stmt *stmt_has_msgid;
 	sqlite3_stmt *stmt_clear;
+
+	/* IRCv3 reactions and replies */
+	sqlite3_stmt *stmt_save_reaction;
+	sqlite3_stmt *stmt_remove_reaction;
+	sqlite3_stmt *stmt_load_reactions;
+	sqlite3_stmt *stmt_save_reply;
+	sqlite3_stmt *stmt_load_reply;
+	sqlite3_stmt *stmt_update_pending;
 };
 
 /* Hash table of open databases: network -> scrollback_db */
@@ -114,7 +122,26 @@ init_database (scrollback_db *sdb)
 		"    text TEXT NOT NULL"
 		");"
 		"CREATE INDEX IF NOT EXISTS idx_channel_time ON messages(channel, timestamp);"
-		"CREATE UNIQUE INDEX IF NOT EXISTS idx_msgid ON messages(msgid) WHERE msgid IS NOT NULL;";
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_msgid ON messages(msgid) WHERE msgid IS NOT NULL;"
+		/* IRCv3 reactions: persisted per (target_msgid, reaction_text, nick) */
+		"CREATE TABLE IF NOT EXISTS reactions ("
+		"    id INTEGER PRIMARY KEY,"
+		"    channel TEXT NOT NULL,"
+		"    target_msgid TEXT NOT NULL,"
+		"    reaction_text TEXT NOT NULL,"
+		"    nick TEXT NOT NULL,"
+		"    is_self INTEGER NOT NULL DEFAULT 0,"
+		"    timestamp INTEGER NOT NULL,"
+		"    UNIQUE(target_msgid, reaction_text, nick)"
+		");"
+		"CREATE INDEX IF NOT EXISTS idx_reactions_target ON reactions(channel, target_msgid);"
+		/* IRCv3 replies: persisted as (msgid → target_msgid) mapping */
+		"CREATE TABLE IF NOT EXISTS replies ("
+		"    msgid TEXT PRIMARY KEY,"
+		"    target_msgid TEXT NOT NULL,"
+		"    target_nick TEXT,"
+		"    target_preview TEXT"
+		");";
 
 	char *errmsg = NULL;
 	int rc = sqlite3_exec (sdb->db, schema, NULL, NULL, &errmsg);
@@ -159,14 +186,14 @@ prepare_statements (scrollback_db *sdb)
 	/* Get newest msgid */
 	rc = sqlite3_prepare_v2 (sdb->db,
 		"SELECT msgid FROM messages WHERE channel = ? AND msgid IS NOT NULL "
-		"ORDER BY timestamp DESC LIMIT 1",
+		"AND msgid NOT LIKE 'pending:%' ORDER BY timestamp DESC LIMIT 1",
 		-1, &sdb->stmt_newest_msgid, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
 	/* Get oldest msgid */
 	rc = sqlite3_prepare_v2 (sdb->db,
 		"SELECT msgid FROM messages WHERE channel = ? AND msgid IS NOT NULL "
-		"ORDER BY timestamp ASC LIMIT 1",
+		"AND msgid NOT LIKE 'pending:%' ORDER BY timestamp ASC LIMIT 1",
 		-1, &sdb->stmt_oldest_msgid, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
@@ -188,6 +215,47 @@ prepare_statements (scrollback_db *sdb)
 		-1, &sdb->stmt_clear, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
+	/* IRCv3 reactions: save */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"INSERT OR REPLACE INTO reactions (channel, target_msgid, reaction_text, nick, is_self, timestamp) "
+		"VALUES (?, ?, ?, ?, ?, ?)",
+		-1, &sdb->stmt_save_reaction, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* IRCv3 reactions: remove */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"DELETE FROM reactions WHERE target_msgid = ? AND reaction_text = ? AND nick = ?",
+		-1, &sdb->stmt_remove_reaction, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* IRCv3 reactions: load all for a channel */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT target_msgid, reaction_text, nick, is_self FROM reactions "
+		"WHERE channel = ? ORDER BY target_msgid, reaction_text",
+		-1, &sdb->stmt_load_reactions, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* IRCv3 replies: save */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"INSERT OR REPLACE INTO replies (msgid, target_msgid, target_nick, target_preview) "
+		"VALUES (?, ?, ?, ?)",
+		-1, &sdb->stmt_save_reply, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* IRCv3 replies: load all for msgs in a channel */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT r.msgid, r.target_msgid, r.target_nick, r.target_preview "
+		"FROM replies r INNER JOIN messages m ON r.msgid = m.msgid "
+		"WHERE m.channel = ?",
+		-1, &sdb->stmt_load_reply, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Echo-message: update pending placeholder msgid to real msgid */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"UPDATE messages SET msgid = ?1 WHERE channel = ?2 AND msgid = ?3",
+		-1, &sdb->stmt_update_pending, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
 	return TRUE;
 
 fail:
@@ -205,6 +273,12 @@ finalize_statements (scrollback_db *sdb)
 	if (sdb->stmt_newest_time) sqlite3_finalize (sdb->stmt_newest_time);
 	if (sdb->stmt_has_msgid) sqlite3_finalize (sdb->stmt_has_msgid);
 	if (sdb->stmt_clear) sqlite3_finalize (sdb->stmt_clear);
+	if (sdb->stmt_save_reaction) sqlite3_finalize (sdb->stmt_save_reaction);
+	if (sdb->stmt_remove_reaction) sqlite3_finalize (sdb->stmt_remove_reaction);
+	if (sdb->stmt_load_reactions) sqlite3_finalize (sdb->stmt_load_reactions);
+	if (sdb->stmt_save_reply) sqlite3_finalize (sdb->stmt_save_reply);
+	if (sdb->stmt_load_reply) sqlite3_finalize (sdb->stmt_load_reply);
+	if (sdb->stmt_update_pending) sqlite3_finalize (sdb->stmt_update_pending);
 }
 
 scrollback_db *
@@ -329,6 +403,24 @@ scrollback_db_load (scrollback_db *db, const char *channel, int limit)
 	if (limit <= 0)
 		limit = 500; /* Default */
 
+	/* Purge unconfirmed echo-message entries from a previous session.
+	 * These have "pending:<label>" placeholder msgids that were never
+	 * updated to real msgids (e.g., quit before echo arrived).
+	 * Chathistory will replay them with the correct msgid. */
+	{
+		char *errmsg = NULL;
+		char *sql = sqlite3_mprintf (
+			"DELETE FROM messages WHERE channel = %Q AND msgid LIKE 'pending:%%'",
+			channel);
+		sqlite3_exec (db->db, sql, NULL, NULL, &errmsg);
+		if (errmsg)
+		{
+			g_warning ("Failed to purge pending entries: %s", errmsg);
+			sqlite3_free (errmsg);
+		}
+		sqlite3_free (sql);
+	}
+
 	sqlite3_reset (db->stmt_load);
 	sqlite3_bind_text (db->stmt_load, 1, channel, -1, SQLITE_TRANSIENT);
 	sqlite3_bind_int (db->stmt_load, 2, limit);
@@ -434,6 +526,24 @@ scrollback_has_msgid (scrollback_db *db, const char *msgid)
 
 	rc = sqlite3_step (db->stmt_has_msgid);
 	return (rc == SQLITE_ROW);
+}
+
+gboolean
+scrollback_update_pending_msgid (scrollback_db *db, const char *channel,
+                                  const char *pending_msgid, const char *real_msgid)
+{
+	int rc;
+
+	if (!db || !db->stmt_update_pending || !channel || !pending_msgid || !real_msgid)
+		return FALSE;
+
+	sqlite3_reset (db->stmt_update_pending);
+	sqlite3_bind_text (db->stmt_update_pending, 1, real_msgid, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_update_pending, 2, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_update_pending, 3, pending_msgid, -1, SQLITE_TRANSIENT);
+
+	rc = sqlite3_step (db->stmt_update_pending);
+	return (rc == SQLITE_DONE && sqlite3_changes (db->db) > 0);
 }
 
 void
@@ -617,4 +727,166 @@ scrollback_shutdown (void)
 		g_hash_table_destroy (open_dbs);
 		open_dbs = NULL;
 	}
+}
+
+/* IRCv3 reactions: save a reaction to scrollback */
+gboolean
+scrollback_save_reaction (scrollback_db *db, const char *channel,
+                          const char *target_msgid, const char *reaction_text,
+                          const char *nick, gboolean is_self, time_t timestamp)
+{
+	int rc;
+
+	if (!db || !db->stmt_save_reaction || !channel || !target_msgid ||
+	    !reaction_text || !nick)
+		return FALSE;
+
+	sqlite3_reset (db->stmt_save_reaction);
+	sqlite3_bind_text (db->stmt_save_reaction, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_save_reaction, 2, target_msgid, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_save_reaction, 3, reaction_text, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_save_reaction, 4, nick, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int (db->stmt_save_reaction, 5, is_self ? 1 : 0);
+	sqlite3_bind_int64 (db->stmt_save_reaction, 6, (sqlite3_int64)timestamp);
+
+	rc = sqlite3_step (db->stmt_save_reaction);
+	return rc == SQLITE_DONE;
+}
+
+/* IRCv3 reactions: remove a reaction from scrollback */
+gboolean
+scrollback_remove_reaction (scrollback_db *db, const char *target_msgid,
+                            const char *reaction_text, const char *nick)
+{
+	int rc;
+
+	if (!db || !db->stmt_remove_reaction || !target_msgid ||
+	    !reaction_text || !nick)
+		return FALSE;
+
+	sqlite3_reset (db->stmt_remove_reaction);
+	sqlite3_bind_text (db->stmt_remove_reaction, 1, target_msgid, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_remove_reaction, 2, reaction_text, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_remove_reaction, 3, nick, -1, SQLITE_TRANSIENT);
+
+	rc = sqlite3_step (db->stmt_remove_reaction);
+	return rc == SQLITE_DONE;
+}
+
+/* IRCv3 reactions: load all reactions for a channel.
+ * Returns a GSList of scrollback_reaction* (caller frees with scrollback_reaction_list_free).
+ */
+GSList *
+scrollback_load_reactions (scrollback_db *db, const char *channel)
+{
+	GSList *list = NULL;
+	int rc;
+
+	if (!db || !db->stmt_load_reactions || !channel)
+		return NULL;
+
+	sqlite3_reset (db->stmt_load_reactions);
+	sqlite3_bind_text (db->stmt_load_reactions, 1, channel, -1, SQLITE_TRANSIENT);
+
+	while ((rc = sqlite3_step (db->stmt_load_reactions)) == SQLITE_ROW)
+	{
+		scrollback_reaction *r = g_new0 (scrollback_reaction, 1);
+		r->target_msgid = g_strdup ((const char *)sqlite3_column_text (db->stmt_load_reactions, 0));
+		r->reaction_text = g_strdup ((const char *)sqlite3_column_text (db->stmt_load_reactions, 1));
+		r->nick = g_strdup ((const char *)sqlite3_column_text (db->stmt_load_reactions, 2));
+		r->is_self = sqlite3_column_int (db->stmt_load_reactions, 3) != 0;
+		list = g_slist_prepend (list, r);
+	}
+
+	return g_slist_reverse (list);
+}
+
+void
+scrollback_reaction_free (scrollback_reaction *r)
+{
+	if (!r)
+		return;
+	g_free (r->target_msgid);
+	g_free (r->reaction_text);
+	g_free (r->nick);
+	g_free (r);
+}
+
+void
+scrollback_reaction_list_free (GSList *list)
+{
+	g_slist_free_full (list, (GDestroyNotify)scrollback_reaction_free);
+}
+
+/* IRCv3 replies: save reply context to scrollback */
+gboolean
+scrollback_save_reply (scrollback_db *db, const char *msgid,
+                       const char *target_msgid, const char *target_nick,
+                       const char *target_preview)
+{
+	int rc;
+
+	if (!db || !db->stmt_save_reply || !msgid || !target_msgid)
+		return FALSE;
+
+	sqlite3_reset (db->stmt_save_reply);
+	sqlite3_bind_text (db->stmt_save_reply, 1, msgid, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_save_reply, 2, target_msgid, -1, SQLITE_TRANSIENT);
+	if (target_nick)
+		sqlite3_bind_text (db->stmt_save_reply, 3, target_nick, -1, SQLITE_TRANSIENT);
+	else
+		sqlite3_bind_null (db->stmt_save_reply, 3);
+	if (target_preview)
+		sqlite3_bind_text (db->stmt_save_reply, 4, target_preview, -1, SQLITE_TRANSIENT);
+	else
+		sqlite3_bind_null (db->stmt_save_reply, 4);
+
+	rc = sqlite3_step (db->stmt_save_reply);
+	return rc == SQLITE_DONE;
+}
+
+/* IRCv3 replies: load all reply contexts for messages in a channel.
+ * Returns a GSList of scrollback_reply* (caller frees with scrollback_reply_list_free).
+ */
+GSList *
+scrollback_load_replies (scrollback_db *db, const char *channel)
+{
+	GSList *list = NULL;
+	int rc;
+
+	if (!db || !db->stmt_load_reply || !channel)
+		return NULL;
+
+	sqlite3_reset (db->stmt_load_reply);
+	sqlite3_bind_text (db->stmt_load_reply, 1, channel, -1, SQLITE_TRANSIENT);
+
+	while ((rc = sqlite3_step (db->stmt_load_reply)) == SQLITE_ROW)
+	{
+		scrollback_reply *r = g_new0 (scrollback_reply, 1);
+		r->msgid = g_strdup ((const char *)sqlite3_column_text (db->stmt_load_reply, 0));
+		r->target_msgid = g_strdup ((const char *)sqlite3_column_text (db->stmt_load_reply, 1));
+		r->target_nick = g_strdup ((const char *)sqlite3_column_text (db->stmt_load_reply, 2));
+		r->target_preview = g_strdup ((const char *)sqlite3_column_text (db->stmt_load_reply, 3));
+		list = g_slist_prepend (list, r);
+	}
+
+	return g_slist_reverse (list);
+}
+
+void
+scrollback_reply_free (scrollback_reply *r)
+{
+	if (!r)
+		return;
+	g_free (r->msgid);
+	g_free (r->target_msgid);
+	g_free (r->target_nick);
+	g_free (r->target_preview);
+	g_free (r);
+}
+
+void
+scrollback_reply_list_free (GSList *list)
+{
+	g_slist_free_full (list, (GDestroyNotify)scrollback_reply_free);
 }

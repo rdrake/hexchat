@@ -529,7 +529,9 @@ const struct prefs vars[] =
 	{"irc_part_reason", P_OFFSET (hex_irc_part_reason), TYPE_STR},
 	{"irc_quit_reason", P_OFFSET (hex_irc_quit_reason), TYPE_STR},
 	{"irc_raw_modes", P_OFFINT (hex_irc_raw_modes), TYPE_BOOL},
+	{"irc_react_show", P_OFFINT (hex_irc_react_show), TYPE_BOOL},
 	{"irc_real_name", P_OFFSET (hex_irc_real_name), TYPE_STR},
+	{"irc_reply_show", P_OFFINT (hex_irc_reply_show), TYPE_BOOL},
 	{"irc_servernotice", P_OFFINT (hex_irc_servernotice), TYPE_BOOL},
 	{"irc_skip_motd", P_OFFINT (hex_irc_skip_motd), TYPE_BOOL},
 	{"irc_typing_self", P_OFFINT (hex_irc_typing_self), TYPE_BOOL},
@@ -804,6 +806,8 @@ load_default_config(void)
 	prefs.hex_irc_chathistory_background_delay = 10; /* seconds between background fetches */
 	prefs.hex_irc_chathistory_background_max_age = 24; /* max hours to fetch in background (0 = unlimited) */
 	prefs.hex_irc_logging = 1;
+	prefs.hex_irc_react_show = 1;
+	prefs.hex_irc_reply_show = 1;
 	prefs.hex_irc_typing_self = 1;
 	prefs.hex_irc_typing_send = 1;
 	prefs.hex_irc_typing_show = 1;

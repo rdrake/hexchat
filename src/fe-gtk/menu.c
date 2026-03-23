@@ -46,7 +46,9 @@
 #include "../common/notify.h"
 #include "../common/util.h"
 #include "../common/text.h"
+#include "../common/proto-irc.h"
 #include "xtext.h"
+#include "hex-emoji-chooser.h"
 #include "ascii.h"
 #include "banlist.h"
 #include "chanlist.h"
@@ -1269,6 +1271,8 @@ menu_fullscreen_toggle (GtkWidget *wid, gpointer ud)
 
 /* Action callbacks for middle-click menu */
 static session *middle_menu_sess = NULL;
+static char *middle_menu_clicked_msgid = NULL;  /* msgid of right-clicked message */
+static char *middle_menu_clicked_nick = NULL;   /* nick of right-clicked message */
 
 static void
 middle_action_clear_text (GSimpleAction *action, GVariant *parameter, gpointer user_data)
@@ -1414,6 +1418,141 @@ middle_action_close (GSimpleAction *action, GVariant *parameter, gpointer user_d
 		fe_close_window (middle_menu_sess);
 }
 
+/* IRCv3 Reply action: set reply state on session */
+static void
+middle_action_reply (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+	session *sess = middle_menu_sess;
+	(void)action; (void)parameter; (void)user_data;
+
+	if (!sess || !middle_menu_clicked_msgid)
+		return;
+
+	/* Find the entry to get the nick */
+	if (sess->gui && sess->gui->xtext)
+	{
+		GtkXText *xtext = GTK_XTEXT (sess->gui->xtext);
+		textentry *ent = gtk_xtext_find_by_msgid (xtext->buffer, middle_menu_clicked_msgid);
+		if (ent)
+		{
+			const unsigned char *str = gtk_xtext_entry_get_str (ent);
+			int left_len = gtk_xtext_entry_get_left_len (ent);
+			char nick_buf[64];
+			int i, j = 0;
+
+			/* Extract nick from left portion, stripping format codes */
+			for (i = 0; i < left_len && j < 62 && str && str[i]; i++)
+			{
+				unsigned char c = str[i];
+				if (c == '\002' || c == '\017' || c == '\026' || c == '\035' || c == '\037')
+					continue;
+				if (c == '\003')
+				{
+					i++;
+					while (i < left_len && str[i] >= '0' && str[i] <= '9') i++;
+					if (i < left_len && str[i] == ',')
+					{
+						i++;
+						while (i < left_len && str[i] >= '0' && str[i] <= '9') i++;
+					}
+					i--;
+					continue;
+				}
+				nick_buf[j++] = c;
+			}
+			nick_buf[j] = '\0';
+
+			/* Clear react state — reply and react are mutually exclusive */
+			g_clear_pointer (&sess->react_target_msgid, g_free);
+			g_clear_pointer (&sess->react_target_nick, g_free);
+
+			g_free (sess->reply_msgid);
+			sess->reply_msgid = g_strdup (middle_menu_clicked_msgid);
+			g_free (sess->reply_nick);
+			sess->reply_nick = g_strdup (nick_buf);
+			fe_reply_state_changed (sess);
+		}
+	}
+}
+
+/* IRCv3 React: emoji picker callback when emoji is chosen */
+static void
+react_emoji_picked_cb (GtkWidget *chooser, const char *emoji, gpointer user_data)
+{
+	session *sess = middle_menu_sess;
+	(void)user_data;
+
+	gtk_popover_popdown (GTK_POPOVER (chooser));
+
+	if (!sess || !sess->react_target_msgid || !sess->server || !sess->server->connected)
+		goto cleanup;
+
+	if (sess->server->have_message_tags)
+	{
+		char *escaped = escape_tag_value (emoji);
+		char *tags = g_strdup_printf ("+draft/react=%s;+draft/reply=%s", escaped, sess->react_target_msgid);
+		tcp_sendf_with_raw_tags (sess->server, "TAGMSG", sess->channel, tags,
+		                         "TAGMSG %s\r\n", sess->channel);
+		g_free (tags);
+		g_free (escaped);
+	}
+
+cleanup:
+	g_clear_pointer (&sess->react_target_msgid, g_free);
+}
+
+/* IRCv3 React action: open emoji picker */
+static void
+middle_action_react (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+	session *sess = middle_menu_sess;
+	GtkWidget *chooser;
+	GtkXText *xtext;
+	(void)action; (void)parameter; (void)user_data;
+
+	if (!sess || !sess->gui || !sess->gui->xtext || !middle_menu_clicked_msgid)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+
+	g_free (sess->react_target_msgid);
+	sess->react_target_msgid = g_strdup (middle_menu_clicked_msgid);
+
+	chooser = hex_emoji_chooser_new ();
+	if (xtext->emoji_cache)
+		hex_emoji_chooser_set_emoji_cache (HEX_EMOJI_CHOOSER (chooser), xtext->emoji_cache);
+	gtk_widget_set_parent (chooser, GTK_WIDGET (xtext));
+	gtk_popover_set_pointing_to (GTK_POPOVER (chooser),
+	                             &(GdkRectangle){ xtext->last_click_x, xtext->last_click_y, 1, 1 });
+	g_signal_connect (chooser, "emoji-picked", G_CALLBACK (react_emoji_picked_cb), NULL);
+	gtk_popover_popup (GTK_POPOVER (chooser));
+}
+
+/* IRCv3 React with text: enter react-text compose mode */
+static void
+middle_action_react_text (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+	session *sess = middle_menu_sess;
+	(void)action; (void)parameter; (void)user_data;
+
+	if (!sess || !sess->gui || !sess->gui->xtext || !middle_menu_clicked_msgid)
+		return;
+
+	/* Clear any existing reply state — react and reply are mutually exclusive */
+	g_clear_pointer (&sess->reply_msgid, g_free);
+	g_clear_pointer (&sess->reply_nick, g_free);
+
+	g_free (sess->react_target_msgid);
+	sess->react_target_msgid = g_strdup (middle_menu_clicked_msgid);
+	g_free (sess->react_target_nick);
+	sess->react_target_nick = g_strdup (middle_menu_clicked_nick);
+
+	fe_reply_state_changed (sess);
+
+	if (sess->gui->input_box)
+		gtk_widget_grab_focus (sess->gui->input_box);
+}
+
 void
 menu_middlemenu (session *sess, GtkWidget *parent, double x, double y)
 {
@@ -1483,6 +1622,9 @@ menu_middlemenu (session *sess, GtkWidget *parent, double x, double y)
 		{ "settings", middle_action_settings, NULL, NULL, NULL },
 		{ "detach", middle_action_detach, NULL, NULL, NULL },
 		{ "close", middle_action_close, NULL, NULL, NULL },
+		{ "reply-to-message", middle_action_reply, NULL, NULL, NULL },
+		{ "react-to-message", middle_action_react, NULL, NULL, NULL },
+		{ "react-text-to-message", middle_action_react_text, NULL, NULL, NULL },
 	};
 	g_action_map_add_action_entries (G_ACTION_MAP (action_group), middle_actions,
 									 G_N_ELEMENTS (middle_actions), NULL);
@@ -1533,6 +1675,47 @@ menu_middlemenu (session *sess, GtkWidget *parent, double x, double y)
 	g_menu_append (section, _("Close"), "middle.close");
 	g_menu_append_section (gmenu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
+
+	/* IRCv3 Reply/React section — only when server supports message-tags
+	 * and the clicked message has a msgid */
+	g_free (middle_menu_clicked_msgid);
+	middle_menu_clicked_msgid = NULL;
+	g_free (middle_menu_clicked_nick);
+	middle_menu_clicked_nick = NULL;
+
+	if (sess->server && sess->server->have_message_tags)
+	{
+		textentry *clicked_ent = gtk_xtext_get_entry_at_y (xtext, xtext->last_click_y);
+		const char *msgid = clicked_ent ? gtk_xtext_get_msgid (clicked_ent) : NULL;
+		if (msgid)
+		{
+			/* Extract nick from the left portion of the entry */
+			const unsigned char *estr = gtk_xtext_entry_get_str (clicked_ent);
+			int left_len = gtk_xtext_entry_get_left_len (clicked_ent);
+			char *nick_raw = g_strndup ((const char *)estr, left_len);
+			char *nick = strip_color (nick_raw, -1, STRIP_ALL);
+			g_free (nick_raw);
+			g_strstrip (nick);
+			{
+				int nlen = strlen (nick);
+				if (nlen > 2 && nick[0] == '<' && nick[nlen - 1] == '>')
+				{
+					memmove (nick, nick + 1, nlen - 2);
+					nick[nlen - 2] = '\0';
+				}
+			}
+
+			middle_menu_clicked_msgid = g_strdup (msgid);
+			middle_menu_clicked_nick = nick;  /* takes ownership */
+
+			section = g_menu_new ();
+			g_menu_append (section, _("Reply" ELLIPSIS), "middle.reply-to-message");
+			g_menu_append (section, _("React with Emoji" ELLIPSIS), "middle.react-to-message");
+			g_menu_append (section, _("React with Text" ELLIPSIS), "middle.react-text-to-message");
+			g_menu_append_section (gmenu, NULL, G_MENU_MODEL (section));
+			g_object_unref (section);
+		}
+	}
 
 	/* Create and configure the popover */
 	popover = gtk_popover_menu_new_from_model (G_MENU_MODEL (gmenu));

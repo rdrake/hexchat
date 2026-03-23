@@ -46,6 +46,7 @@
 #include "hexchatc.h"
 #include "chanopt.h"
 #include "chathistory.h"
+#include "scrollback.h"
 #include "network-icon.h"
 #ifdef USE_LIBWEBSOCKETS
 #include "oauth.h"
@@ -414,12 +415,15 @@ inbound_action (session *sess, char *chan, char *from, char *ip, char *text,
 
 	inbound_make_idtext (serv, idtext, sizeof (idtext), id);
 
-	/* Set current msgid for scrollback_save to capture */
-	sess->current_msgid = tags_data->msgid;
-
-	/* Track msgid for deduplication */
+	/* Set current msgid for scrollback_save to capture.
+	 * Only overwrite if tags_data provides a real msgid — outbound Tier 2 code
+	 * may have already set a "pending:<label>" placeholder that we must preserve. */
 	if (tags_data->msgid)
+	{
+		g_free (sess->current_msgid);
+		sess->current_msgid = g_strdup (tags_data->msgid);
 		chathistory_track_msgid_ts (sess, tags_data->msgid, tags_data->timestamp, FALSE);
+	}
 
 	if (!fromme && !privaction)
 	{
@@ -427,7 +431,7 @@ inbound_action (session *sess, char *chan, char *from, char *ip, char *text,
 		{
 			EMIT_SIGNAL_TIMESTAMP (XP_TE_HCHANACTION, sess, from, text, nickchar,
 										  idtext, 0, tags_data->timestamp);
-			return;
+			goto check_action_reply;
 		}
 	}
 
@@ -443,6 +447,16 @@ inbound_action (session *sess, char *chan, char *from, char *ip, char *text,
 	else
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_PRIVACTION, sess, from, text, idtext, NULL, 0,
 									  tags_data->timestamp);
+
+check_action_reply:
+	/* IRCv3 +draft/reply on ACTIONs */
+	if (prefs.hex_irc_reply_show && tags_data->all_tags)
+	{
+		const char *reply_msgid = g_hash_table_lookup (tags_data->all_tags,
+		                                                "+draft/reply");
+		if (reply_msgid)
+			fe_reply_context_set (sess, reply_msgid);
+	}
 }
 
 void
@@ -470,8 +484,14 @@ inbound_chanmsg (server *serv, session *sess, char *chan, char *from,
 			return;
 	}
 
-	/* Set current msgid for scrollback_save to capture */
-	sess->current_msgid = tags_data->msgid;
+	/* Set current msgid for scrollback_save to capture.
+	 * Only overwrite if tags_data provides a real msgid — outbound Tier 2 code
+	 * may have already set a "pending:<label>" placeholder that we must preserve. */
+	if (tags_data->msgid)
+	{
+		g_free (sess->current_msgid);
+		sess->current_msgid = g_strdup (tags_data->msgid);
+	}
 
 	/* Track msgid for deduplication - live messages use is_history=FALSE.
 	 * If this was already tracked from chathistory, it's safely skipped. */
@@ -501,7 +521,7 @@ inbound_chanmsg (server *serv, session *sess, char *chan, char *from,
 			sess->server->p_set_back (sess->server);
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_UCHANMSG, sess, from, text, nickchar, NULL,
 									  0, tags_data->timestamp);
-		return;
+		goto check_reply;
 	}
 
 	inbound_make_idtext (serv, idtext, sizeof (idtext), id);
@@ -518,6 +538,19 @@ inbound_chanmsg (server *serv, session *sess, char *chan, char *from,
 	else
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANMSG, sess, from, text, nickchar, idtext,
 									  0, tags_data->timestamp);
+
+check_reply:
+	/* IRCv3 +draft/reply: attach reply context to the just-emitted message.
+	 * The entry was just appended to the buffer by EMIT_SIGNAL_TIMESTAMP.
+	 * See https://ircv3.net/specs/client-tags/reply
+	 */
+	if (prefs.hex_irc_reply_show && tags_data->all_tags)
+	{
+		const char *reply_msgid = g_hash_table_lookup (tags_data->all_tags,
+		                                                "+draft/reply");
+		if (reply_msgid)
+			fe_reply_context_set (sess, reply_msgid);
+	}
 }
 
 void
@@ -1118,12 +1151,15 @@ inbound_notice (server *serv, char *to, char *nick, char *msg, char *ip, int id,
 			msg[len - 1] = '\000';
 	}
 
-	/* Set current msgid for scrollback_save to capture */
-	sess->current_msgid = tags_data->msgid;
-
-	/* Track msgid for deduplication */
+	/* Set current msgid for scrollback_save to capture.
+	 * Only overwrite if tags_data provides a real msgid — outbound Tier 2 code
+	 * may have already set a "pending:<label>" placeholder that we must preserve. */
 	if (tags_data->msgid)
+	{
+		g_free (sess->current_msgid);
+		sess->current_msgid = g_strdup (tags_data->msgid);
 		chathistory_track_msgid_ts (sess, tags_data->msgid, tags_data->timestamp, FALSE);
+	}
 
 	/* Self-echo of our own NOTICE (echo-message / bouncer) */
 	if (serv->have_echo_message && !serv->p_cmp (nick, serv->nick))
@@ -2001,6 +2037,9 @@ process_multiline_batch (server *serv, batch_info *batch)
 				tags_data.all_tags = first_msg->tags;
 		}
 
+		/* Group all entries from this multiline batch for unified hover highlight */
+		fe_begin_multiline_group (sess);
+
 		/* Check if it's a channel or private message */
 		if (sess->type == SESS_CHANNEL)
 		{
@@ -2012,6 +2051,8 @@ process_multiline_batch (server *serv, batch_info *batch)
 			inbound_privmsg (serv, nick, host ? host : "", combined_text->str,
 			                 0, &tags_data);
 		}
+
+		fe_end_multiline_group (sess);
 	}
 
 	g_string_free (combined_text, TRUE);
@@ -2173,7 +2214,7 @@ inbound_batch_end (server *serv, const char *batch_id,
 		pending_label_info *info = g_hash_table_lookup (serv->pending_labels,
 		                                                batch->label);
 		if (info && info->entry_id && info->sess && is_session (info->sess))
-			fe_confirm_entry (info->sess, info->entry_id);
+			fe_confirm_entry (info->sess, info->entry_id, NULL);
 
 		g_hash_table_remove (serv->pending_labels, batch->label);
 	}
@@ -2396,15 +2437,15 @@ inbound_tagmsg (server *serv, char *to, char *nick, char *ip,
 {
 	session *sess;
 	const char *typing_value;
+	const char *react_value;
+	const char *unreact_value;
+	const char *reply_msgid;
+	gboolean is_self;
 
 	if (!serv->have_message_tags)
 		return;
 
-	/* Self-echo: with echo-message or a bouncer, the server echoes our own
-	 * TAGMSGs back.  This can indicate activity on another connected client.
-	 * Controlled by hex_irc_typing_self (default: ON). */
-	if (!serv->p_cmp (nick, serv->nick) && !prefs.hex_irc_typing_self)
-		return;
+	is_self = !serv->p_cmp (nick, serv->nick);
 
 	/* Find the appropriate session — don't fall back to server console */
 	if (is_channel (serv, to))
@@ -2420,33 +2461,56 @@ inbound_tagmsg (server *serv, char *to, char *nick, char *ip,
 			return;
 	}
 
+	if (!tags_data->all_tags)
+		return;
+
 	/* Handle +typing tag for typing indicators
 	 * Values: "active" (typing), "paused" (stopped briefly), "done" (finished/sent)
+	 *
+	 * Self-echo: with echo-message or a bouncer, the server echoes our own
+	 * TAGMSGs back.  This can indicate activity on another connected client.
+	 * Controlled by hex_irc_typing_self (default: ON).
+	 * Only suppress self-echo for typing, not for reactions.
 	 */
-	if (tags_data->all_tags)
+	typing_value = g_hash_table_lookup (tags_data->all_tags, "+typing");
+	if (typing_value)
 	{
-		typing_value = g_hash_table_lookup (tags_data->all_tags, "+typing");
-		if (typing_value)
+		if (is_self && !prefs.hex_irc_typing_self)
+			goto skip_typing;
+
+		if (!strcmp (typing_value, "active") || !strcmp (typing_value, "paused"))
 		{
-			if (!strcmp (typing_value, "active") || !strcmp (typing_value, "paused"))
-			{
-				typing_indicator_update (sess, nick);
-			}
-			else if (!strcmp (typing_value, "done"))
-			{
-				typing_indicator_remove (sess, nick);
-			}
+			typing_indicator_update (sess, nick);
 		}
+		else if (!strcmp (typing_value, "done"))
+		{
+			typing_indicator_remove (sess, nick);
+		}
+	}
 
-		/* Handle +react tag for reactions (future)
-		 * Format: +react=<emoji>
-		 */
-		/* TODO: Implement reaction handling */
+skip_typing:
+	/* Handle +draft/react and +draft/unreact tags for reactions
+	 * Reactions are sent as TAGMSG with both +draft/react=<text>
+	 * and +draft/reply=<target_msgid> to identify the target message.
+	 * See https://ircv3.net/specs/client-tags/react
+	 */
+	react_value = g_hash_table_lookup (tags_data->all_tags, "+draft/react");
+	unreact_value = g_hash_table_lookup (tags_data->all_tags, "+draft/unreact");
+	reply_msgid = g_hash_table_lookup (tags_data->all_tags, "+draft/reply");
 
-		/* Handle +reply tag for replies (future)
-		 * Format: +reply=<msgid>
-		 */
-		/* TODO: Implement reply threading */
+	if (react_value && reply_msgid)
+	{
+		if (prefs.hex_irc_react_show)
+			fe_reaction_received (sess, reply_msgid, react_value, nick, is_self);
+		scrollback_save_reaction_for_session (sess, reply_msgid, react_value,
+		                                      nick, is_self);
+	}
+	else if (unreact_value && reply_msgid)
+	{
+		if (prefs.hex_irc_react_show)
+			fe_reaction_removed (sess, reply_msgid, unreact_value, nick);
+		scrollback_remove_reaction_for_session (sess, reply_msgid,
+		                                        unreact_value, nick);
 	}
 }
 

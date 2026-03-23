@@ -93,7 +93,7 @@ static void scroll_to_child (GtkWidget *child);
 static gboolean
 hex_emoji_chooser_child_grab_focus (GtkWidget *widget)
 {
-	gtk_widget_grab_focus (widget);
+	GTK_WIDGET_CLASS (hex_emoji_chooser_child_parent_class)->grab_focus (widget);
 	scroll_to_child (widget);
 	return TRUE;
 }

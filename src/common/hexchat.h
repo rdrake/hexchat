@@ -191,6 +191,8 @@ struct hexchatprefs
 	unsigned int hex_irc_invisible;
 	unsigned int hex_irc_logging;
 	unsigned int hex_irc_raw_modes;
+	unsigned int hex_irc_react_show;
+	unsigned int hex_irc_reply_show;
 	unsigned int hex_irc_servernotice;
 	unsigned int hex_irc_skip_motd;
 	unsigned int hex_irc_typing_self;
@@ -470,7 +472,7 @@ typedef struct session
 	time_t scrollback_newest_time;	/* newest timestamp from loaded scrollback */
 	char *scrollback_oldest_msgid;	/* oldest msgid from loaded scrollback (for BEFORE) */
 	char *scrollback_newest_msgid;	/* newest msgid from loaded scrollback (for AFTER) */
-	const char *current_msgid;	/* temporary: msgid of message being processed (not owned) */
+	char *current_msgid;	/* temporary: msgid of message being processed (owned copy) */
 	GHashTable *known_msgids;	/* hash set of msgids already displayed (for deduplication) */
 
 	/* Typing indicators (IRCv3 +typing) */
@@ -479,6 +481,12 @@ typedef struct session
 	gint64 typing_last_sent;		/* monotonic time of last +typing=active we sent */
 	int typing_send_timer;			/* timer for periodic re-sends (fires every 3s) */
 	gint64 typing_last_keystroke;	/* monotonic time of last keystroke in input box */
+
+	/* IRCv3 reply and react compose state */
+	char *reply_msgid;				/* msgid we're replying to (NULL = not replying) */
+	char *reply_nick;				/* nick of the message we're replying to */
+	char *react_target_msgid;		/* msgid for pending reaction (cleared after send) */
+	char *react_target_nick;		/* nick of the message we're reacting to */
 } session;
 
 /* SASL Mechanisms */

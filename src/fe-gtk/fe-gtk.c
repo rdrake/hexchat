@@ -1072,7 +1072,26 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 	 */
 	if (sess->history_insert_sorted_mode)
 	{
+		textentry *old_last = gtk_xtext_buffer_get_last (sess->res->buffer);
 		PrintTextRawInsertSorted (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
+
+		/* Associate msgid: find the new entry (it may not be at the end) */
+		if (sess->current_msgid)
+		{
+			textentry *ent;
+			/* Walk from the end backwards to find an entry without msgid at this stamp */
+			for (ent = gtk_xtext_buffer_get_last (sess->res->buffer); ent;
+			     ent = gtk_xtext_entry_get_prev (ent))
+			{
+				if (!gtk_xtext_get_msgid (ent))
+				{
+					gtk_xtext_set_msgid (sess->res->buffer, ent, sess->current_msgid);
+					break;
+				}
+				if (ent == old_last)
+					break;
+			}
+		}
 
 		/* Don't update tab colors for historical messages */
 		return;
@@ -1206,6 +1225,60 @@ fe_get_last_entry_id (session *sess)
 	return ent ? gtk_xtext_get_entry_id (ent) : 0;
 }
 
+const char *
+fe_get_last_msgid (session *sess)
+{
+	textentry *ent = gtk_xtext_buffer_get_last (sess->res->buffer);
+	return ent ? gtk_xtext_get_msgid (ent) : NULL;
+}
+
+const char *
+fe_get_last_nonself_msgid (session *sess, char *nick_out, int nick_out_size)
+{
+	textentry *ent;
+	const char *msgid;
+
+	/* Walk backwards from the last entry to find a non-self message with a msgid */
+	for (ent = gtk_xtext_buffer_get_last (sess->res->buffer);
+	     ent != NULL;
+	     ent = gtk_xtext_entry_get_prev (ent))
+	{
+		int left_len;
+
+		msgid = gtk_xtext_get_msgid (ent);
+		if (!msgid)
+			continue;
+
+		left_len = gtk_xtext_entry_get_left_len (ent);
+
+		/* Extract nick from the left portion of str (before the tab separator).
+		 * The nick is embedded in format codes, so strip them. */
+		if (left_len > 0 && sess->server)
+		{
+			const unsigned char *str = gtk_xtext_entry_get_str (ent);
+			char *nick_raw = g_strndup ((const char *)str, left_len);
+			char *nick_clean = strip_color (nick_raw, -1, STRIP_ALL);
+			g_free (nick_raw);
+
+			/* Skip if this is our own message */
+			if (sess->server->p_cmp (nick_clean, sess->server->nick) == 0)
+			{
+				g_free (nick_clean);
+				continue;
+			}
+
+			if (nick_out && nick_out_size > 0)
+				g_strlcpy (nick_out, nick_clean, nick_out_size);
+
+			g_free (nick_clean);
+		}
+
+		return msgid;
+	}
+
+	return NULL;
+}
+
 void
 fe_set_entry_pending (session *sess, guint64 entry_id)
 {
@@ -1215,11 +1288,15 @@ fe_set_entry_pending (session *sess, guint64 entry_id)
 }
 
 void
-fe_confirm_entry (session *sess, guint64 entry_id)
+fe_confirm_entry (session *sess, guint64 entry_id, const char *msgid)
 {
 	textentry *ent = gtk_xtext_find_by_id (sess->res->buffer, entry_id);
 	if (ent && gtk_xtext_entry_get_state (ent) == XTEXT_STATE_PENDING)
+	{
 		gtk_xtext_entry_set_state (sess->res->buffer, ent, XTEXT_STATE_NORMAL);
+		if (msgid)
+			gtk_xtext_set_msgid (sess->res->buffer, ent, msgid);
+	}
 }
 
 void
@@ -1996,3 +2073,257 @@ fe_reset_scroll_top_backoff (session *sess)
 		gtk_xtext_reset_scroll_top_backoff (GTK_XTEXT (sess->gui->xtext));
 	}
 }
+
+void
+fe_reaction_received (session *sess, const char *target_msgid,
+                      const char *reaction_text, const char *nick, int is_self)
+{
+	GtkXText *xtext;
+	textentry *target;
+
+	if (!sess || !sess->gui || !sess->gui->xtext)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+	target = gtk_xtext_find_by_msgid (xtext->buffer, target_msgid);
+	if (!target)
+		return;
+
+	gtk_xtext_entry_add_reaction (xtext->buffer, target,
+	                              reaction_text, nick, is_self);
+}
+
+void
+fe_reaction_removed (session *sess, const char *target_msgid,
+                     const char *reaction_text, const char *nick)
+{
+	GtkXText *xtext;
+	textentry *target;
+
+	if (!sess || !sess->gui || !sess->gui->xtext)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+	target = gtk_xtext_find_by_msgid (xtext->buffer, target_msgid);
+	if (!target)
+		return;
+
+	gtk_xtext_entry_remove_reaction (xtext->buffer, target,
+	                                 reaction_text, nick);
+}
+
+void
+fe_reply_context_set (session *sess, const char *reply_msgid)
+{
+	GtkXText *xtext;
+	textentry *new_ent;
+	textentry *orig;
+	const char *orig_nick = NULL;
+	char *stripped_nick = NULL;
+	char *stripped_preview = NULL;
+	char preview[81] = "";
+	guint64 orig_id = 0;
+
+	if (!sess || !sess->gui || !sess->gui->xtext || !reply_msgid)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+
+	/* Find the entry to attach reply context to.
+	 * For echo-confirmed messages, the entry has its msgid set already (from fe_confirm_entry).
+	 * For non-echo messages, the entry was just appended and is the last one.
+	 * Try by current_msgid first (set by inbound_chanmsg), then fall back to last. */
+	new_ent = NULL;
+	if (sess->current_msgid)
+		new_ent = gtk_xtext_find_by_msgid (xtext->buffer, sess->current_msgid);
+	if (!new_ent)
+		new_ent = gtk_xtext_buffer_get_last (xtext->buffer);
+	if (!new_ent)
+		return;
+
+	/* Try to resolve the referenced message */
+	orig = gtk_xtext_find_by_msgid (xtext->buffer, reply_msgid);
+	if (orig)
+	{
+		const unsigned char *str = gtk_xtext_entry_get_str (orig);
+		int str_len = gtk_xtext_entry_get_str_len (orig);
+		int left_len = gtk_xtext_entry_get_left_len (orig);
+
+		orig_id = gtk_xtext_get_entry_id (orig);
+
+		/* Extract nick from left portion, stripping all format codes */
+		if (left_len > 0 && str)
+		{
+			char *raw_nick = g_strndup ((const char *)str, left_len);
+			char *p;
+			stripped_nick = strip_color (raw_nick, -1, STRIP_ALL);
+			g_free (raw_nick);
+			/* Trim surrounding brackets/punctuation like <nick> or «nick» */
+			p = stripped_nick;
+			while (*p && (*p == '<' || *p == '\xc2'))  /* skip < or « (UTF-8: C2 AB) */
+			{
+				if (*p == '<') { p++; break; }
+				if (*p == '\xc2' && *(p+1) == '\xab') { p += 2; break; }
+				break;
+			}
+			orig_nick = p;
+			/* Trim trailing > or » and whitespace */
+			{
+				int len = strlen (orig_nick);
+				while (len > 0)
+				{
+					char c = orig_nick[len - 1];
+					if (c == '>' || c == ' ' || c == '\t')
+						len--;
+					else if (len >= 2 && (unsigned char)orig_nick[len - 2] == 0xc2 &&
+					         (unsigned char)orig_nick[len - 1] == 0xbb)
+						len -= 2;  /* » */
+					else
+						break;
+				}
+				/* Write NUL into stripped_nick (which we own) */
+				((char *)orig_nick)[len] = '\0';
+			}
+		}
+
+		/* Build preview from the right portion (message text after separator) */
+		if (str && str_len > left_len)
+		{
+			char *raw_preview = g_strndup ((const char *)(str + left_len), MIN (str_len - left_len, 120));
+			stripped_preview = strip_color (raw_preview, -1, STRIP_ALL);
+			g_free (raw_preview);
+			g_strlcpy (preview, stripped_preview, sizeof (preview));
+		}
+	}
+
+	gtk_xtext_entry_set_reply (xtext->buffer, new_ent,
+	                           reply_msgid, orig_nick, preview, orig_id);
+
+	/* Persist reply context to scrollback (if this entry has a msgid) */
+	{
+		const char *new_msgid = gtk_xtext_get_msgid (new_ent);
+		if (new_msgid)
+			scrollback_save_reply_for_session (sess, new_msgid,
+			                                   reply_msgid, orig_nick, preview);
+	}
+
+	g_free (stripped_nick);
+	g_free (stripped_preview);
+}
+
+void fe_reply_state_changed (session *sess);
+
+static void
+fe_reply_dismiss_cb (GtkXText *xtext, const char *key, gpointer userdata)
+{
+	session *sess = current_sess;
+	(void)xtext;
+	(void)key;
+	(void)userdata;
+
+	if (!sess)
+		return;
+
+	g_clear_pointer (&sess->reply_msgid, g_free);
+	g_clear_pointer (&sess->reply_nick, g_free);
+	g_clear_pointer (&sess->react_target_msgid, g_free);
+	g_clear_pointer (&sess->react_target_nick, g_free);
+	fe_reply_state_changed (sess);
+}
+
+void
+fe_reply_state_changed (session *sess)
+{
+	GtkXText *xtext;
+
+	if (!sess || !sess->gui || !sess->gui->xtext)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+
+	if (sess->react_target_msgid && sess->react_target_nick)
+	{
+		char *text = g_strdup_printf (_("\xf0\x9f\x92\xac Reacting to %s"), sess->react_target_nick);
+		gtk_xtext_status_set (xtext, "reply", text, 10, 0);
+		gtk_xtext_status_set_dismiss (xtext, "reply", fe_reply_dismiss_cb, NULL);
+		g_free (text);
+	}
+	else if (sess->reply_msgid && sess->reply_nick)
+	{
+		char *text = g_strdup_printf (_("\xe2\x86\xa9 Replying to %s"), sess->reply_nick);
+		gtk_xtext_status_set (xtext, "reply", text, 10, 0);
+		gtk_xtext_status_set_dismiss (xtext, "reply", fe_reply_dismiss_cb, NULL);
+		g_free (text);
+	}
+	else
+	{
+		gtk_xtext_status_remove (xtext, "reply");
+	}
+}
+
+/* Re-attach a persisted reply context to a specific entry during scrollback load.
+ * Unlike fe_reply_context_set (which targets the last entry), this targets
+ * a specific entry identified by its msgid.
+ */
+void
+fe_scrollback_reply_attach (session *sess, const char *entry_msgid,
+                            const char *target_msgid, const char *target_nick,
+                            const char *target_preview)
+{
+	GtkXText *xtext;
+	textentry *ent;
+	textentry *orig;
+	guint64 orig_id = 0;
+
+	if (!sess || !sess->gui || !sess->gui->xtext || !entry_msgid || !target_msgid)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+
+	/* Find the entry this reply info belongs to */
+	ent = gtk_xtext_find_by_msgid (xtext->buffer, entry_msgid);
+	if (!ent)
+		return;
+
+	/* Try to resolve the target entry for click-to-scroll */
+	orig = gtk_xtext_find_by_msgid (xtext->buffer, target_msgid);
+	if (orig)
+		orig_id = gtk_xtext_get_entry_id (orig);
+
+	gtk_xtext_entry_set_reply (xtext->buffer, ent,
+	                           target_msgid, target_nick, target_preview, orig_id);
+}
+
+void
+fe_begin_multiline_group (session *sess)
+{
+	if (!sess || !sess->res || !sess->res->buffer)
+		return;
+
+	gtk_xtext_begin_group (sess->res->buffer);
+}
+
+void
+fe_end_multiline_group (session *sess)
+{
+	if (!sess || !sess->res || !sess->res->buffer)
+		return;
+
+	gtk_xtext_end_group (sess->res->buffer);
+}
+
+void
+fe_scrollback_extras_done (session *sess)
+{
+	GtkXText *xtext;
+
+	if (!sess || !sess->gui || !sess->gui->xtext)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+
+	/* Recalculate total line count after reactions/replies added extra lines.
+	 * This corrects num_lines and scroll position after bulk attachment. */
+	gtk_xtext_calc_lines (xtext->buffer, FALSE);
+}
+

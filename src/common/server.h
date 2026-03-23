@@ -29,6 +29,11 @@ char *tcp_generate_label (server *serv);
 char *tcp_sendf_labeled (server *serv, const char *fmt, ...) G_GNUC_PRINTF (2, 3);
 char *tcp_sendf_labeled_tracked (server *serv, const char *command,
                                  const char *target, const char *fmt, ...) G_GNUC_PRINTF (4, 5);
+char *tcp_sendf_with_tags (server *serv, const char *command, const char *target,
+                           const char *tag_key, const char *tag_value,
+                           const char *fmt, ...) G_GNUC_PRINTF (6, 7);
+char *tcp_sendf_with_raw_tags (server *serv, const char *command, const char *target,
+                               const char *extra_tags, const char *fmt, ...) G_GNUC_PRINTF (5, 6);
 int tcp_send_real (void *ssl, int sok, GIConv write_converter, char *buf, int len);
 
 void server_ensure_stale_sweep_timer (server *serv);

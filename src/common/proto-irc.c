@@ -363,15 +363,49 @@ irc_user_whois (server *serv, char *nicks)
 static void
 irc_message (server *serv, char *channel, char *text)
 {
-	tcp_sendf_labeled_tracked (serv, "PRIVMSG", channel,
-	                           "PRIVMSG %s :%s\r\n", channel, text);
+	/* IRCv3 +draft/reply: if the session has reply state set, include the tag */
+	session *sess = find_channel (serv, channel);
+	if (!sess)
+		sess = find_dialog (serv, channel);
+
+	if (sess && sess->reply_msgid && serv->have_message_tags)
+	{
+		tcp_sendf_with_tags (serv, "PRIVMSG", channel,
+		                     "+draft/reply", sess->reply_msgid,
+		                     "PRIVMSG %s :%s\r\n", channel, text);
+		g_clear_pointer (&sess->reply_msgid, g_free);
+		g_clear_pointer (&sess->reply_nick, g_free);
+		fe_reply_state_changed (sess);
+	}
+	else
+	{
+		tcp_sendf_labeled_tracked (serv, "PRIVMSG", channel,
+		                           "PRIVMSG %s :%s\r\n", channel, text);
+	}
 }
 
 static void
 irc_action (server *serv, char *channel, char *act)
 {
-	tcp_sendf_labeled_tracked (serv, "ACTION", channel,
-	                           "PRIVMSG %s :\001ACTION %s\001\r\n", channel, act);
+	/* IRCv3 +draft/reply: same treatment for /me actions */
+	session *sess = find_channel (serv, channel);
+	if (!sess)
+		sess = find_dialog (serv, channel);
+
+	if (sess && sess->reply_msgid && serv->have_message_tags)
+	{
+		tcp_sendf_with_tags (serv, "ACTION", channel,
+		                     "+draft/reply", sess->reply_msgid,
+		                     "PRIVMSG %s :\001ACTION %s\001\r\n", channel, act);
+		g_clear_pointer (&sess->reply_msgid, g_free);
+		g_clear_pointer (&sess->reply_nick, g_free);
+		fe_reply_state_changed (sess);
+	}
+	else
+	{
+		tcp_sendf_labeled_tracked (serv, "ACTION", channel,
+		                           "PRIVMSG %s :\001ACTION %s\001\r\n", channel, act);
+	}
 }
 
 static void
@@ -1481,7 +1515,29 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 						if (serv->have_echo_message && !serv->p_cmp (nick, serv->nick))
 						{
 							if (tags_data->echo_confirmed)
+							{
+								/* Attach reply context to confirmed CTCP entry */
+								session *ctx_sess = is_channel (serv, to) ? find_channel (serv, to) : find_dialog (serv, to);
+								if (ctx_sess && tags_data->msgid)
+								{
+									scrollback_confirm_pending (ctx_sess, tags_data->label, tags_data->msgid);
+									g_free (ctx_sess->current_msgid);
+									ctx_sess->current_msgid = g_strdup (tags_data->msgid);
+								}
+								if (ctx_sess && prefs.hex_irc_reply_show && tags_data->all_tags)
+								{
+									const char *reply_msgid = g_hash_table_lookup (tags_data->all_tags,
+									                                                "+draft/reply");
+									if (reply_msgid)
+										fe_reply_context_set (ctx_sess, reply_msgid);
+								}
+								if (ctx_sess)
+								{
+									g_free (ctx_sess->current_msgid);
+									ctx_sess->current_msgid = NULL;
+								}
 								return;
+							}
 							if (!g_ascii_strncasecmp (text, "ACTION ", 7))
 							{
 								/* ACTION echo */
@@ -1555,8 +1611,27 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 							{
 								session *chan_sess = find_channel (serv, to);
 								if (chan_sess && tags_data->msgid)
+								{
 									chathistory_track_msgid_ts (chan_sess, tags_data->msgid,
 									                            tags_data->timestamp, FALSE);
+									scrollback_confirm_pending (chan_sess, tags_data->label, tags_data->msgid);
+									/* Set current_msgid so fe_reply_context_set can find the entry */
+									g_free (chan_sess->current_msgid);
+									chan_sess->current_msgid = g_strdup (tags_data->msgid);
+								}
+								/* Attach reply context to the confirmed entry */
+								if (chan_sess && prefs.hex_irc_reply_show && tags_data->all_tags)
+								{
+									const char *reply_msgid = g_hash_table_lookup (tags_data->all_tags,
+									                                                "+draft/reply");
+									if (reply_msgid)
+										fe_reply_context_set (chan_sess, reply_msgid);
+								}
+								if (chan_sess)
+								{
+									g_free (chan_sess->current_msgid);
+									chan_sess->current_msgid = NULL;
+								}
 								return;
 							}
 							if (ignore_check (word[1], IG_CHAN))
@@ -1579,8 +1654,25 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 								{
 									session *dlg_sess = find_dialog (serv, to);
 									if (dlg_sess && tags_data->msgid)
+									{
 										chathistory_track_msgid_ts (dlg_sess, tags_data->msgid,
 										                            tags_data->timestamp, FALSE);
+										scrollback_confirm_pending (dlg_sess, tags_data->label, tags_data->msgid);
+										g_free (dlg_sess->current_msgid);
+										dlg_sess->current_msgid = g_strdup (tags_data->msgid);
+									}
+									if (dlg_sess && prefs.hex_irc_reply_show && tags_data->all_tags)
+									{
+										const char *reply_msgid = g_hash_table_lookup (tags_data->all_tags,
+										                                                "+draft/reply");
+										if (reply_msgid)
+											fe_reply_context_set (dlg_sess, reply_msgid);
+									}
+									if (dlg_sess)
+									{
+										g_free (dlg_sess->current_msgid);
+										dlg_sess->current_msgid = NULL;
+									}
 									return;
 								}
 								session *sess;
@@ -2078,6 +2170,53 @@ handle_message_tag_time (const char *time, message_tags_data *tags_data)
  *   \r -> CR
  *   \n -> LF
  */
+/* Escape a tag value per IRCv3 message-tags spec.
+ * Inverse of unescape_tag_value. Caller must g_free() the result.
+ *   ; -> \:
+ *   SPACE -> \s
+ *   \ -> \\
+ *   CR -> \r
+ *   LF -> \n
+ */
+char *
+escape_tag_value (const char *value)
+{
+	GString *result;
+	const char *p;
+
+	if (!value || !*value)
+		return g_strdup ("");
+
+	result = g_string_sized_new (strlen (value));
+
+	for (p = value; *p; p++)
+	{
+		switch (*p)
+		{
+			case ';':
+				g_string_append (result, "\\:");
+				break;
+			case ' ':
+				g_string_append (result, "\\s");
+				break;
+			case '\\':
+				g_string_append (result, "\\\\");
+				break;
+			case '\r':
+				g_string_append (result, "\\r");
+				break;
+			case '\n':
+				g_string_append (result, "\\n");
+				break;
+			default:
+				g_string_append_c (result, *p);
+				break;
+		}
+	}
+
+	return g_string_free (result, FALSE);
+}
+
 static char *
 unescape_tag_value (const char *value)
 {
@@ -2266,7 +2405,7 @@ irc_inline (server *serv, char *buf, int len)
 		{
 			/* Tier 2 echo-message: confirm pending entry to normal state */
 			if (info->entry_id && info->sess && is_session (info->sess))
-				fe_confirm_entry (info->sess, info->entry_id);
+				fe_confirm_entry (info->sess, info->entry_id, tags_data.msgid);
 
 			tags_data.echo_confirmed = TRUE;
 			g_hash_table_remove (serv->pending_labels, tags_data.label);

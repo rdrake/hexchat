@@ -311,6 +311,56 @@ tcp_vsendf_labeled (server *serv, const char *fmt, va_list args)
 	return label;
 }
 
+/* Send IRC command with client tags merged into a single @ block with the label.
+ * extra_tags is a pre-formatted "key=value;key2=value2" string (no leading @).
+ * Returns the label string (caller must free) or NULL if labeled-response unavailable.
+ */
+static char *
+tcp_vsendf_labeled_with_tags (server *serv, const char *extra_tags,
+                              const char *fmt, va_list args)
+{
+	static char cmd_buf[1540];
+	static char send_buf[1600];
+	char *label;
+	int cmd_len, len;
+
+	cmd_len = g_vsnprintf (cmd_buf, sizeof (cmd_buf) - 1, fmt, args);
+	cmd_buf[sizeof (cmd_buf) - 1] = '\0';
+	if (cmd_len < 0 || cmd_len > (int)(sizeof (cmd_buf) - 1))
+		cmd_len = strlen (cmd_buf);
+
+	if (!serv->have_labeled_response)
+	{
+		/* No label — just prepend the tags */
+		if (extra_tags && *extra_tags)
+		{
+			len = g_snprintf (send_buf, sizeof (send_buf), "@%s %s", extra_tags, cmd_buf);
+			send_buf[sizeof (send_buf) - 1] = '\0';
+			if (len < 0 || len > (int)(sizeof (send_buf) - 1))
+				len = strlen (send_buf);
+			tcp_send_len (serv, send_buf, len);
+		}
+		else
+			tcp_send_len (serv, cmd_buf, cmd_len);
+		return NULL;
+	}
+
+	label = tcp_generate_label (serv);
+	if (extra_tags && *extra_tags)
+		len = g_snprintf (send_buf, sizeof (send_buf), "@label=%s;%s %s",
+		                  label, extra_tags, cmd_buf);
+	else
+		len = g_snprintf (send_buf, sizeof (send_buf), "@label=%s %s",
+		                  label, cmd_buf);
+
+	send_buf[sizeof (send_buf) - 1] = '\0';
+	if (len < 0 || len > (int)(sizeof (send_buf) - 1))
+		len = strlen (send_buf);
+
+	tcp_send_len (serv, send_buf, len);
+	return label;
+}
+
 /* Send IRC command with a label tag for labeled-response correlation
  * Returns the label string (caller must free) or NULL if labeled-response unavailable
  */
@@ -449,6 +499,78 @@ tcp_sendf_labeled_tracked (server *serv, const char *command,
 
 		g_hash_table_insert (serv->pending_labels, label, info);
 		serv->last_sent_label = label;  /* Borrowed pointer into hash table key */
+		server_ensure_stale_sweep_timer (serv);
+	}
+	return label;
+}
+
+/* Send labeled+tracked command with extra client tags merged into the @ block.
+ * tag_key and tag_value are a single tag to prepend (e.g. "+draft/reply", "msgid123").
+ * The fmt should NOT contain a leading @.
+ */
+char *
+tcp_sendf_with_tags (server *serv, const char *command, const char *target,
+                     const char *tag_key, const char *tag_value,
+                     const char *fmt, ...)
+{
+	va_list args;
+	char *label;
+	char *extra_tags;
+
+	extra_tags = g_strdup_printf ("%s=%s", tag_key, tag_value);
+
+	va_start (args, fmt);
+	label = tcp_vsendf_labeled_with_tags (serv, extra_tags, fmt, args);
+	va_end (args);
+	g_free (extra_tags);
+
+	if (label)
+	{
+		pending_label_info *info = g_new0 (pending_label_info, 1);
+		info->command = g_strdup (command);
+		info->target = target ? g_strdup (target) : NULL;
+		info->sent_time = time (NULL);
+
+		if (!serv->pending_labels)
+			serv->pending_labels = g_hash_table_new_full (
+				g_str_hash, g_str_equal, g_free,
+				(GDestroyNotify) pending_label_info_free);
+
+		g_hash_table_insert (serv->pending_labels, label, info);
+		serv->last_sent_label = label;
+		server_ensure_stale_sweep_timer (serv);
+	}
+	return label;
+}
+
+/* Send labeled+tracked command with a pre-formatted extra tags string merged into the @ block.
+ * extra_tags is "key=value;key2=value2" (no leading @).
+ */
+char *
+tcp_sendf_with_raw_tags (server *serv, const char *command, const char *target,
+                         const char *extra_tags, const char *fmt, ...)
+{
+	va_list args;
+	char *label;
+
+	va_start (args, fmt);
+	label = tcp_vsendf_labeled_with_tags (serv, extra_tags, fmt, args);
+	va_end (args);
+
+	if (label)
+	{
+		pending_label_info *info = g_new0 (pending_label_info, 1);
+		info->command = g_strdup (command);
+		info->target = target ? g_strdup (target) : NULL;
+		info->sent_time = time (NULL);
+
+		if (!serv->pending_labels)
+			serv->pending_labels = g_hash_table_new_full (
+				g_str_hash, g_str_equal, g_free,
+				(GDestroyNotify) pending_label_info_free);
+
+		g_hash_table_insert (serv->pending_labels, label, info);
+		serv->last_sent_label = label;
 		server_ensure_stale_sweep_timer (serv);
 	}
 	return label;

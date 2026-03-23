@@ -955,7 +955,17 @@ void fe_print_text_prepend (struct session *sess, char *text, time_t stamp) {}
 void fe_redact_message (struct session *sess, const char *msgid, const char *redacted_by, const char *reason, time_t redact_time) {}
 guint64 fe_get_last_entry_id (struct session *sess) { return 0; }
 void fe_set_entry_pending (struct session *sess, guint64 entry_id) {}
-void fe_confirm_entry (struct session *sess, guint64 entry_id) {}
+void fe_confirm_entry (struct session *sess, guint64 entry_id, const char *msgid) {}
 void fe_clear_all_pending (struct session *sess) {}
 void fe_network_icon_ready (struct server *serv, const guint8 *data, gsize len) {}
 void fe_reset_scroll_top_backoff (struct session *sess) {}
+const char *fe_get_last_msgid (struct session *sess) { return NULL; }
+const char *fe_get_last_nonself_msgid (struct session *sess, char *nick_out, int nick_out_size) { return NULL; }
+void fe_reaction_received (struct session *sess, const char *target_msgid, const char *reaction_text, const char *nick, int is_self) {}
+void fe_reaction_removed (struct session *sess, const char *target_msgid, const char *reaction_text, const char *nick) {}
+void fe_reply_context_set (struct session *sess, const char *reply_msgid) {}
+void fe_reply_state_changed (struct session *sess) {}
+void fe_scrollback_reply_attach (struct session *sess, const char *entry_msgid, const char *target_msgid, const char *target_nick, const char *target_preview) {}
+void fe_scrollback_extras_done (struct session *sess) {}
+void fe_begin_multiline_group (struct session *sess) {}
+void fe_end_multiline_group (struct session *sess) {}

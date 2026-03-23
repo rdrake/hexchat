@@ -691,6 +691,10 @@ session_free (session *killsess)
 	g_free (killsess->scrollback_newest_msgid);
 	if (killsess->known_msgids)
 		g_hash_table_destroy (killsess->known_msgids);
+	g_free (killsess->reply_msgid);
+	g_free (killsess->reply_nick);
+	g_free (killsess->react_target_msgid);
+	g_free (killsess->react_target_nick);
 	chathistory_stop_background_fetch (killsess);
 
 	fe_session_callback (killsess);

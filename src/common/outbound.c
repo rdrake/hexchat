@@ -56,6 +56,7 @@
 #include "outbound.h"
 #include "chanopt.h"
 #include "chathistory.h"
+#include "proto-irc.h"
 
 #define TBUFSIZE 4096
 
@@ -2471,6 +2472,184 @@ cmd_markread (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 }
 
 static int
+cmd_react (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	const char *reaction;
+	const char *msgid;
+	char *escaped;
+
+	if (!serv->have_message_tags)
+	{
+		PrintText (sess, _("Message reactions require the message-tags capability.\n"));
+		return TRUE;
+	}
+
+	if (!serv->connected)
+	{
+		notc_msg (sess);
+		return TRUE;
+	}
+
+	if (!sess->channel[0])
+	{
+		notj_msg (sess);
+		return TRUE;
+	}
+
+	/* /REACT <emoji> [msgid] */
+	if (!word[2][0])
+	{
+		PrintText (sess, _("Usage: /REACT <emoji> [msgid]\n"));
+		return TRUE;
+	}
+
+	reaction = word[2];
+	msgid = word[3][0] ? word[3] : fe_get_last_msgid (sess);
+
+	if (!msgid)
+	{
+		PrintText (sess, _("No message to react to.\n"));
+		return TRUE;
+	}
+
+	escaped = escape_tag_value (reaction);
+	{
+		char *tags = g_strdup_printf ("+draft/react=%s;+draft/reply=%s", escaped, msgid);
+		tcp_sendf_with_raw_tags (serv, "TAGMSG", sess->channel, tags,
+		                         "TAGMSG %s\r\n", sess->channel);
+		g_free (tags);
+	}
+	g_free (escaped);
+
+	return TRUE;
+}
+
+static int
+cmd_unreact (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	const char *reaction;
+	const char *msgid;
+	char *escaped;
+
+	if (!serv->have_message_tags)
+	{
+		PrintText (sess, _("Message reactions require the message-tags capability.\n"));
+		return TRUE;
+	}
+
+	if (!serv->connected)
+	{
+		notc_msg (sess);
+		return TRUE;
+	}
+
+	if (!sess->channel[0])
+	{
+		notj_msg (sess);
+		return TRUE;
+	}
+
+	/* /UNREACT <emoji> [msgid] */
+	if (!word[2][0])
+	{
+		PrintText (sess, _("Usage: /UNREACT <emoji> [msgid]\n"));
+		return TRUE;
+	}
+
+	reaction = word[2];
+	msgid = word[3][0] ? word[3] : fe_get_last_msgid (sess);
+
+	if (!msgid)
+	{
+		PrintText (sess, _("No message to unreact from.\n"));
+		return TRUE;
+	}
+
+	escaped = escape_tag_value (reaction);
+	{
+		char *tags = g_strdup_printf ("+draft/unreact=%s;+draft/reply=%s", escaped, msgid);
+		tcp_sendf_with_raw_tags (serv, "TAGMSG", sess->channel, tags,
+		                         "TAGMSG %s\r\n", sess->channel);
+		g_free (tags);
+	}
+	g_free (escaped);
+
+	return TRUE;
+}
+
+static int
+cmd_reply (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	server *serv = sess->server;
+	const char *msgid;
+	char nick_buf[NICKLEN + 1];
+
+	if (!serv->have_message_tags)
+	{
+		PrintText (sess, _("Message replies require the message-tags capability.\n"));
+		return TRUE;
+	}
+
+	if (!serv->connected)
+	{
+		notc_msg (sess);
+		return TRUE;
+	}
+
+	if (!sess->channel[0])
+	{
+		notj_msg (sess);
+		return TRUE;
+	}
+
+	/* /REPLY [msgid] <text>
+	 * If first arg looks like a msgid (contains no spaces, and there's more text),
+	 * use it as the target. Otherwise reply to the last non-self message. */
+	if (!word_eol[2][0])
+	{
+		PrintText (sess, _("Usage: /REPLY [msgid] <text>\n"));
+		return TRUE;
+	}
+
+	nick_buf[0] = '\0';
+
+	if (word[3][0] && !strchr (word[2], ' '))
+	{
+		/* Explicit msgid provided: /REPLY <msgid> <text> */
+		msgid = word[2];
+
+		g_free (sess->reply_msgid);
+		sess->reply_msgid = g_strdup (msgid);
+		g_free (sess->reply_nick);
+		sess->reply_nick = g_strdup (""); /* unknown nick when explicit msgid */
+
+		handle_say (sess, word_eol[3], TRUE);
+	}
+	else
+	{
+		/* No msgid: reply to last non-self message */
+		msgid = fe_get_last_nonself_msgid (sess, nick_buf, sizeof (nick_buf));
+		if (!msgid)
+		{
+			PrintText (sess, _("No message to reply to.\n"));
+			return TRUE;
+		}
+
+		g_free (sess->reply_msgid);
+		sess->reply_msgid = g_strdup (msgid);
+		g_free (sess->reply_nick);
+		sess->reply_nick = g_strdup (nick_buf);
+
+		handle_say (sess, word_eol[2], TRUE);
+	}
+
+	/* reply_msgid is consumed and cleared by irc_message()/irc_action() */
+	return TRUE;
+}
+
+static int
 cmd_redact (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	server *serv = sess->server;
@@ -3007,6 +3186,8 @@ cmd_me (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 				sess->server->p_action (sess->server, sess->channel, split_text);
 				if (sess->server->have_echo_message && sess->server->have_labeled_response)
 				{
+					g_free (sess->current_msgid);
+					sess->current_msgid = g_strdup_printf ("pending:%s", sess->server->last_sent_label);
 					inbound_action (sess, sess->channel, sess->server->nick, "",
 										 split_text, TRUE, FALSE, &no_tags);
 					mark_pending_echo (sess, sess->server);
@@ -3026,6 +3207,8 @@ cmd_me (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			sess->server->p_action (sess->server, sess->channel, act + offset);
 			if (sess->server->have_echo_message && sess->server->have_labeled_response)
 			{
+				g_free (sess->current_msgid);
+				sess->current_msgid = g_strdup_printf ("pending:%s", sess->server->last_sent_label);
 				inbound_action (sess, sess->channel, sess->server->nick, "",
 									 act + offset, TRUE, FALSE, &no_tags);
 				mark_pending_echo (sess, sess->server);
@@ -4212,11 +4395,9 @@ cmd_tagmsg (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 		return TRUE;
 	}
 
-	/* Send TAGMSG with the specified tags
-	 * Format: @tags TAGMSG target
-	 */
-	tcp_sendf_labeled_tracked (serv, "TAGMSG", target,
-	                           "@%s TAGMSG %s\r\n", tags, target);
+	/* Send TAGMSG with the specified tags merged with label into one @ block */
+	tcp_sendf_with_raw_tags (serv, "TAGMSG", target, tags,
+	                         "TAGMSG %s\r\n", target);
 
 	return TRUE;
 }
@@ -4761,6 +4942,8 @@ const struct commands xc_cmds[] = {
 	 N_("QUIT [<reason>], disconnects from the current server")},
 	{"QUOTE", cmd_quote, 1, 0, 1,
 	 N_("QUOTE <text>, sends the text in raw form to the server")},
+	{"REACT", cmd_react, 1, 0, 1,
+	 N_("REACT <emoji> [msgid], sends a reaction to a message (IRCv3 +draft/react)")},
 #ifdef USE_OPENSSL
 	{"RECONNECT", cmd_reconnect, 0, 0, 1,
 	 N_("RECONNECT [-ssl|-ssl-noverify] [<host>] [<port>] [<password>], Can be called just as /RECONNECT to reconnect to the current server or with /RECONNECT ALL to reconnect to all the open servers")},
@@ -4773,6 +4956,8 @@ const struct commands xc_cmds[] = {
 	{"RECV", cmd_recv, 1, 0, 1, N_("RECV <text>, send raw data to HexChat, as if it was received from the IRC server")},
 	{"REGISTER", cmd_register, 1, 0, 1, N_("REGISTER <account> [<email>|*] <password>, register a new account on the server (requires draft/account-registration)")},
 	{"RELOAD", cmd_reload, 0, 0, 1, N_("RELOAD <name>, reloads a plugin or script")},
+	{"REPLY", cmd_reply, 1, 0, 1,
+	 N_("REPLY [msgid] <text>, sends a reply to a message (IRCv3 +draft/reply)")},
 	{"SAY", cmd_say, 0, 0, 1,
 	 N_("SAY <text>, sends the text to the object in the current window")},
 	{"SEND", cmd_send, 0, 0, 1, N_("SEND <nick> [<file>]")},
@@ -4814,6 +4999,8 @@ const struct commands xc_cmds[] = {
 	{"UNLOAD", cmd_unload, 0, 0, 1, N_("UNLOAD <name>, unloads a plugin or script")},
 	{"UNQUIET", cmd_unquiet, 1, 1, 1,
 	 N_("UNQUIET <mask> [<mask>...], unquiets the specified masks if supported by the server.")},
+	{"UNREACT", cmd_unreact, 1, 0, 1,
+	 N_("UNREACT <emoji> [msgid], removes a reaction from a message (IRCv3 +draft/unreact)")},
 	{"URL", cmd_url, 0, 0, 1, N_("URL <url>, opens a URL in your browser")},
 	{"USELECT", cmd_uselect, 0, 1, 0,
 	 N_("USELECT [-a] [-s] <nick1> <nick2> etc, highlights nick(s) in channel userlist")},
@@ -5256,6 +5443,23 @@ handle_say (session *sess, char *text, int check_spch)
 		return;
 	}
 
+	/* IRCv3 react-with-text: if react state is active, send TAGMSG instead */
+	if (sess->react_target_msgid && sess->server && sess->server->connected &&
+	    sess->server->have_message_tags && sess->channel[0])
+	{
+		char *escaped = escape_tag_value (text);
+		char *tags = g_strdup_printf ("+draft/react=%s;+draft/reply=%s",
+		                               escaped, sess->react_target_msgid);
+		tcp_sendf_with_raw_tags (sess->server, "TAGMSG", sess->channel, tags,
+		                         "TAGMSG %s\r\n", sess->channel);
+		g_free (tags);
+		g_free (escaped);
+		g_clear_pointer (&sess->react_target_msgid, g_free);
+		g_clear_pointer (&sess->react_target_nick, g_free);
+		fe_reply_state_changed (sess);
+		return;
+	}
+
 	len = strlen (text);
 	pdibuf = g_malloc (len + 1);
 	newcmdlen = MAX(len + NICKLEN + 1, TBUFSIZE);
@@ -5315,8 +5519,12 @@ handle_say (session *sess, char *text, int check_spch)
 		{
 			if (sess->server->have_echo_message && sess->server->have_labeled_response)
 			{
-				/* Tier 2: send, display as pending, record entry */
+				/* Tier 2: send, display as pending, record entry.
+				 * Save to scrollback with placeholder msgid "pending:<label>" so the
+				 * text is preserved correctly. Echo_confirmed path updates to real msgid. */
 				sess->server->p_message (sess->server, sess->channel, split_text);
+				g_free (sess->current_msgid);
+				sess->current_msgid = g_strdup_printf ("pending:%s", sess->server->last_sent_label);
 				inbound_chanmsg (sess->server, sess, sess->channel, sess->server->nick,
 									  split_text, TRUE, FALSE, &no_tags);
 				mark_pending_echo (sess, sess->server);
@@ -5342,6 +5550,8 @@ handle_say (session *sess, char *text, int check_spch)
 		if (sess->server->have_echo_message && sess->server->have_labeled_response)
 		{
 			sess->server->p_message (sess->server, sess->channel, text + offset);
+			g_free (sess->current_msgid);
+			sess->current_msgid = g_strdup_printf ("pending:%s", sess->server->last_sent_label);
 			inbound_chanmsg (sess->server, sess, sess->channel, sess->server->nick,
 								  text + offset, TRUE, FALSE, &no_tags);
 			mark_pending_echo (sess, sess->server);

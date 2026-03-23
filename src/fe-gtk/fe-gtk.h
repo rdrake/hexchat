@@ -167,6 +167,8 @@ typedef struct session_gui
 		GtkWidget *shbox, *shentry;	/* search bar hbox */
 		gulong search_changed_signal; /* hook for search change event so blanking the box doesn't suck */
 
+	GtkWidget *reply_bar;	/* IRCv3: "Replying to <nick>" bar above input */
+
 #define MENU_ID_NUM 14
 	GtkWidget *menu_item[MENU_ID_NUM+1]; /* some items we may change state of */
 

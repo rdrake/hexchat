@@ -192,39 +192,75 @@ PrintTextLine (xtext_buffer *xtbuf, unsigned char *text, int len, int indent, ti
 void
 PrintTextRaw (void *xtbuf, unsigned char *text, int indent, time_t stamp)
 {
-	char *last_text = text;
-	int len = 0;
-	int beep_done = FALSE;
+	xtext_buffer *buf = xtbuf;
 
-	/* split the text into separate lines */
-	while (1)
+	/* IRCv3 draft/multiline: keep embedded \n in a single entry */
+	if (buf->current_group_id != 0)
 	{
-		switch (*text)
+		PrintTextRawMultiline (xtbuf, text, indent, stamp);
+		return;
+	}
+
+	{
+		char *last_text = text;
+		int len = 0;
+		int beep_done = FALSE;
+
+		/* split the text into separate lines */
+		while (1)
 		{
-		case 0:
-			PrintTextLine (xtbuf, last_text, len, indent, stamp);
-			return;
-		case '\n':
-			PrintTextLine (xtbuf, last_text, len, indent, stamp);
-			text++;
-			if (*text == 0)
-				return;
-			last_text = text;
-			len = 0;
-			break;
-		case ATTR_BEEP:
-			*text = ' ';
-			if (!beep_done)
+			switch (*text)
 			{
-				beep_done = TRUE;
-				if (!prefs.hex_input_filter_beep)
-					fe_beep (NULL);
+			case 0:
+				PrintTextLine (xtbuf, last_text, len, indent, stamp);
+				return;
+			case '\n':
+				PrintTextLine (xtbuf, last_text, len, indent, stamp);
+				text++;
+				if (*text == 0)
+					return;
+				last_text = text;
+				len = 0;
+				break;
+			case ATTR_BEEP:
+				*text = ' ';
+				if (!beep_done)
+				{
+					beep_done = TRUE;
+					if (!prefs.hex_input_filter_beep)
+						fe_beep (NULL);
+				}
+			default:
+				text++;
+				len++;
 			}
-		default:
-			text++;
-			len++;
 		}
 	}
+}
+
+/* IRCv3 draft/multiline: pass entire text (with embedded \n) as a single
+ * textentry instead of splitting on newlines.  xtext's subline calculator
+ * already treats \n as a forced line break within an entry. */
+void
+PrintTextRawMultiline (void *xtbuf, unsigned char *text, int indent, time_t stamp)
+{
+	unsigned char *p;
+	int len;
+
+	/* Strip ATTR_BEEP but keep newlines */
+	for (p = text; *p; p++)
+	{
+		if (*p == ATTR_BEEP)
+			*p = ' ';
+	}
+
+	/* Strip trailing \n (text events always append one) */
+	len = strlen ((char *)text);
+	while (len > 0 && text[len - 1] == '\n')
+		len--;
+
+	if (len > 0)
+		PrintTextLine (xtbuf, text, len, indent, stamp);
 }
 
 /* IRCv3 modernization: prepend variants for chathistory BEFORE requests (Phase 3) */
@@ -273,11 +309,27 @@ PrintTextLinePrepend (xtext_buffer *xtbuf, unsigned char *text, int len, int ind
 void
 PrintTextRawPrepend (void *xtbuf, unsigned char *text, int indent, time_t stamp)
 {
+	xtext_buffer *buf = xtbuf;
 	char *last_text = text;
 	int len = 0;
 	int beep_done = FALSE;
 	GSList *lines = NULL;
 	GSList *iter;
+
+	/* IRCv3 draft/multiline: keep embedded \n in a single entry */
+	if (buf->current_group_id != 0)
+	{
+		unsigned char *p;
+		for (p = text; *p; p++)
+			if (*p == ATTR_BEEP)
+				*p = ' ';
+		len = strlen ((char *)text);
+		while (len > 0 && text[len - 1] == '\n')
+			len--;
+		if (len > 0)
+			PrintTextLinePrepend (xtbuf, text, len, indent, stamp);
+		return;
+	}
 
 	/* Collect all lines first, then prepend in reverse order
 	 * so that the final order in the buffer is correct */
@@ -385,9 +437,25 @@ PrintTextLineInsertSorted (xtext_buffer *xtbuf, unsigned char *text, int len, in
 void
 PrintTextRawInsertSorted (void *xtbuf, unsigned char *text, int indent, time_t stamp)
 {
+	xtext_buffer *buf = xtbuf;
 	char *last_text = text;
 	int len = 0;
 	int beep_done = FALSE;
+
+	/* IRCv3 draft/multiline: keep embedded \n in a single entry */
+	if (buf->current_group_id != 0)
+	{
+		unsigned char *p;
+		for (p = text; *p; p++)
+			if (*p == ATTR_BEEP)
+				*p = ' ';
+		len = strlen ((char *)text);
+		while (len > 0 && text[len - 1] == '\n')
+			len--;
+		if (len > 0)
+			PrintTextLineInsertSorted (xtbuf, text, len, indent, stamp);
+		return;
+	}
 
 	/* split the text into separate lines and insert each at correct position */
 	while (1)

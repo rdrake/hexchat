@@ -105,8 +105,10 @@ void fe_redact_message (struct session *sess, const char *msgid,
                         time_t redact_time);
 /* IRCv3 echo-message: pending state management (Phase 5) */
 guint64 fe_get_last_entry_id (struct session *sess);
+const char *fe_get_last_msgid (struct session *sess);
+const char *fe_get_last_nonself_msgid (struct session *sess, char *nick_out, int nick_out_size);
 void fe_set_entry_pending (struct session *sess, guint64 entry_id);
-void fe_confirm_entry (struct session *sess, guint64 entry_id);
+void fe_confirm_entry (struct session *sess, guint64 entry_id, const char *msgid);
 void fe_clear_all_pending (struct session *sess);
 /* IRCv3 typing indicators */
 void fe_typing_update (struct session *sess);
@@ -216,5 +218,21 @@ void fe_tray_set_tooltip (const char *text);
 void fe_open_chan_list (server *serv, char *filter, int do_refresh);
 const char *fe_get_default_font (void);
 void fe_reset_scroll_top_backoff (struct session *sess);
+
+/* IRCv3 multiline grouping: entries created between begin/end share hover highlight */
+void fe_begin_multiline_group (struct session *sess);
+void fe_end_multiline_group (struct session *sess);
+
+/* IRCv3 reactions and replies */
+void fe_reaction_received (struct session *sess, const char *target_msgid,
+                           const char *reaction_text, const char *nick, int is_self);
+void fe_reaction_removed (struct session *sess, const char *target_msgid,
+                          const char *reaction_text, const char *nick);
+void fe_reply_context_set (struct session *sess, const char *reply_msgid);
+void fe_reply_state_changed (struct session *sess);
+void fe_scrollback_reply_attach (struct session *sess, const char *entry_msgid,
+                                 const char *target_msgid, const char *target_nick,
+                                 const char *target_preview);
+void fe_scrollback_extras_done (struct session *sess);
 
 #endif

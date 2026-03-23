@@ -50,6 +50,10 @@ typedef struct xtext_status_item {
 	char *display_text;  /* rendered text */
 	int priority;        /* >= 100 = right zone, < 100 = left zone */
 	gint64 expire_at;    /* g_get_monotonic_time() deadline, 0 = manual */
+	void (*dismiss_cb) (GtkXText *xtext, const char *key, gpointer userdata);
+	gpointer dismiss_userdata;
+	int dismiss_x;       /* left edge of × button (set during render) */
+	int dismiss_w;       /* width of × button area */
 } xtext_status_item;
 
 /* Top toast overlay notifications */
@@ -166,6 +170,7 @@ typedef struct {
 	GHashTable *entries_by_msgid;	/* msgid string → textentry* for O(1) lookup */
 	GHashTable *entries_by_id;		/* entry_id → textentry* for O(1) lookup */
 	guint64 next_entry_id;			/* monotonic counter for generating entry IDs */
+	guint64 current_group_id;		/* non-zero during multiline output; entries inherit this */
 } xtext_buffer;
 
 typedef struct _xtext_emoji_cache xtext_emoji_cache;
@@ -263,6 +268,7 @@ struct _GtkXText
 	unsigned int word_select:1;
 	unsigned int line_select:1;
 	unsigned int button_down:1;
+	unsigned int press_handled:1;	/* button_press consumed the click (e.g. reply button) */
 	unsigned int dont_render:1;
 	unsigned int dont_render2:1;
 	unsigned int cursor_hand:1;
@@ -292,6 +298,33 @@ struct _GtkXText
 	int last_click_n_press;			/* number of clicks (1=single, 2=double, 3=triple) */
 	int last_click_x;				/* click x position for GTK4 popover menus */
 	int last_click_y;				/* click y position for GTK4 popover menus */
+
+	/* Reaction badge click callback */
+	char *reaction_click_msgid;		/* msgid of the message whose badge was clicked */
+	char *reaction_click_text;		/* reaction text that was clicked */
+	gboolean reaction_click_is_self;	/* whether user already has this reaction */
+	void (*reaction_click_cb) (GtkXText *xtext, const char *msgid, const char *reaction_text,
+	                           gboolean is_self, gpointer userdata);
+	gpointer reaction_click_userdata;
+
+	/* Hover buttons: reply, react-text, react-emoji */
+	textentry *hover_ent;			/* entry the mouse is currently over (NULL = none) */
+	textentry *hover_reply_target;	/* entry referenced by hovered reply context (NULL = none) */
+	int hover_btn_y;				/* top edge of hover button row */
+	int hover_btn_size;				/* individual button width/height */
+	int reply_btn_x;				/* left edge of reply button */
+	int react_text_btn_x;			/* left edge of react-text button */
+	int react_emoji_btn_x;			/* left edge of react-emoji button */
+	void (*reply_button_cb) (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata);
+	gpointer reply_button_userdata;
+	void (*react_text_button_cb) (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata);
+	gpointer react_text_button_userdata;
+	void (*react_emoji_button_cb) (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata);
+	gpointer react_emoji_button_userdata;
+
+	/* Flash highlight after scroll-to-entry */
+	textentry *flash_ent;			/* entry to highlight temporarily (NULL = none) */
+	guint flash_tag;				/* timeout source id for clearing flash */
 
 	/* Scroll-to-load (chathistory) support */
 	guint scroll_top_debounce_tag;	/* debounce timeout for scroll-to-top */
@@ -346,6 +379,8 @@ int gtk_xtext_lastlog (xtext_buffer *out, xtext_buffer *search_area);
 textentry *gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags flags, GError **err);
 void gtk_xtext_reset_marker_pos (GtkXText *xtext);
 int gtk_xtext_moveto_marker_pos (GtkXText *xtext);
+void gtk_xtext_scroll_to_entry (xtext_buffer *buf, textentry *target);
+void gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal);
 void gtk_xtext_set_marker_from_timestamp (xtext_buffer *buf, time_t timestamp);
 void gtk_xtext_check_marker_visibility(GtkXText *xtext);
 void gtk_xtext_set_marker_last (session *sess);
@@ -366,6 +401,10 @@ void gtk_xtext_set_urlcheck_function (GtkXText *xtext, int (*urlcheck_function) 
 void gtk_xtext_set_wordwrap (GtkXText *xtext, gboolean word_wrap);
 void gtk_xtext_set_scroll_to_top_callback (GtkXText *xtext, void (*callback) (GtkXText *, gpointer), gpointer userdata);
 void gtk_xtext_reset_scroll_top_backoff (GtkXText *xtext);
+void gtk_xtext_set_reply_button_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gpointer), gpointer userdata);
+void gtk_xtext_set_react_text_button_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gpointer), gpointer userdata);
+void gtk_xtext_set_react_emoji_button_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gpointer), gpointer userdata);
+void gtk_xtext_set_reaction_click_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gboolean, gpointer), gpointer userdata);
 
 xtext_buffer *gtk_xtext_buffer_new (GtkXText *xtext);
 void gtk_xtext_buffer_free (xtext_buffer *buf);
@@ -378,10 +417,17 @@ textentry *gtk_xtext_find_by_msgid (xtext_buffer *buf, const char *msgid);
 textentry *gtk_xtext_find_by_id (xtext_buffer *buf, guint64 entry_id);
 textentry *gtk_xtext_set_msgid (xtext_buffer *buf, textentry *ent, const char *msgid);
 
+/* Multiline grouping: entries created while group_id is set share the same value */
+void gtk_xtext_begin_group (xtext_buffer *buf);
+void gtk_xtext_end_group (xtext_buffer *buf);
+
 /* Bottom status strip */
 void gtk_xtext_status_set (GtkXText *xtext, const char *key, const char *text,
                            int priority, int timeout_ms);
 void gtk_xtext_status_remove (GtkXText *xtext, const char *key);
+void gtk_xtext_status_set_dismiss (GtkXText *xtext, const char *key,
+                                   void (*cb) (GtkXText *, const char *, gpointer),
+                                   gpointer userdata);
 void gtk_xtext_status_clear (GtkXText *xtext);
 
 /* Top toast overlay notifications */
@@ -396,6 +442,7 @@ const char *gtk_xtext_get_msgid (textentry *ent);
 textentry *gtk_xtext_buffer_get_last (xtext_buffer *buf);
 textentry *gtk_xtext_buffer_get_first (xtext_buffer *buf);
 textentry *gtk_xtext_entry_get_next (textentry *ent);
+textentry *gtk_xtext_entry_get_prev (textentry *ent);
 
 /* IRCv3 modernization: entry modification (Phase 4) */
 gboolean gtk_xtext_entry_set_text (xtext_buffer *buf, textentry *ent,
@@ -409,6 +456,26 @@ void gtk_xtext_entry_set_redaction_info (xtext_buffer *buf, textentry *ent,
                                          const char *original_str, int original_len,
                                          const char *redacted_by, const char *reason,
                                          time_t redact_time);
+
+/* IRCv3 reactions and reply context */
+struct xtext_reactions_info;
+struct xtext_reply_info;
+struct xtext_reaction;
+
+void gtk_xtext_entry_add_reaction (xtext_buffer *buf, textentry *ent,
+                                   const char *reaction_text, const char *nick,
+                                   gboolean is_self);
+void gtk_xtext_entry_remove_reaction (xtext_buffer *buf, textentry *ent,
+                                      const char *reaction_text, const char *nick);
+void gtk_xtext_entry_set_reply (xtext_buffer *buf, textentry *ent,
+                                const char *target_msgid, const char *target_nick,
+                                const char *target_preview, guint64 target_entry_id);
+const struct xtext_reply_info *gtk_xtext_entry_get_reply (textentry *ent);
+const struct xtext_reactions_info *gtk_xtext_entry_get_reactions (textentry *ent);
+gboolean gtk_xtext_entry_has_self_reaction (textentry *ent, const char *reaction_text);
+
+/* Lookup entry by click position (for context menus) */
+textentry *gtk_xtext_get_entry_at_y (GtkXText *xtext, int y);
 
 /* Read accessors (textentry is opaque outside xtext.c) */
 const unsigned char *gtk_xtext_entry_get_str (textentry *ent);

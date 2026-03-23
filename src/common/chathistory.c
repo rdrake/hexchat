@@ -447,10 +447,12 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 		/* Set current_msgid directly for ALL message types including events.
 		 * Only inbound_chanmsg/inbound_action set this from tags_data,
 		 * but events (JOIN/PART/etc) also need their msgids captured. */
-		sess->current_msgid = msg->msgid;
+		g_free (sess->current_msgid);
+		sess->current_msgid = g_strdup (msg->msgid);
 	}
 	else
 	{
+		g_free (sess->current_msgid);
 		sess->current_msgid = NULL;
 	}
 
@@ -490,8 +492,14 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 			}
 			else
 			{
+				/* If text contains \n it was collapsed from a draft/multiline
+				 * batch — keep it as a single entry instead of splitting */
+				if (strchr (text, '\n'))
+					fe_begin_multiline_group (sess);
 				inbound_chanmsg (serv, sess, sess->channel, nick, text,
 				                 FALSE, 0, &tags_data);
+				if (strchr (text, '\n'))
+					fe_end_multiline_group (sess);
 			}
 		}
 	}

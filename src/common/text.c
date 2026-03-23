@@ -158,6 +158,61 @@ scrollback_save_msg (session *sess, char *text, time_t stamp, const char *msgid)
 	scrollback_db_save (db, sess->channel, stamp, msgid, text);
 }
 
+/* Update a pending scrollback entry's placeholder msgid to the real server msgid.
+ * Called from the echo_confirmed path — the entry was saved with "pending:<label>"
+ * and now we know the real msgid from the server echo. */
+void
+scrollback_confirm_pending (session *sess, const char *label, const char *real_msgid)
+{
+	scrollback_db *db;
+	char *pending_key;
+
+	if (!sess || !label || !label[0] || !real_msgid || !real_msgid[0])
+		return;
+
+	db = get_scrollback_db (sess);
+	if (!db)
+		return;
+
+	pending_key = g_strdup_printf ("pending:%s", label);
+	if (!scrollback_update_pending_msgid (db, sess->channel, pending_key, real_msgid))
+		g_warning ("scrollback_confirm_pending: UPDATE failed for %s -> %s (channel %s)",
+		           pending_key, real_msgid, sess->channel);
+	g_free (pending_key);
+}
+
+/* IRCv3 reactions: persist to scrollback */
+void
+scrollback_save_reaction_for_session (session *sess, const char *target_msgid,
+                                      const char *reaction_text, const char *nick,
+                                      gboolean is_self)
+{
+	scrollback_db *db = get_scrollback_db (sess);
+	if (db && sess->channel[0])
+		scrollback_save_reaction (db, sess->channel, target_msgid,
+		                          reaction_text, nick, is_self, time (0));
+}
+
+void
+scrollback_remove_reaction_for_session (session *sess, const char *target_msgid,
+                                        const char *reaction_text, const char *nick)
+{
+	scrollback_db *db = get_scrollback_db (sess);
+	if (db)
+		scrollback_remove_reaction (db, target_msgid, reaction_text, nick);
+}
+
+/* IRCv3 replies: persist reply context to scrollback */
+void
+scrollback_save_reply_for_session (session *sess, const char *msgid,
+                                   const char *target_msgid, const char *target_nick,
+                                   const char *target_preview)
+{
+	scrollback_db *db = get_scrollback_db (sess);
+	if (db)
+		scrollback_save_reply (db, msgid, target_msgid, target_nick, target_preview);
+}
+
 void
 scrollback_load (session *sess)
 {
@@ -201,20 +256,43 @@ scrollback_load (session *sess)
 
 		if (msg->text && msg->text[0])
 		{
-			if (prefs.hex_text_stripcolor_replay)
-			{
-				char *stripped = strip_color (msg->text, -1, STRIP_COLOR);
-				fe_print_text (sess, stripped, msg->timestamp, TRUE);
-				g_free (stripped);
-			}
+			/* Set current_msgid so fe_print_text attaches it to the xtext entry.
+			 * Must clear between messages so system messages (Disconnected etc.)
+			 * don't inherit the previous message's msgid. */
+			g_free (sess->current_msgid);
+			if (msg->msgid && msg->msgid[0] &&
+			    strncmp (msg->msgid, "pending:", 8) != 0)
+				sess->current_msgid = g_strdup (msg->msgid);
 			else
+				sess->current_msgid = NULL;
+
+			/* Multiline messages (from draft/multiline batches) have embedded
+			 * \n in the saved text.  Wrap with multiline group so fe_print_text
+			 * keeps them as a single entry instead of splitting. */
 			{
-				fe_print_text (sess, msg->text, msg->timestamp, TRUE);
+				const char *display_text = msg->text;
+				char *stripped = NULL;
+				gboolean has_nl;
+
+				if (prefs.hex_text_stripcolor_replay)
+				{
+					stripped = strip_color (msg->text, -1, STRIP_COLOR);
+					display_text = stripped;
+				}
+
+				has_nl = (strchr (display_text, '\n') != NULL);
+				if (has_nl)
+					fe_begin_multiline_group (sess);
+				fe_print_text (sess, (char *)display_text, msg->timestamp, TRUE);
+				if (has_nl)
+					fe_end_multiline_group (sess);
+				g_free (stripped);
 			}
 		}
 
 		/* Track msgid+timestamp for deduplication with CHATHISTORY */
-		if (msg->msgid && msg->msgid[0])
+		if (msg->msgid && msg->msgid[0] &&
+		    strncmp (msg->msgid, "pending:", 8) != 0)
 			chathistory_track_msgid_ts (sess, msg->msgid, msg->timestamp, TRUE);
 
 		/* Track newest time for the "Loaded log from" message */
@@ -237,6 +315,36 @@ scrollback_load (session *sess)
 	}
 
 	scrollback_msg_list_free (messages);
+
+	/* Re-attach persisted reactions and reply contexts to loaded entries */
+	if (lines > 0)
+	{
+		GSList *reactions = scrollback_load_reactions (db, sess->channel);
+		GSList *replies = scrollback_load_replies (db, sess->channel);
+		GSList *iter;
+
+		for (iter = reactions; iter; iter = iter->next)
+		{
+			scrollback_reaction *r = iter->data;
+			fe_reaction_received (sess, r->target_msgid, r->reaction_text,
+			                      r->nick, r->is_self);
+		}
+
+		for (iter = replies; iter; iter = iter->next)
+		{
+			scrollback_reply *rp = iter->data;
+			/* fe_reply_context_set works on the last entry, but we need
+			 * to target a specific entry by its msgid. Use direct fe call. */
+			fe_scrollback_reply_attach (sess, rp->msgid, rp->target_msgid,
+			                            rp->target_nick, rp->target_preview);
+		}
+
+		scrollback_reaction_list_free (reactions);
+		scrollback_reply_list_free (replies);
+
+		/* Recalculate total line count after adding extra lines */
+		fe_scrollback_extras_done (sess);
+	}
 
 	if (lines)
 	{
@@ -759,11 +867,11 @@ PrintTextTimeStamp (session *sess, char *text, time_t timestamp)
 	{
 		log_write (sess, text, timestamp);
 		scrollback_save_msg (sess, text, timestamp, sess->current_msgid);
-		/* Clear current_msgid after use to prevent stale pointer access.
-		 * The pointer is borrowed from tags_data which may go out of scope. */
-		sess->current_msgid = NULL;
 	}
 	fe_print_text (sess, text, timestamp, FALSE);
+	/* Clear current_msgid after fe_print_text so the GUI can attach it to the entry. */
+	g_free (sess->current_msgid);
+	sess->current_msgid = NULL;
 	g_free (text);
 }
 

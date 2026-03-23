@@ -1046,8 +1046,9 @@ mg_populate (session *sess)
 
 	gtk_xtext_buffer_show (GTK_XTEXT (gui->xtext), res->buffer, render);
 
-	/* Update typing indicator strip for this tab */
+	/* Update typing indicator strip and reply state for this tab */
 	fe_typing_update (sess);
+	fe_reply_state_changed (sess);
 
 	if (gui->is_tab)
 		gtk_widget_set_sensitive (gui->menu, TRUE);
@@ -2671,6 +2672,138 @@ mg_scroll_to_top_cb (GtkXText *xtext, gpointer userdata)
 	}
 }
 
+/* Clear react-with-text state */
+static void
+mg_clear_react_state (session *sess)
+{
+	g_clear_pointer (&sess->react_target_msgid, g_free);
+	g_clear_pointer (&sess->react_target_nick, g_free);
+}
+
+/* Clear reply state */
+static void
+mg_clear_reply_state (session *sess)
+{
+	g_clear_pointer (&sess->reply_msgid, g_free);
+	g_clear_pointer (&sess->reply_nick, g_free);
+}
+
+/* Hover reply button clicked — set reply state on session */
+static void
+mg_reply_button_cb (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata)
+{
+	session *sess = current_sess;
+	(void)xtext;
+	(void)userdata;
+
+	if (!sess)
+		return;
+
+	mg_clear_react_state (sess);  /* mutually exclusive */
+	g_free (sess->reply_msgid);
+	sess->reply_msgid = g_strdup (msgid);
+	g_free (sess->reply_nick);
+	sess->reply_nick = g_strdup (nick);
+	fe_reply_state_changed (sess);
+
+	if (sess->gui && sess->gui->input_box)
+		gtk_widget_grab_focus (sess->gui->input_box);
+}
+
+/* Hover react-text button clicked — set react-with-text state on session */
+static void
+mg_react_text_button_cb (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata)
+{
+	session *sess = current_sess;
+	(void)xtext;
+	(void)userdata;
+
+	if (!sess)
+		return;
+
+	mg_clear_reply_state (sess);  /* mutually exclusive */
+	g_free (sess->react_target_msgid);
+	sess->react_target_msgid = g_strdup (msgid);
+	g_free (sess->react_target_nick);
+	sess->react_target_nick = g_strdup (nick);
+	fe_reply_state_changed (sess);
+
+	if (sess->gui && sess->gui->input_box)
+		gtk_widget_grab_focus (sess->gui->input_box);
+}
+
+/* Emoji picked from hover react-emoji button */
+static void
+mg_react_emoji_picked_cb (GtkWidget *chooser, const char *emoji, gpointer user_data)
+{
+	session *sess = current_sess;
+	(void)user_data;
+
+	gtk_popover_popdown (GTK_POPOVER (chooser));
+
+	if (sess && sess->react_target_msgid && sess->server && sess->server->connected)
+	{
+		char *cmd = g_strdup_printf ("REACT %s %s", emoji, sess->react_target_msgid);
+		handle_command (sess, cmd, FALSE);
+		g_free (cmd);
+	}
+
+	if (sess)
+		g_clear_pointer (&sess->react_target_msgid, g_free);
+}
+
+/* Hover react-emoji button clicked — open emoji picker */
+static void
+mg_react_emoji_button_cb (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata)
+{
+	session *sess = current_sess;
+	GtkWidget *chooser;
+	(void)userdata;
+	(void)nick;
+
+	if (!sess || !sess->server || !sess->server->have_message_tags)
+		return;
+
+	g_free (sess->react_target_msgid);
+	sess->react_target_msgid = g_strdup (msgid);
+
+	chooser = hex_emoji_chooser_new ();
+	if (xtext->emoji_cache)
+		hex_emoji_chooser_set_emoji_cache (HEX_EMOJI_CHOOSER (chooser), xtext->emoji_cache);
+	gtk_widget_set_parent (chooser, GTK_WIDGET (xtext));
+	gtk_popover_set_pointing_to (GTK_POPOVER (chooser),
+	                             &(GdkRectangle){ xtext->react_emoji_btn_x, xtext->hover_btn_y, 1, 1 });
+	g_signal_connect (chooser, "emoji-picked", G_CALLBACK (mg_react_emoji_picked_cb), NULL);
+	gtk_popover_popup (GTK_POPOVER (chooser));
+}
+
+/* Reaction badge clicked — toggle reaction on/off */
+static void
+mg_reaction_click_cb (GtkXText *xtext, const char *msgid, const char *reaction_text,
+                      gboolean is_self, gpointer userdata)
+{
+	session *sess = current_sess;
+	(void)xtext;
+	(void)userdata;
+
+	if (!sess || !sess->server || !sess->server->connected ||
+	    !sess->server->have_message_tags || !sess->channel[0])
+		return;
+
+	if (is_self)
+	{
+		char *cmd = g_strdup_printf ("UNREACT %s %s", reaction_text, msgid);
+		handle_command (sess, cmd, FALSE);
+		g_free (cmd);
+	}
+	else
+	{
+		char *cmd = g_strdup_printf ("REACT %s %s", reaction_text, msgid);
+		handle_command (sess, cmd, FALSE);
+		g_free (cmd);
+	}
+}
+
 /* mouse click inside text area */
 
 static void
@@ -2819,6 +2952,10 @@ mg_create_textarea (session *sess, GtkWidget *box)
 	gtk_xtext_set_urlcheck_function (xtext, mg_word_check);
 	gtk_xtext_set_max_lines (xtext, prefs.hex_text_max_lines);
 	gtk_xtext_set_scroll_to_top_callback (xtext, mg_scroll_to_top_cb, NULL);
+	gtk_xtext_set_reply_button_callback (xtext, mg_reply_button_cb, NULL);
+	gtk_xtext_set_react_text_button_callback (xtext, mg_react_text_button_cb, NULL);
+	gtk_xtext_set_react_emoji_button_callback (xtext, mg_react_emoji_button_cb, NULL);
+	gtk_xtext_set_reaction_click_callback (xtext, mg_reaction_click_cb, NULL);
 	gtk_frame_set_child (GTK_FRAME (frame), GTK_WIDGET (xtext));
 
 	mg_update_xtext (GTK_WIDGET (xtext));
@@ -3706,10 +3843,55 @@ mg_emoji_picked (HexEmojiChooser *chooser, const char *text, session_gui *gui)
 }
 
 static void
+reply_bar_close_cb (GtkButton *button, gpointer user_data)
+{
+	session *sess = current_sess;
+
+	mg_clear_reply_state (sess);
+	mg_clear_react_state (sess);
+	fe_reply_state_changed (sess);
+
+	/* Return focus to input box */
+	if (sess->gui && sess->gui->input_box)
+		gtk_widget_grab_focus (sess->gui->input_box);
+}
+
+static void
 mg_create_entry (session *sess, GtkWidget *box)
 {
 	GtkWidget *hbox, *but, *entry;
 	session_gui *gui = sess->gui;
+
+	/* IRCv3 reply bar: "Replying to <nick>" indicator above input.
+	 * Hidden by default, shown when user activates Reply from context menu. */
+	{
+		GtkWidget *reply_hbox, *reply_label, *reply_close;
+
+		reply_hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+		gtk_widget_add_css_class (reply_hbox, "reply-bar");
+		gtk_widget_set_margin_start (reply_hbox, 4);
+		gtk_widget_set_margin_end (reply_hbox, 4);
+
+		reply_label = gtk_label_new ("");
+		gtk_label_set_ellipsize (GTK_LABEL (reply_label), PANGO_ELLIPSIZE_END);
+		gtk_widget_set_hexpand (reply_label, TRUE);
+		gtk_label_set_xalign (GTK_LABEL (reply_label), 0.0);
+		gtk_box_append (GTK_BOX (reply_hbox), reply_label);
+
+		reply_close = gtk_button_new_from_icon_name ("window-close-symbolic");
+		gtk_button_set_has_frame (GTK_BUTTON (reply_close), FALSE);
+		gtk_widget_set_can_focus (reply_close, FALSE);
+		gtk_widget_set_tooltip_text (reply_close, _("Cancel reply"));
+		gtk_box_append (GTK_BOX (reply_hbox), reply_close);
+
+		g_object_set_data (G_OBJECT (reply_hbox), "reply-label", reply_label);
+		g_object_set_data (G_OBJECT (reply_hbox), "reply-close", reply_close);
+		g_signal_connect (reply_close, "clicked", G_CALLBACK (reply_bar_close_cb), NULL);
+		gui->reply_bar = reply_hbox;
+
+		gtk_widget_set_visible (reply_hbox, FALSE);
+		gtk_box_append (GTK_BOX (box), reply_hbox);
+	}
 
 	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_box_append (GTK_BOX (box), hbox);
