@@ -50,6 +50,9 @@ void scrollback_save_reply_for_session (session *sess, const char *msgid,
                                         const char *target_msgid, const char *target_nick,
                                         const char *target_preview);
 void scrollback_confirm_pending (session *sess, const char *label, const char *real_msgid);
+void scrollback_redact_for_session (session *sess, const char *msgid,
+                                    const char *redacted_by, const char *reason,
+                                    time_t redact_time);
 
 int text_word_check (char *word, int len);
 void PrintText (session *sess, char *text);

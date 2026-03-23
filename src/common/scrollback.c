@@ -54,6 +54,7 @@ struct scrollback_db {
 	sqlite3_stmt *stmt_save_reply;
 	sqlite3_stmt *stmt_load_reply;
 	sqlite3_stmt *stmt_update_pending;
+	sqlite3_stmt *stmt_redact;
 };
 
 /* Hash table of open databases: network -> scrollback_db */
@@ -119,7 +120,10 @@ init_database (scrollback_db *sdb)
 		"    channel TEXT NOT NULL,"
 		"    timestamp INTEGER NOT NULL,"
 		"    msgid TEXT,"
-		"    text TEXT NOT NULL"
+		"    text TEXT NOT NULL,"
+		"    redacted_by TEXT,"
+		"    redact_reason TEXT,"
+		"    redact_time INTEGER"
 		");"
 		"CREATE INDEX IF NOT EXISTS idx_channel_time ON messages(channel, timestamp);"
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_msgid ON messages(msgid) WHERE msgid IS NOT NULL;"
@@ -178,8 +182,8 @@ prepare_statements (scrollback_db *sdb)
 
 	/* Load statement - get newest N messages in chronological order */
 	rc = sqlite3_prepare_v2 (sdb->db,
-		"SELECT id, channel, timestamp, msgid, text FROM messages "
-		"WHERE channel = ? ORDER BY timestamp DESC LIMIT ?",
+		"SELECT id, channel, timestamp, msgid, text, redacted_by, redact_reason, redact_time "
+		"FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT ?",
 		-1, &sdb->stmt_load, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
@@ -256,6 +260,13 @@ prepare_statements (scrollback_db *sdb)
 		-1, &sdb->stmt_update_pending, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
+	/* Redact: mark a message as redacted by msgid */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"UPDATE messages SET redacted_by = ?, redact_reason = ?, redact_time = ? "
+		"WHERE msgid = ?",
+		-1, &sdb->stmt_redact, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
 	return TRUE;
 
 fail:
@@ -279,6 +290,7 @@ finalize_statements (scrollback_db *sdb)
 	if (sdb->stmt_save_reply) sqlite3_finalize (sdb->stmt_save_reply);
 	if (sdb->stmt_load_reply) sqlite3_finalize (sdb->stmt_load_reply);
 	if (sdb->stmt_update_pending) sqlite3_finalize (sdb->stmt_update_pending);
+	if (sdb->stmt_redact) sqlite3_finalize (sdb->stmt_redact);
 }
 
 scrollback_db *
@@ -438,6 +450,14 @@ scrollback_db_load (scrollback_db *db, const char *channel, int limit)
 
 		msg->text = g_strdup ((const char *)sqlite3_column_text (db->stmt_load, 4));
 
+		{
+			const char *rby = (const char *)sqlite3_column_text (db->stmt_load, 5);
+			const char *rreason = (const char *)sqlite3_column_text (db->stmt_load, 6);
+			msg->redacted_by = rby ? g_strdup (rby) : NULL;
+			msg->redact_reason = rreason ? g_strdup (rreason) : NULL;
+			msg->redact_time = (time_t)sqlite3_column_int64 (db->stmt_load, 7);
+		}
+
 		/* Prepend to get correct order (query returns DESC, we want ASC) */
 		list = g_slist_prepend (list, msg);
 	}
@@ -546,6 +566,29 @@ scrollback_update_pending_msgid (scrollback_db *db, const char *channel,
 	return (rc == SQLITE_DONE && sqlite3_changes (db->db) > 0);
 }
 
+gboolean
+scrollback_redact_message (scrollback_db *db, const char *msgid,
+                           const char *redacted_by, const char *reason,
+                           time_t redact_time)
+{
+	int rc;
+
+	if (!db || !db->stmt_redact || !msgid)
+		return FALSE;
+
+	sqlite3_reset (db->stmt_redact);
+	sqlite3_bind_text (db->stmt_redact, 1, redacted_by ? redacted_by : "unknown", -1, SQLITE_TRANSIENT);
+	if (reason)
+		sqlite3_bind_text (db->stmt_redact, 2, reason, -1, SQLITE_TRANSIENT);
+	else
+		sqlite3_bind_null (db->stmt_redact, 2);
+	sqlite3_bind_int64 (db->stmt_redact, 3, (sqlite3_int64) redact_time);
+	sqlite3_bind_text (db->stmt_redact, 4, msgid, -1, SQLITE_TRANSIENT);
+
+	rc = sqlite3_step (db->stmt_redact);
+	return (rc == SQLITE_DONE && sqlite3_changes (db->db) > 0);
+}
+
 void
 scrollback_clear (scrollback_db *db, const char *channel)
 {
@@ -566,6 +609,8 @@ scrollback_msg_free (scrollback_msg *msg)
 	g_free (msg->channel);
 	g_free (msg->msgid);
 	g_free (msg->text);
+	g_free (msg->redacted_by);
+	g_free (msg->redact_reason);
 	g_free (msg);
 }
 

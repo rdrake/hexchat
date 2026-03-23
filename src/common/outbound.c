@@ -2657,6 +2657,30 @@ cmd_redact (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	const char *msgid = NULL;
 	const char *reason = NULL;
 
+	/* Parse arguments: /REDACT [target] [msgid] [reason] */
+	if (word[2][0] && word[3][0])
+	{
+		/* Full form: /REDACT <target> <msgid> [reason] */
+		target = word[2];
+		msgid = word[3];
+		if (word_eol[4][0])
+			reason = word_eol[4];
+	}
+	else
+	{
+		/* Missing msgid — enter picker mode to click a message */
+		target = word[2][0] ? word[2] : sess->channel;
+		if (!target[0])
+		{
+			PrintText (sess, "Usage: /REDACT [target] [msgid] [reason]\n");
+			return TRUE;
+		}
+		g_free (sess->picker_pending_cmd);
+		sess->picker_pending_cmd = g_strdup_printf ("REDACT %s %%s", target);
+		fe_reply_state_changed (sess);
+		return TRUE;
+	}
+
 	/* Check if redaction is available */
 	if (!serv->have_redact)
 	{
@@ -2669,18 +2693,6 @@ cmd_redact (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 		notc_msg (sess);
 		return TRUE;
 	}
-
-	/* Parse arguments: /REDACT <target> <msgid> [reason] */
-	if (!word[2][0] || !word[3][0])
-	{
-		PrintText (sess, "Usage: /REDACT <target> <msgid> [reason]\n");
-		return TRUE;
-	}
-
-	target = word[2];
-	msgid = word[3];
-	if (word_eol[4][0])
-		reason = word_eol[4];
 
 	/* Send REDACT command */
 	if (reason && *reason)
@@ -4951,9 +4963,9 @@ const struct commands xc_cmds[] = {
 	{"RECONNECT", cmd_reconnect, 0, 0, 1,
 	 N_("RECONNECT [<host>] [<port>] [<password>], Can be called just as /RECONNECT to reconnect to the current server or with /RECONNECT ALL to reconnect to all the open servers")},
 #endif
-	{"REDACT", cmd_redact, 1, 0, 1,
-	 N_("REDACT <target> <msgid> [reason], redacts/deletes a message (IRCv3)")},
 	{"RECV", cmd_recv, 1, 0, 1, N_("RECV <text>, send raw data to HexChat, as if it was received from the IRC server")},
+	{"REDACT", cmd_redact, 1, 0, 1,
+	 N_("REDACT [target] [msgid] [reason], redacts/deletes a message (IRCv3)")},
 	{"REGISTER", cmd_register, 1, 0, 1, N_("REGISTER <account> [<email>|*] <password>, register a new account on the server (requires draft/account-registration)")},
 	{"RELOAD", cmd_reload, 0, 0, 1, N_("RELOAD <name>, reloads a plugin or script")},
 	{"REPLY", cmd_reply, 1, 0, 1,

@@ -34,7 +34,9 @@
 typedef enum {
 	XTEXT_STATE_NORMAL   = 0,
 	XTEXT_STATE_PENDING  = 1,	/* Echo-message: awaiting server confirmation */
-	XTEXT_STATE_REDACTED = 2	/* Message-redaction: content replaced */
+	XTEXT_STATE_REDACTED = 2,	/* Message-redaction: content replaced */
+	XTEXT_STATE_REDACTED_PROMPT  = 3,	/* "Click again to reveal" prompt shown */
+	XTEXT_STATE_REDACTED_REVEALED = 4	/* Original content revealed */
 } xtext_entry_state;
 
 typedef struct _GtkXText GtkXText;
@@ -322,6 +324,10 @@ struct _GtkXText
 	void (*react_emoji_button_cb) (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata);
 	gpointer react_emoji_button_userdata;
 
+	/* Picker mode: click a message to grab its msgid */
+	void (*picker_click_cb) (GtkXText *xtext, const char *msgid, gpointer userdata);
+	gpointer picker_click_userdata;
+
 	/* Flash highlight after scroll-to-entry */
 	textentry *flash_ent;			/* entry to highlight temporarily (NULL = none) */
 	guint flash_tag;				/* timeout source id for clearing flash */
@@ -405,6 +411,7 @@ void gtk_xtext_set_reply_button_callback (GtkXText *xtext, void (*callback) (Gtk
 void gtk_xtext_set_react_text_button_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gpointer), gpointer userdata);
 void gtk_xtext_set_react_emoji_button_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gpointer), gpointer userdata);
 void gtk_xtext_set_reaction_click_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gboolean, gpointer), gpointer userdata);
+void gtk_xtext_set_picker_click_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, gpointer), gpointer userdata);
 
 xtext_buffer *gtk_xtext_buffer_new (GtkXText *xtext);
 void gtk_xtext_buffer_free (xtext_buffer *buf);

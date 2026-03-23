@@ -38,6 +38,7 @@
 #include "../common/hexchatc.h"
 #include "../common/plugin.h"
 #include "../common/server.h"
+#include "../common/outbound.h"
 #include "../common/url.h"
 #include "gtkutil.h"
 #include "maingui.h"
@@ -473,20 +474,23 @@ apply_tree_css (void)
 	 * ID selectors for chanview/userlist; class selector for dialog list views. */
 	g_snprintf (css_buf, sizeof (css_buf),
 		/* Chanview tree (GtkListView) */
-		"#hexchat-tree { "
+		"#hexchat-tree, "
+		"#hexchat-tree row { "
 		"  background-color: rgb(%d, %d, %d); "
 		"  color: rgb(%d, %d, %d); "
 		"  font-family: \"%s\"; "
 		"  font-size: %dpt; "
 		"} "
-		"#hexchat-tree > row:selected { "
+		"#hexchat-tree row:selected { "
 		"  background-color: rgb(%d, %d, %d); "
 		"} "
-		"#hexchat-tree > row:selected label { "
+		"#hexchat-tree row:selected label { "
 		"  color: rgb(%d, %d, %d); "
 		"} "
 		/* Userlist (GtkColumnView) */
-		"#hexchat-userlist { "
+		"#hexchat-userlist, "
+		"#hexchat-userlist listview, "
+		"#hexchat-userlist row { "
 		"  background-color: rgb(%d, %d, %d); "
 		"  color: rgb(%d, %d, %d); "
 		"  font-family: \"%s\"; "
@@ -499,7 +503,9 @@ apply_tree_css (void)
 		"  color: rgb(%d, %d, %d); "
 		"} "
 		/* Dialog list/column views named hexchat-list */
-		"#hexchat-list { "
+		"#hexchat-list, "
+		"#hexchat-list listview, "
+		"#hexchat-list row { "
 		"  background-color: rgb(%d, %d, %d); "
 		"  color: rgb(%d, %d, %d); "
 		"} "
@@ -1170,7 +1176,20 @@ fe_redact_message (session *sess, const char *msgid,
 	xtext_buffer *buf = sess->res->buffer;
 
 	ent = gtk_xtext_find_by_msgid (buf, msgid);
-	if (!ent || gtk_xtext_entry_get_state (ent) == XTEXT_STATE_REDACTED)
+	if (!ent)
+	{
+		/* Original message not loaded — show a notice at the redact time */
+		if (reason && *reason)
+			PrintTextTimeStampf (sess, redact_time,
+			                     "\017*\t[Message redacted by %s: %s]\n",
+			                     redacted_by, reason);
+		else
+			PrintTextTimeStampf (sess, redact_time,
+			                     "\017*\t[Message redacted by %s]\n",
+			                     redacted_by);
+		return;
+	}
+	if (gtk_xtext_entry_get_state (ent) == XTEXT_STATE_REDACTED)
 		return;
 
 	/* Preserve original content for accountability */
@@ -2228,7 +2247,33 @@ fe_reply_dismiss_cb (GtkXText *xtext, const char *key, gpointer userdata)
 	g_clear_pointer (&sess->reply_nick, g_free);
 	g_clear_pointer (&sess->react_target_msgid, g_free);
 	g_clear_pointer (&sess->react_target_nick, g_free);
+	g_clear_pointer (&sess->picker_pending_cmd, g_free);
 	fe_reply_state_changed (sess);
+}
+
+static void
+fe_picker_click_cb (GtkXText *xtext, const char *msgid, gpointer userdata)
+{
+	session *sess = current_sess;
+	(void)xtext;
+	(void)userdata;
+
+	if (!sess || !sess->picker_pending_cmd)
+		return;
+
+	if (!msgid || !*msgid)
+	{
+		PrintText (sess, _("This message has no message ID.\n"));
+		return;
+	}
+
+	{
+		char *cmd = g_strdup_printf (sess->picker_pending_cmd, msgid);
+		g_clear_pointer (&sess->picker_pending_cmd, g_free);
+		fe_reply_state_changed (sess);
+		handle_command (sess, cmd, FALSE);
+		g_free (cmd);
+	}
 }
 
 void
@@ -2241,23 +2286,35 @@ fe_reply_state_changed (session *sess)
 
 	xtext = GTK_XTEXT (sess->gui->xtext);
 
-	if (sess->react_target_msgid && sess->react_target_nick)
+	if (sess->picker_pending_cmd)
 	{
-		char *text = g_strdup_printf (_("\xf0\x9f\x92\xac Reacting to %s"), sess->react_target_nick);
-		gtk_xtext_status_set (xtext, "reply", text, 10, 0);
+		gtk_xtext_status_set (xtext, "reply",
+		                       _("\xf0\x9f\x94\x8d Click a message to select its ID"),
+		                       10, 0);
 		gtk_xtext_status_set_dismiss (xtext, "reply", fe_reply_dismiss_cb, NULL);
-		g_free (text);
-	}
-	else if (sess->reply_msgid && sess->reply_nick)
-	{
-		char *text = g_strdup_printf (_("\xe2\x86\xa9 Replying to %s"), sess->reply_nick);
-		gtk_xtext_status_set (xtext, "reply", text, 10, 0);
-		gtk_xtext_status_set_dismiss (xtext, "reply", fe_reply_dismiss_cb, NULL);
-		g_free (text);
+		gtk_xtext_set_picker_click_callback (xtext, fe_picker_click_cb, NULL);
 	}
 	else
 	{
-		gtk_xtext_status_remove (xtext, "reply");
+		gtk_xtext_set_picker_click_callback (xtext, NULL, NULL);
+		if (sess->react_target_msgid && sess->react_target_nick)
+		{
+			char *text = g_strdup_printf (_("\xf0\x9f\x92\xac Reacting to %s"), sess->react_target_nick);
+			gtk_xtext_status_set (xtext, "reply", text, 10, 0);
+			gtk_xtext_status_set_dismiss (xtext, "reply", fe_reply_dismiss_cb, NULL);
+			g_free (text);
+		}
+		else if (sess->reply_msgid && sess->reply_nick)
+		{
+			char *text = g_strdup_printf (_("\xe2\x86\xa9 Replying to %s"), sess->reply_nick);
+			gtk_xtext_status_set (xtext, "reply", text, 10, 0);
+			gtk_xtext_status_set_dismiss (xtext, "reply", fe_reply_dismiss_cb, NULL);
+			g_free (text);
+		}
+		else
+		{
+			gtk_xtext_status_remove (xtext, "reply");
+		}
 	}
 }
 

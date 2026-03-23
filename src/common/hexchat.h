@@ -487,6 +487,7 @@ typedef struct session
 	char *reply_nick;				/* nick of the message we're replying to */
 	char *react_target_msgid;		/* msgid for pending reaction (cleared after send) */
 	char *react_target_nick;		/* nick of the message we're reacting to */
+	char *picker_pending_cmd;		/* command template with %s for msgid (NULL = no picker active) */
 } session;
 
 /* SASL Mechanisms */

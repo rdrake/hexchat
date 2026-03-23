@@ -38,6 +38,10 @@
 
 /* Forward declarations */
 static void schedule_background_fetch (session *sess);
+static void chathistory_replay_mode (session *sess, char *nick,
+                                     char *mode_str, char **params,
+                                     int param_count,
+                                     const message_tags_data *tags_data);
 
 /* Get effective limit for a CHATHISTORY request.
  * Prefers the server-advertised ISUPPORT CHATHISTORY=N value (the server is
@@ -412,6 +416,307 @@ chathistory_cancel_catchup (session *sess)
 	chathistory_stop_background_fetch (sess);
 }
 
+/* Determine if a channel mode takes an argument, replicating modes.c logic.
+ * type A (list modes like b,e,I) always take args.
+ * type B (like k) always take args.
+ * type C (like l) take args on + only.
+ * type D (like n,t) never take args.
+ * Nick modes (o,v,h,etc) always take args. */
+static int
+chathistory_mode_has_arg (server *serv, char sign, char mode)
+{
+	char *cm;
+	int type = 0;
+
+	/* nick modes always have an arg */
+	if (serv->nick_modes[0] && strchr (serv->nick_modes, mode))
+		return 1;
+
+	/* check CHANMODES= sections (comma-separated: A,B,C,D) */
+	cm = serv->chanmodes;
+	if (cm)
+	{
+		while (*cm)
+		{
+			if (*cm == ',')
+				type++;
+			else if (*cm == mode)
+			{
+				switch (type)
+				{
+				case 0: /* type A - list modes */
+				case 1: /* type B - always has arg */
+					return 1;
+				case 2: /* type C - arg on + only */
+					return (sign == '+') ? 1 : 0;
+				default: /* type D - no arg */
+					return 0;
+				}
+			}
+			cm++;
+		}
+	}
+
+	return 0;
+}
+
+/* Check if 'q' is a list-type chanmode (quiet) on this server,
+ * as opposed to owner prefix mode. */
+static gboolean
+chathistory_server_supports_quiet (server *serv)
+{
+	char *cm = serv->chanmodes;
+	if (!cm)
+		return FALSE;
+	/* q must appear before the first comma (type A = list modes) */
+	while (*cm && *cm != ',')
+	{
+		if (*cm == 'q')
+			return TRUE;
+		cm++;
+	}
+	return FALSE;
+}
+
+/* Replay a MODE message from chathistory using per-mode text events.
+ * This is display-only — no nicklist or channel state updates. */
+static void
+chathistory_replay_mode (session *sess, char *nick, char *mode_str,
+                         char **params, int param_count,
+                         const message_tags_data *tags_data)
+{
+	server *serv = sess->server;
+	char sign = '+';
+	int arg_idx = 2;  /* params[0]=target, params[1]=modes, params[2..]=args */
+	char *op = NULL, *deop = NULL, *voice = NULL, *devoice = NULL;
+	gboolean supportsq = chathistory_server_supports_quiet (serv);
+
+	while (*mode_str)
+	{
+		if (*mode_str == '+' || *mode_str == '-')
+		{
+			/* Flush batched modes at sign change */
+			if (op)
+			{
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANOP, sess, nick, op,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				g_free (op); op = NULL;
+			}
+			if (deop)
+			{
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANDEOP, sess, nick, deop,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				g_free (deop); deop = NULL;
+			}
+			if (voice)
+			{
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANVOICE, sess, nick, voice,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				g_free (voice); voice = NULL;
+			}
+			if (devoice)
+			{
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANDEVOICE, sess, nick, devoice,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				g_free (devoice); devoice = NULL;
+			}
+			sign = *mode_str;
+			mode_str++;
+			continue;
+		}
+
+		char mode = *mode_str;
+		char *arg = "";
+
+		/* Consume argument if this mode takes one */
+		if (chathistory_mode_has_arg (serv, sign, mode) &&
+		    arg_idx < param_count && params[arg_idx])
+		{
+			arg = params[arg_idx];
+			if (*arg == ':')
+				arg++;
+			arg_idx++;
+		}
+
+		/* Dispatch to per-mode text events */
+		switch (sign)
+		{
+		case '+':
+			switch (mode)
+			{
+			case 'b':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANBAN, sess, nick, arg,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'e':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANEXEMPT, sess, nick, arg,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'I':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANINVITE, sess, nick, arg,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'k':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANSETKEY, sess, nick, arg,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'l':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANSETLIMIT, sess, nick, arg,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'o':
+				if (op)
+				{
+					char *tmp = g_strconcat (op, " ", arg, NULL);
+					g_free (op);
+					op = tmp;
+				}
+				else
+					op = g_strdup (arg);
+				break;
+			case 'h':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANHOP, sess, nick, arg,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'v':
+				if (voice)
+				{
+					char *tmp = g_strconcat (voice, " ", arg, NULL);
+					g_free (voice);
+					voice = tmp;
+				}
+				else
+					voice = g_strdup (arg);
+				break;
+			case 'q':
+				if (supportsq)
+				{
+					EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANQUIET, sess, nick, arg,
+					                       NULL, NULL, 0, tags_data->timestamp);
+					break;
+				}
+				/* fall through to generic if q is owner mode */
+			default:
+				goto genmode;
+			}
+			break;
+		case '-':
+			switch (mode)
+			{
+			case 'b':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANUNBAN, sess, nick, arg,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'e':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANRMEXEMPT, sess, nick, arg,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'I':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANRMINVITE, sess, nick, arg,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'k':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANRMKEY, sess, nick, NULL,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'l':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANRMLIMIT, sess, nick, NULL,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'o':
+				if (deop)
+				{
+					char *tmp = g_strconcat (deop, " ", arg, NULL);
+					g_free (deop);
+					deop = tmp;
+				}
+				else
+					deop = g_strdup (arg);
+				break;
+			case 'h':
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANDEHOP, sess, nick, arg,
+				                       NULL, NULL, 0, tags_data->timestamp);
+				break;
+			case 'v':
+				if (devoice)
+				{
+					char *tmp = g_strconcat (devoice, " ", arg, NULL);
+					g_free (devoice);
+					devoice = tmp;
+				}
+				else
+					devoice = g_strdup (arg);
+				break;
+			case 'q':
+				if (supportsq)
+				{
+					EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANUNQUIET, sess, nick, arg,
+					                       NULL, NULL, 0, tags_data->timestamp);
+					break;
+				}
+				/* fall through to generic if q is owner mode */
+			default:
+				goto genmode;
+			}
+			break;
+		default:
+			goto genmode;
+		}
+
+		mode_str++;
+		continue;
+
+	genmode:
+		{
+			char outbuf[4];
+			outbuf[0] = sign;
+			outbuf[1] = 0;
+			outbuf[2] = mode;
+			outbuf[3] = 0;
+			if (*arg)
+			{
+				char *buf = g_strdup_printf ("%s %s", sess->channel, arg);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANMODEGEN, sess, nick, outbuf,
+				                       outbuf + 2, buf, 0, tags_data->timestamp);
+				g_free (buf);
+			}
+			else
+			{
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANMODEGEN, sess, nick, outbuf,
+				                       outbuf + 2, sess->channel, 0,
+				                       tags_data->timestamp);
+			}
+		}
+		mode_str++;
+	}
+
+	/* Flush any remaining batched modes */
+	if (op)
+	{
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANOP, sess, nick, op,
+		                       NULL, NULL, 0, tags_data->timestamp);
+		g_free (op);
+	}
+	if (deop)
+	{
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANDEOP, sess, nick, deop,
+		                       NULL, NULL, 0, tags_data->timestamp);
+		g_free (deop);
+	}
+	if (voice)
+	{
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANVOICE, sess, nick, voice,
+		                       NULL, NULL, 0, tags_data->timestamp);
+		g_free (voice);
+	}
+	if (devoice)
+	{
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANDEVOICE, sess, nick, devoice,
+		                       NULL, NULL, 0, tags_data->timestamp);
+		g_free (devoice);
+	}
+}
+
 /* Process a single message from the batch.
  * Returns TRUE if message was processed, FALSE if it was a duplicate. */
 static gboolean
@@ -595,7 +900,9 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 			text = msg->params[1];
 			if (text && *text == ':')
 				text++;
-			inbound_topicnew (serv, nick, sess->channel, text, &tags_data);
+			/* Historical TOPIC - display only, don't update current topic */
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_NEWTOPIC, sess, nick, text,
+			                       sess->channel, NULL, 0, tags_data.timestamp);
 		}
 	}
 	else if (g_ascii_strcasecmp (msg->command, "NICK") == 0)
@@ -615,36 +922,35 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 		if (msg->param_count >= 2)
 		{
 			char *mode_str = msg->params[1];
-			char *mode_sign_stripped;
 			if (mode_str && *mode_str == ':')
 				mode_str++;
-			/* $3 in the text event format is mode_str+2 (skips sign + first letter).
-			 * For "+b" this is "", for "+ob" this is "b". Matches modes.c usage. */
-			mode_sign_stripped = (mode_str && strlen (mode_str) > 2)
-			                     ? mode_str + 2 : "";
-			/* Build "channel arg1 arg2 ..." for the 4th parameter */
-			if (msg->param_count >= 3 && msg->params[2])
+			chathistory_replay_mode (sess, nick, mode_str,
+			                         msg->params, msg->param_count,
+			                         &tags_data);
+		}
+	}
+	else if (g_ascii_strcasecmp (msg->command, "REDACT") == 0)
+	{
+		/* Historical REDACT: target msgid may or may not exist locally.
+		 * Format: :nick!user@host REDACT <target> <msgid> [:<reason>] */
+		if (msg->param_count >= 2)
+		{
+			char *target_msgid = msg->params[1];
+			char *reason = (msg->param_count >= 3) ? msg->params[2] : NULL;
+			if (target_msgid && *target_msgid == ':')
+				target_msgid++;
+			if (reason && *reason == ':')
+				reason++;
+			if (reason && !*reason)
+				reason = NULL;
+
 			{
-				GString *buf = g_string_new (sess->channel);
-				int pi;
-				for (pi = 2; pi < msg->param_count && msg->params[pi]; pi++)
-				{
-					char *p = msg->params[pi];
-					if (*p == ':') p++;
-					g_string_append_c (buf, ' ');
-					g_string_append (buf, p);
-				}
-				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANMODEGEN, sess, nick,
-				                       mode_str, mode_sign_stripped,
-				                       buf->str, 0, tags_data.timestamp);
-				g_string_free (buf, TRUE);
-			}
-			else
-			{
-				/* Historical MODE - display only, don't modify nicklist */
-				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANMODEGEN, sess, nick,
-				                       mode_str, mode_sign_stripped,
-				                       sess->channel, 0, tags_data.timestamp);
+				time_t rtime = tags_data.timestamp ? tags_data.timestamp
+				                                   : time (NULL);
+				/* Try visual redaction — harmless no-op if entry doesn't exist */
+				fe_redact_message (sess, target_msgid, nick, reason, rtime);
+				/* Mark as redacted in scrollback (preserves original text) */
+				scrollback_redact_for_session (sess, target_msgid, nick, reason, rtime);
 			}
 		}
 	}

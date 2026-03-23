@@ -1553,6 +1553,21 @@ middle_action_react_text (GSimpleAction *action, GVariant *parameter, gpointer u
 		gtk_widget_grab_focus (sess->gui->input_box);
 }
 
+/* Copy Message ID to clipboard */
+static void
+middle_action_copy_msgid (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+	session *sess = middle_menu_sess;
+	GdkClipboard *clipboard;
+	(void)action; (void)parameter; (void)user_data;
+
+	if (!sess || !sess->gui || !sess->gui->xtext || !middle_menu_clicked_msgid)
+		return;
+
+	clipboard = gtk_widget_get_clipboard (sess->gui->xtext);
+	gdk_clipboard_set_text (clipboard, middle_menu_clicked_msgid);
+}
+
 void
 menu_middlemenu (session *sess, GtkWidget *parent, double x, double y)
 {
@@ -1625,6 +1640,7 @@ menu_middlemenu (session *sess, GtkWidget *parent, double x, double y)
 		{ "reply-to-message", middle_action_reply, NULL, NULL, NULL },
 		{ "react-to-message", middle_action_react, NULL, NULL, NULL },
 		{ "react-text-to-message", middle_action_react_text, NULL, NULL, NULL },
+		{ "copy-msgid", middle_action_copy_msgid, NULL, NULL, NULL },
 	};
 	g_action_map_add_action_entries (G_ACTION_MAP (action_group), middle_actions,
 									 G_N_ELEMENTS (middle_actions), NULL);
@@ -1712,6 +1728,7 @@ menu_middlemenu (session *sess, GtkWidget *parent, double x, double y)
 			g_menu_append (section, _("Reply" ELLIPSIS), "middle.reply-to-message");
 			g_menu_append (section, _("React with Emoji" ELLIPSIS), "middle.react-to-message");
 			g_menu_append (section, _("React with Text" ELLIPSIS), "middle.react-text-to-message");
+			g_menu_append (section, _("Copy Message ID"), "middle.copy-msgid");
 			g_menu_append_section (gmenu, NULL, G_MENU_MODEL (section));
 			g_object_unref (section);
 		}

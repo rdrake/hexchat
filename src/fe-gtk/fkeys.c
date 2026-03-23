@@ -374,13 +374,14 @@ key_handle_key_press (GtkEventControllerKey *controller, guint keyval,
 		break;
 
 	case GDK_KEY_Escape:
-		/* Cancel active reply or react-with-text state */
-		if (sess->reply_msgid || sess->react_target_msgid)
+		/* Cancel active reply, react-with-text, or picker state */
+		if (sess->reply_msgid || sess->react_target_msgid || sess->picker_pending_cmd)
 		{
 			g_clear_pointer (&sess->reply_msgid, g_free);
 			g_clear_pointer (&sess->reply_nick, g_free);
 			g_clear_pointer (&sess->react_target_msgid, g_free);
 			g_clear_pointer (&sess->react_target_nick, g_free);
+			g_clear_pointer (&sess->picker_pending_cmd, g_free);
 			fe_reply_state_changed (sess);
 			return 1; /* consume the key */
 		}

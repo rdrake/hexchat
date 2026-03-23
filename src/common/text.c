@@ -181,6 +181,22 @@ scrollback_confirm_pending (session *sess, const char *label, const char *real_m
 	g_free (pending_key);
 }
 
+/* IRCv3 redaction: mark message as redacted in scrollback */
+void
+scrollback_redact_for_session (session *sess, const char *msgid,
+                               const char *redacted_by, const char *reason,
+                               time_t redact_time)
+{
+	scrollback_db *db;
+
+	if (!sess || !msgid || !msgid[0])
+		return;
+
+	db = get_scrollback_db (sess);
+	if (db)
+		scrollback_redact_message (db, msgid, redacted_by, reason, redact_time);
+}
+
 /* IRCv3 reactions: persist to scrollback */
 void
 scrollback_save_reaction_for_session (session *sess, const char *target_msgid,
@@ -288,6 +304,11 @@ scrollback_load (session *sess)
 					fe_end_multiline_group (sess);
 				g_free (stripped);
 			}
+
+			/* Apply visual redaction if this message was redacted */
+			if (msg->redacted_by && msg->msgid)
+				fe_redact_message (sess, msg->msgid, msg->redacted_by,
+				                   msg->redact_reason, msg->redact_time);
 		}
 
 		/* Track msgid+timestamp for deduplication with CHATHISTORY */

@@ -1826,9 +1826,12 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 					if (reason && !*reason)
 						reason = NULL;
 
-					fe_redact_message (sess, msgid, nick, reason,
-					                   tags_data->timestamp ? tags_data->timestamp
-					                                        : time (NULL));
+					{
+					time_t rtime = tags_data->timestamp ? tags_data->timestamp
+					                                    : time (NULL);
+					fe_redact_message (sess, msgid, nick, reason, rtime);
+					scrollback_redact_for_session (sess, msgid, nick, reason, rtime);
+				}
 				}
 			}
 			return;

@@ -83,9 +83,11 @@ static GtkWidgetClass *parent_class = NULL;
 
 typedef struct xtext_redaction_info {
 	char *original_content;		/* preserved text for audit/reveal */
+	int original_len;			/* length of original_content */
 	char *redacted_by;			/* nick who issued REDACT */
 	char *redaction_reason;		/* optional reason */
 	time_t redaction_time;
+	gint64 prompt_shown_time;	/* monotonic µs when "click to reveal" was shown (0 = not shown) */
 } xtext_redaction_info;
 
 /* IRCv3 reactions: one entry per distinct reaction text on a message */
@@ -2445,7 +2447,109 @@ gtk_xtext_flash_timeout (gpointer data)
 	return G_SOURCE_REMOVE;
 }
 
-/* Handle a click on the reply context line: scroll to the referenced message */
+/* Handle click on a redacted message entry.
+ * Cycles: REDACTED → REDACTED_PROMPT → REDACTED_REVEALED → REDACTED */
+static void
+gtk_xtext_redaction_click (GtkXText *xtext, textentry *ent)
+{
+	xtext_redaction_info *ri = ent->redaction;
+	xtext_buffer *buf = xtext->buffer;
+
+	if (!ri)
+		return;
+
+	switch ((xtext_entry_state)ent->state)
+	{
+	case XTEXT_STATE_REDACTED:
+		{
+			/* Show "click again to reveal" prompt */
+			int left_len = ent->left_len;
+			char *prompt = g_strdup ("\017[Click again to reveal original message]");
+			int plen = strlen (prompt);
+
+			if (left_len >= 0)
+			{
+				int new_len = left_len + 1 + plen;
+				unsigned char *new_str = g_malloc (new_len + 1);
+				memcpy (new_str, ent->str, left_len + 1);
+				memcpy (new_str + left_len + 1, prompt, plen);
+				new_str[new_len] = '\0';
+				gtk_xtext_entry_set_text (buf, ent, new_str, new_len);
+				g_free (new_str);
+			}
+			else
+			{
+				gtk_xtext_entry_set_text (buf, ent,
+				                          (const unsigned char *)prompt, plen);
+			}
+
+			g_free (prompt);
+			ent->state = XTEXT_STATE_REDACTED_PROMPT;
+			ri->prompt_shown_time = g_get_monotonic_time ();
+			gtk_widget_queue_draw (GTK_WIDGET (xtext));
+		}
+		break;
+
+	case XTEXT_STATE_REDACTED_PROMPT:
+		{
+			/* Must wait at least 1 second before reveal */
+			gint64 elapsed = g_get_monotonic_time () - ri->prompt_shown_time;
+			if (elapsed < G_USEC_PER_SEC)
+				break;
+
+			/* Reveal the original content */
+			gtk_xtext_entry_set_text (buf, ent,
+			                          (const unsigned char *)ri->original_content,
+			                          ri->original_len);
+			ent->state = XTEXT_STATE_REDACTED_REVEALED;
+			gtk_widget_queue_draw (GTK_WIDGET (xtext));
+		}
+		break;
+
+	case XTEXT_STATE_REDACTED_REVEALED:
+		{
+			/* Re-redact: show deletion placeholder again */
+			int left_len = ent->left_len;
+			char *placeholder;
+
+			if (ri->redaction_reason && *ri->redaction_reason)
+				placeholder = g_strdup_printf ("\017[Message deleted by %s: %s]",
+				                               ri->redacted_by, ri->redaction_reason);
+			else
+				placeholder = g_strdup_printf ("\017[Message deleted by %s]",
+				                               ri->redacted_by);
+
+			if (left_len >= 0)
+			{
+				const unsigned char *orig = (const unsigned char *)ri->original_content;
+				int plen = strlen (placeholder);
+				int new_len = left_len + 1 + plen;
+				unsigned char *new_str = g_malloc (new_len + 1);
+				memcpy (new_str, orig, left_len + 1);
+				memcpy (new_str + left_len + 1, placeholder, plen);
+				new_str[new_len] = '\0';
+				gtk_xtext_entry_set_text (buf, ent, new_str, new_len);
+				g_free (new_str);
+			}
+			else
+			{
+				gtk_xtext_entry_set_text (buf, ent,
+				                          (const unsigned char *)placeholder,
+				                          strlen (placeholder));
+			}
+
+			g_free (placeholder);
+			ent->state = XTEXT_STATE_REDACTED;
+			ri->prompt_shown_time = 0;
+			gtk_widget_queue_draw (GTK_WIDGET (xtext));
+		}
+		break;
+
+	default:
+		break;
+	}
+}
+
 static void
 gtk_xtext_click_reply_context (GtkXText *xtext, textentry *ent)
 {
@@ -2612,6 +2716,19 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 		}
 	}
 
+	/* Picker mode: clicking any message grabs its msgid */
+	if (n_press == 1 && xtext->picker_click_cb)
+	{
+		ent = gtk_xtext_find_char (xtext, x, y, NULL, NULL);
+		if (ent)
+		{
+			const char *msgid = ent->msgid;
+			xtext->picker_click_cb (xtext, msgid, xtext->picker_click_userdata);
+			xtext->press_handled = TRUE;
+			return;
+		}
+	}
+
 	/* Check if click lands on any hover button (reply, react-text, react-emoji) */
 	if (n_press == 1 && xtext->hover_ent && xtext->hover_ent->msgid &&
 	    xtext->hover_btn_size > 0 &&
@@ -2679,6 +2796,18 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 		if (zone == XTEXT_ZONE_REACT && zone_ent)
 		{
 			gtk_xtext_click_reaction_badge (xtext, zone_ent, x);
+			xtext->press_handled = TRUE;
+			return;
+		}
+	}
+
+	/* Click on redacted message: cycle through redacted → prompt → reveal → redacted */
+	if (n_press == 1)
+	{
+		textentry *click_ent = gtk_xtext_find_char (xtext, x, y, NULL, NULL);
+		if (click_ent && click_ent->redaction)
+		{
+			gtk_xtext_redaction_click (xtext, click_ent);
 			xtext->press_handled = TRUE;
 			return;
 		}
@@ -4881,7 +5010,7 @@ gtk_xtext_render_page (GtkXText * xtext)
 	{
 		gtk_xtext_reset (xtext, FALSE);
 		/* Phase 4: state-based rendering */
-		if (ent->state == XTEXT_STATE_REDACTED)
+		if (ent->state == XTEXT_STATE_REDACTED || ent->state == XTEXT_STATE_REDACTED_PROMPT)
 			xtext->col_fore = XTEXT_REDACTED_FG;
 		if (ent->state == XTEXT_STATE_PENDING)
 			xtext->render_alpha = 0.5;
@@ -7212,6 +7341,15 @@ gtk_xtext_set_reaction_click_callback (GtkXText *xtext,
 	xtext->reaction_click_userdata = userdata;
 }
 
+void
+gtk_xtext_set_picker_click_callback (GtkXText *xtext,
+                                     void (*callback) (GtkXText *, const char *, gpointer),
+                                     gpointer userdata)
+{
+	xtext->picker_click_cb = callback;
+	xtext->picker_click_userdata = userdata;
+}
+
 /* Resolve marker_pos_id to a textentry pointer. Returns NULL if not set or stale. */
 static textentry *
 xtext_resolve_marker (xtext_buffer *buf)
@@ -7780,6 +7918,7 @@ gtk_xtext_entry_set_redaction_info (xtext_buffer *buf, textentry *ent,
 
 	ent->redaction = g_new0 (xtext_redaction_info, 1);
 	ent->redaction->original_content = g_strndup (original_str, original_len);
+	ent->redaction->original_len = original_len;
 	ent->redaction->redacted_by = g_strdup (redacted_by);
 	ent->redaction->redaction_reason = (reason && *reason) ? g_strdup (reason) : NULL;
 	ent->redaction->redaction_time = redact_time;

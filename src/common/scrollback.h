@@ -34,6 +34,9 @@ typedef struct {
 	time_t timestamp;    /* Message timestamp */
 	char *msgid;         /* IRCv3 msgid (may be NULL) */
 	char *text;          /* Message text (formatted for display) */
+	char *redacted_by;   /* Who redacted this message (NULL = not redacted) */
+	char *redact_reason; /* Redaction reason (may be NULL) */
+	time_t redact_time;  /* When redaction occurred */
 } scrollback_msg;
 
 /**
@@ -120,6 +123,21 @@ gboolean scrollback_has_msgid (scrollback_db *db, const char *msgid);
  */
 gboolean scrollback_update_pending_msgid (scrollback_db *db, const char *channel,
                                            const char *pending_msgid, const char *real_msgid);
+
+/**
+ * Mark a message as redacted in scrollback.
+ * Preserves the original text for accountability; stores who redacted it and why.
+ *
+ * @param db Database handle
+ * @param msgid Message ID to redact
+ * @param redacted_by Nick who performed the redaction
+ * @param reason Redaction reason (may be NULL)
+ * @param redact_time When the redaction occurred
+ * @return TRUE if a message was updated
+ */
+gboolean scrollback_redact_message (scrollback_db *db, const char *msgid,
+                                    const char *redacted_by, const char *reason,
+                                    time_t redact_time);
 
 /**
  * Clear all messages for a channel.
