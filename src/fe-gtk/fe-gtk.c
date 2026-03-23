@@ -1178,7 +1178,10 @@ fe_redact_message (session *sess, const char *msgid,
 	ent = gtk_xtext_find_by_msgid (buf, msgid);
 	if (!ent)
 	{
-		/* Original message not loaded — show a notice at the redact time */
+		/* Original message not loaded — show a notice at the redact time.
+		 * Use display_only so it doesn't get saved to scrollback (the
+		 * redaction metadata on the original message handles persistence). */
+		sess->display_only = TRUE;
 		if (reason && *reason)
 			PrintTextTimeStampf (sess, redact_time,
 			                     "\017*\t[Message redacted by %s: %s]\n",
