@@ -2197,8 +2197,18 @@ inbound_batch_end (server *serv, const char *batch_id,
 			}
 			else
 			{
-				/* Standalone multiline batch - process immediately */
-				process_multiline_batch (serv, batch);
+				/* Standalone multiline batch — check if this is a Tier 2 echo
+				 * of our own send (already displayed locally as pending). */
+				gboolean echo_suppressed = FALSE;
+				if (batch->label && serv->pending_labels)
+				{
+					pending_label_info *info = g_hash_table_lookup (serv->pending_labels,
+					                                                batch->label);
+					if (info && info->entry_id)
+						echo_suppressed = TRUE;  /* confirmed in label cleanup below */
+				}
+				if (!echo_suppressed)
+					process_multiline_batch (serv, batch);
 			}
 		}
 		/* TODO: Handle other batch types:
@@ -2214,7 +2224,17 @@ inbound_batch_end (server *serv, const char *batch_id,
 		pending_label_info *info = g_hash_table_lookup (serv->pending_labels,
 		                                                batch->label);
 		if (info && info->entry_id && info->sess && is_session (info->sess))
-			fe_confirm_entry (info->sess, info->entry_id, NULL);
+		{
+			/* Extract msgid from the first message in the batch */
+			const char *batch_msgid = NULL;
+			if (batch->messages)
+			{
+				batch_message *first = batch->messages->data;
+				if (first)
+					batch_msgid = first->msgid;
+			}
+			fe_confirm_entry (info->sess, info->entry_id, batch_msgid);
+		}
 
 		g_hash_table_remove (serv->pending_labels, batch->label);
 	}

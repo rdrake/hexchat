@@ -5958,6 +5958,24 @@ handle_multiline_batch (session *sess, char **lines, int n_lines)
 
 	batch_tag = tcp_batch_open_multiline (serv, sess->channel);
 
+	/* Tier 2 local echo: display the combined message as pending immediately,
+	 * so the user sees it without waiting for the server echo round-trip. */
+	if (serv->have_echo_message && serv->have_labeled_response)
+	{
+		GString *combined = g_string_new (lines[0]);
+		for (i = 1; i < n_lines; i++)
+		{
+			g_string_append_c (combined, '\n');
+			g_string_append (combined, lines[i]);
+		}
+		fe_begin_multiline_group (sess);
+		inbound_chanmsg (serv, sess, sess->channel, serv->nick,
+		                 combined->str, TRUE, FALSE, &no_tags);
+		fe_end_multiline_group (sess);
+		mark_pending_echo (sess, serv);
+		g_string_free (combined, TRUE);
+	}
+
 	for (i = 0; i < n_lines; i++)
 	{
 		char *text = lines[i];
@@ -6088,6 +6106,7 @@ handle_multiline (session *sess, char *cmd, int history, int nocommand)
 				if (history_text)
 					history_add (&sess->history, history_text);
 				g_free (history_text);
+				typing_indicator_cancel (sess);
 				handle_multiline_batch (sess, (char **)lines->pdata, lines->len);
 				g_ptr_array_free (lines, TRUE);
 				return;

@@ -615,12 +615,37 @@ process_batch_message (server *serv, session *sess, batch_message *msg)
 		if (msg->param_count >= 2)
 		{
 			char *mode_str = msg->params[1];
+			char *mode_sign_stripped;
 			if (mode_str && *mode_str == ':')
 				mode_str++;
-			/* Historical MODE - display only, don't modify nicklist */
-			EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANMODEGEN, sess, nick,
-			                       mode_str, "", sess->channel, 0,
-			                       tags_data.timestamp);
+			/* $3 in the text event format is mode_str+2 (skips sign + first letter).
+			 * For "+b" this is "", for "+ob" this is "b". Matches modes.c usage. */
+			mode_sign_stripped = (mode_str && strlen (mode_str) > 2)
+			                     ? mode_str + 2 : "";
+			/* Build "channel arg1 arg2 ..." for the 4th parameter */
+			if (msg->param_count >= 3 && msg->params[2])
+			{
+				GString *buf = g_string_new (sess->channel);
+				int pi;
+				for (pi = 2; pi < msg->param_count && msg->params[pi]; pi++)
+				{
+					char *p = msg->params[pi];
+					if (*p == ':') p++;
+					g_string_append_c (buf, ' ');
+					g_string_append (buf, p);
+				}
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANMODEGEN, sess, nick,
+				                       mode_str, mode_sign_stripped,
+				                       buf->str, 0, tags_data.timestamp);
+				g_string_free (buf, TRUE);
+			}
+			else
+			{
+				/* Historical MODE - display only, don't modify nicklist */
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANMODEGEN, sess, nick,
+				                       mode_str, mode_sign_stripped,
+				                       sess->channel, 0, tags_data.timestamp);
+			}
 		}
 	}
 

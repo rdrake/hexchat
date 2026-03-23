@@ -2396,19 +2396,38 @@ irc_inline (server *serv, char *buf, int len)
 
 	/* labeled-response: clean up pending label tracking (non-batched path).
 	 * For batched responses, the label is on BATCH START and handled in
-	 * inbound_batch_end() via batch_info->label. */
+	 * inbound_batch_end() via batch_info->label — skip processing here so
+	 * the label is still in pending_labels when the batch ends. */
 	if (tags_data.label && serv->pending_labels)
 	{
-		pending_label_info *info = g_hash_table_lookup (serv->pending_labels,
-		                                                tags_data.label);
-		if (info)
+		/* Detect BATCH START: skip label processing here, defer to inbound_batch_end().
+		 * A BATCH START line looks like ":server BATCH +tag type ..." or "BATCH +tag ...". */
+		gboolean is_batch_start = FALSE;
 		{
-			/* Tier 2 echo-message: confirm pending entry to normal state */
-			if (info->entry_id && info->sess && is_session (info->sess))
-				fe_confirm_entry (info->sess, info->entry_id, tags_data.msgid);
+			const char *p = buf;
+			if (*p == ':')
+			{
+				/* Skip prefix */
+				while (*p && *p != ' ') p++;
+				while (*p == ' ') p++;
+			}
+			if (g_ascii_strncasecmp (p, "BATCH +", 7) == 0)
+				is_batch_start = TRUE;
+		}
 
-			tags_data.echo_confirmed = TRUE;
-			g_hash_table_remove (serv->pending_labels, tags_data.label);
+		if (!is_batch_start)
+		{
+			pending_label_info *info = g_hash_table_lookup (serv->pending_labels,
+			                                                tags_data.label);
+			if (info)
+			{
+				/* Tier 2 echo-message: confirm pending entry to normal state */
+				if (info->entry_id && info->sess && is_session (info->sess))
+					fe_confirm_entry (info->sess, info->entry_id, tags_data.msgid);
+
+				tags_data.echo_confirmed = TRUE;
+				g_hash_table_remove (serv->pending_labels, tags_data.label);
+			}
 		}
 	}
 
