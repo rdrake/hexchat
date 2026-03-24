@@ -187,8 +187,12 @@ tcp_send_len (server *serv, char *buf, int len)
 	char *dbuf;
 	int noqueue = !serv->outbound_queue;
 
-	if (!prefs.hex_net_throttle || !serv->end_of_motd)
+	if (!prefs.hex_net_throttle || !serv->end_of_motd || serv->batch_burst)
+	{
+		if (serv->batch_burst)
+			serv->batch_burst_bytes += len;
 		return server_send_real (serv, buf, len);
+	}
 
 	dbuf = g_malloc (len + 2);	/* first byte is the priority */
 	dbuf[0] = 2;	/* pri 2 for most things */
@@ -595,6 +599,11 @@ tcp_batch_open_multiline (server *serv, const char *target)
 
 	batch_tag = g_strdup_printf ("hcb%u", serv->label_counter++);
 
+	/* Burst the entire batch without per-line throttling — the server
+	 * treats it as one logical message.  Penalty applied at close. */
+	serv->batch_burst = 1;
+	serv->batch_burst_bytes = 0;
+
 	label = tcp_sendf_labeled (serv, "BATCH +%s draft/multiline %s\r\n",
 	                           batch_tag, target);
 
@@ -631,6 +640,18 @@ void
 tcp_batch_close (server *serv, const char *batch_tag)
 {
 	tcp_sendf (serv, "BATCH -%s\r\n", batch_tag);
+
+	/* End burst mode and apply a single throttle penalty for the
+	 * entire batch, using the same formula as tcp_send_queue. */
+	if (serv->batch_burst)
+	{
+		time_t now = time (0);
+		serv->batch_burst = 0;
+		if (serv->next_send < now)
+			serv->next_send = now;
+		serv->next_send += (2 + serv->batch_burst_bytes / 120);
+		serv->batch_burst_bytes = 0;
+	}
 }
 
 static int

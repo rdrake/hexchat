@@ -367,7 +367,7 @@ create_input_style (InputStyle *style)
 		gtk_style_context_add_provider_for_display (
 			gdk_display_get_default (),
 			GTK_STYLE_PROVIDER (input_css_provider),
-			GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+			GTK_STYLE_PROVIDER_PRIORITY_USER);
 	}
 
 	if (prefs.hex_gui_input_style)
@@ -379,7 +379,7 @@ create_input_style (InputStyle *style)
 			/* Main input box — full theme (colors + font) */
 			"#hexchat-inputbox { "
 			"  caret-color: rgb(%d, %d, %d); "
-			"  background-color: rgb(%d, %d, %d); "
+			"  background: rgb(%d, %d, %d); "
 			"  color: rgb(%d, %d, %d); "
 			"  font-family: \"%s\"; "
 			"  font-size: %dpt; "
@@ -474,6 +474,10 @@ apply_tree_css (void)
 	 * ID selectors for chanview/userlist; class selector for dialog list views. */
 	g_snprintf (css_buf, sizeof (css_buf),
 		/* Chanview tree (GtkListView) */
+		"#hexchat-tree { "
+		"  border-radius: 6px; "
+		"  border: 1px solid @borders; "
+		"} "
 		"#hexchat-tree, "
 		"#hexchat-tree row { "
 		"  background-color: rgb(%d, %d, %d); "
@@ -488,6 +492,12 @@ apply_tree_css (void)
 		"  color: rgb(%d, %d, %d); "
 		"} "
 		/* Userlist (GtkColumnView) */
+		"#hexchat-userlist { "
+		"  border-radius: 6px; "
+		"  border: 1px solid @borders; "
+		"  margin-top: 2px; "
+		"  margin-bottom: 6px; "
+		"} "
 		"#hexchat-userlist, "
 		"#hexchat-userlist listview, "
 		"#hexchat-userlist row { "
@@ -503,6 +513,10 @@ apply_tree_css (void)
 		"  color: rgb(%d, %d, %d); "
 		"} "
 		/* Dialog list/column views named hexchat-list */
+		"#hexchat-list { "
+		"  border-radius: 6px; "
+		"  border: 1px solid @borders; "
+		"} "
 		"#hexchat-list, "
 		"#hexchat-list listview, "
 		"#hexchat-list row { "
@@ -663,7 +677,7 @@ fe_init (void)
 			layout_css = gtk_css_provider_new ();
 			gtk_css_provider_load_from_string (layout_css,
 				/* Ensure paned handles don't take excess space */
-				"paned > separator { min-width: 1px; min-height: 1px; } "
+				"paned > separator { min-width: 1px; min-height: 1px; background: none; } "
 				/* GtkStack (used as page container) styling */
 				"stack { padding: 0; margin: 0; } "
 				/* Mode buttons in topic bar - reduce horizontal padding */
@@ -1181,17 +1195,21 @@ fe_redact_message (session *sess, const char *msgid,
 		/* Original message not loaded — insert a notice at the correct
 		 * chronological position (not appended at the end). */
 		char *notice;
+		textentry *notice_ent;
 		if (reason && *reason)
 			notice = g_strdup_printf ("\017[Message redacted by %s: %s]",
 			                          redacted_by, reason);
 		else
 			notice = g_strdup_printf ("\017[Message redacted by %s]",
 			                          redacted_by);
-		gtk_xtext_insert_sorted_indent (buf,
+		notice_ent = gtk_xtext_insert_sorted_indent (buf,
 		                                (unsigned char *)"*", 1,
 		                                (unsigned char *)notice, -1,
 		                                redact_time);
 		g_free (notice);
+		/* Set reply context so it visually references the target message */
+		if (notice_ent)
+			gtk_xtext_entry_set_reply (buf, notice_ent, msgid, NULL, NULL, 0);
 		return;
 	}
 	if (gtk_xtext_entry_get_state (ent) == XTEXT_STATE_REDACTED)

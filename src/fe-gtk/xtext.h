@@ -213,6 +213,7 @@ struct _GtkXText
 	gint add_io_tag;				  /* "" when adding new text */
 	gint scroll_tag;				  /* marking-scroll timeout */
 	gint resize_tag;				  /* deferred line recalculation on resize */
+	xtext_scroll_anchor resize_anchor;	/* scroll anchor saved before reflow */
 	gulong vc_signal_tag;        /* signal handler for "value_changed" adj */
 
 	int select_start_adj;		  /* the adj->value when the selection started */
@@ -371,7 +372,7 @@ void gtk_xtext_prepend_indent (xtext_buffer *buf,
 										time_t stamp);
 /* IRCv3 modernization: sorted insert for chathistory gap filling (Phase 3) */
 void gtk_xtext_insert_sorted (xtext_buffer *buf, unsigned char *text, int len, time_t stamp);
-void gtk_xtext_insert_sorted_indent (xtext_buffer *buf,
+textentry *gtk_xtext_insert_sorted_indent (xtext_buffer *buf,
 										unsigned char *left_text, int left_len,
 										unsigned char *right_text, int right_len,
 										time_t stamp);

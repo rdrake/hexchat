@@ -3364,6 +3364,8 @@ mg_create_center (session *sess, session_gui *gui, GtkWidget *box)
 	gtk_widget_set_valign (book, GTK_ALIGN_FILL);
 	gtk_widget_set_hexpand (book, TRUE);
 	gtk_widget_set_vexpand (book, TRUE);
+	gtk_widget_set_margin_start (book, 0);
+	gtk_widget_set_margin_end (book, 0);
 	gtk_paned_set_start_child (GTK_PANED (gui->hpane_right), book);
 	gtk_paned_set_resize_start_child (GTK_PANED (gui->hpane_right), TRUE);
 	gtk_paned_set_shrink_start_child (GTK_PANED (gui->hpane_right), TRUE);

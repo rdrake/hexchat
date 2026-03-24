@@ -27,7 +27,8 @@ hexchat_gtk_sources = [
   'xtext.c',
   'xtext-render.c',
   'xtext-emoji.c',
-  'hex-input-edit.c'
+  'hex-input-edit.c',
+  'hex-emoji-chooser.c'
 ]
 
 # GTK4 dependency (GTK3 no longer supported)

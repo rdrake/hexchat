@@ -193,6 +193,7 @@ static int gtk_xtext_find_subline (GtkXText *xtext, textentry *ent, int line);
 static void gtk_xtext_draw_status_strip (GtkXText *xtext, int width, int height);
 static void gtk_xtext_draw_toasts (GtkXText *xtext, int width, int height);
 static gboolean gtk_xtext_toast_tick (gpointer data);
+static int gtk_xtext_measure_reaction_badges (GtkXText *xtext, struct xtext_reactions_info *ri, int win_width);
 /* static char *gtk_xtext_conv_color (unsigned char *text, int len, int *newlen); */
 /* For use by gtk_xtext_strip_color() and its callers -- */
 struct offlen_s {
@@ -969,14 +970,20 @@ gtk_xtext_resize_cb (gpointer data)
 	GtkXText *xtext = data;
 
 	xtext->resize_tag = 0;
-	gtk_xtext_calc_lines (xtext->buffer, FALSE);
 
-	/* After reflow, restore scroll position to bottom if it was there before */
-	if (xtext->buffer->scrollbar_down)
+	/* Reflow lines and restore scroll position.  The anchor was saved
+	 * from the bottom of the viewport in size_allocate — restore it
+	 * there by subtracting page_size after the normal restore. */
+	gtk_xtext_calc_lines (xtext->buffer, FALSE);
+	gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
+
+	if (!xtext->resize_anchor.anchor_to_bottom)
 	{
-		gtk_adjustment_set_value (xtext->adj,
-			gtk_adjustment_get_upper (xtext->adj) -
-			gtk_adjustment_get_page_size (xtext->adj));
+		gdouble page_size = gtk_adjustment_get_page_size (xtext->adj);
+		gdouble val = gtk_adjustment_get_value (xtext->adj) - page_size;
+		if (val < 0)
+			val = 0;
+		gtk_adjustment_set_value (xtext->adj, val);
 	}
 
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
@@ -1000,6 +1007,33 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 	dontscroll (xtext->buffer);	/* force scrolling off */
 	if (!height_only)
 	{
+		/* Save scroll anchor from the bottom of the viewport — that's
+		 * what the user is reading.  After reflow we restore it there. */
+		{
+			xtext_scroll_anchor *a = &xtext->resize_anchor;
+			memset (a, 0, sizeof (*a));
+			if (xtext->buffer->scrollbar_down)
+			{
+				a->anchor_to_bottom = TRUE;
+			}
+			else if (xtext->adj)
+			{
+				int bottom_line = (int)(gtk_adjustment_get_value (xtext->adj)
+				                        + gtk_adjustment_get_page_size (xtext->adj));
+				int subline = 0;
+				textentry *ent = gtk_xtext_nth (xtext, bottom_line, &subline);
+				if (ent)
+				{
+					a->anchor_entry_id = ent->entry_id;
+					a->subline_offset = subline;
+				}
+				else
+				{
+					a->anchor_to_bottom = TRUE;
+				}
+			}
+		}
+
 		/* Throttle expensive line recalculation during rapid resize.
 		 * Cancel any pending recalc and schedule a new one. */
 		if (xtext->resize_tag)
@@ -2655,7 +2689,6 @@ static void
 gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, double event_y, gpointer user_data)
 {
 	GtkXText *xtext = GTK_XTEXT (user_data);
-	GtkWidget *widget = GTK_WIDGET (xtext);
 	GdkModifierType mask;
 	textentry *ent;
 	unsigned char *word;
@@ -7065,7 +7098,7 @@ gtk_xtext_prepend (xtext_buffer *buf, unsigned char *text, int len, time_t stamp
  * These insert at the correct chronological position by timestamp.
  */
 
-void
+textentry *
 gtk_xtext_insert_sorted_indent (xtext_buffer *buf,
 								unsigned char *left_text, int left_len,
 								unsigned char *right_text, int right_len,
@@ -7133,6 +7166,8 @@ gtk_xtext_insert_sorted_indent (xtext_buffer *buf,
 	}
 
 	gtk_xtext_insert_sorted_entry (buf, ent, stamp);
+
+	return ent;
 }
 
 void
