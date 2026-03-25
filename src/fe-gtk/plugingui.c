@@ -227,13 +227,10 @@ fe_pluginlist_update (void)
 {
 	hexchat_plugin *pl;
 	GSList *list;
-	GtkColumnView *view;
 	GListStore *store;
 
 	if (!plugin_window)
 		return;
-
-	view = g_object_get_data (G_OBJECT (plugin_window), "view");
 
 	store = g_object_get_data (G_OBJECT (plugin_window), "store");
 	/* Clear the store */

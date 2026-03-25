@@ -851,7 +851,6 @@ static void
 gtk_xtext_realize (GtkWidget * widget)
 {
 	GtkXText *xtext;
-	GdkDisplay *display;
 
 	/* GTK4: MUST chain up to parent class realize first */
 	GTK_WIDGET_CLASS (parent_class)->realize (widget);
@@ -888,7 +887,6 @@ gtk_xtext_realize (GtkWidget * widget)
 	xtext->ts_x = xtext->ts_y = 0;
 
 	/* GTK4: Use cursor names instead of GDK_HAND1 etc */
-	display = gtk_widget_get_display (widget);
 	xtext->hand_cursor = gdk_cursor_new_from_name ("pointer", NULL);
 	xtext->resize_cursor = gdk_cursor_new_from_name ("col-resize", NULL);
 

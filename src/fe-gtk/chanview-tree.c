@@ -103,7 +103,6 @@ static chan *cv_tree_get_parent (chan *ch);
 static void
 cv_tree_activated_cb (GtkListView *view, guint position, gpointer data)
 {
-	chanview *cv = data;
 	GtkTreeListRow *row;
 	GtkSelectionModel *sel_model;
 
@@ -364,7 +363,6 @@ cv_tree_factory_bind_cb (GtkListItemFactory *factory, GtkListItem *item, chanvie
 	char *name = NULL;
 	GdkPixbuf *pixbuf = NULL;
 	PangoAttrList *attr = NULL;
-	GtkTreeIter iter;
 
 	expander = g_object_get_data (G_OBJECT (item), "expander");
 	icon = g_object_get_data (G_OBJECT (item), "icon");
