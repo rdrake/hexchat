@@ -687,6 +687,24 @@ fe_init (void)
 	gtkosx_application_set_dock_icon_pixbuf (osx_app, pix_hexchat);
 #endif
 	channelwin_pix = pixmap_load_from_file (prefs.hex_text_background);
+
+	/* Merge hex_text_font_main + hex_text_font_alternative into hex_text_font
+	 * so all font consumers see the correct combined string on startup.
+	 * This also runs in setup_apply() when preferences change. */
+	if (prefs.hex_text_font_main[0])
+	{
+		PangoFontDescription *old_desc = pango_font_description_from_string (prefs.hex_text_font_main);
+		char buffer[4 * FONTNAMELEN + 1];
+		sprintf (buffer, "%s,%s", pango_font_description_get_family (old_desc), prefs.hex_text_font_alternative);
+		PangoFontDescription *new_desc = pango_font_description_from_string (buffer);
+		pango_font_description_set_weight (new_desc, pango_font_description_get_weight (old_desc));
+		pango_font_description_set_style (new_desc, pango_font_description_get_style (old_desc));
+		pango_font_description_set_size (new_desc, pango_font_description_get_size (old_desc));
+		sprintf (prefs.hex_text_font, "%s", pango_font_description_to_string (new_desc));
+		pango_font_description_free (old_desc);
+		pango_font_description_free (new_desc);
+	}
+
 	input_style = create_input_style (NULL);
 	apply_tree_css ();
 
