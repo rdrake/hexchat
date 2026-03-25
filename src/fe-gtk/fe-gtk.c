@@ -348,6 +348,17 @@ create_input_style (InputStyle *style)
 
 	style->font_desc = pango_font_description_from_string (prefs.hex_text_font);
 
+	/* hex_text_font is the combined main+alternative font string. On startup
+	 * the size in it may be stale (from a prior session's xtext merge).
+	 * Override with the size from hex_text_font_main which is authoritative. */
+	{
+		PangoFontDescription *main_desc = pango_font_description_from_string (prefs.hex_text_font_main);
+		int main_size = pango_font_description_get_size (main_desc);
+		if (main_size > 0)
+			pango_font_description_set_size (style->font_desc, main_size);
+		pango_font_description_free (main_desc);
+	}
+
 	/* fall back */
 	if (pango_font_description_get_size (style->font_desc) == 0)
 	{
@@ -380,6 +391,8 @@ create_input_style (InputStyle *style)
 			"  color: rgb(%d, %d, %d); "
 			"  font-family: \"%s\"; "
 			"  font-size: %dpt; "
+			"  min-height: 0; "
+			"  padding: 0; "
 			"} "
 			"#hexchat-inputbox selection { "
 			"  background-color: rgb(%d, %d, %d); "
@@ -451,7 +464,7 @@ void
 apply_tree_css (void)
 {
 	char css_buf[2048];
-	const char *font_family;
+	char *font_family;
 	int font_size;
 
 	if (!tree_css_provider)
@@ -463,9 +476,19 @@ apply_tree_css (void)
 			GTK_STYLE_PROVIDER_PRIORITY_USER);
 	}
 
-	/* Extract font family and size from the input style */
-	font_family = pango_font_description_get_family (input_style->font_desc);
-	font_size = pango_font_description_get_size (input_style->font_desc) / PANGO_SCALE;
+	/* Extract font family from hex_text_font_main (not the combined string,
+	 * which contains fallback fonts that CSS would treat as a single name).
+	 * Size comes from input_style which already has the corrected value. */
+	{
+		PangoFontDescription *main_desc = pango_font_description_from_string (prefs.hex_text_font_main);
+		font_family = pango_font_description_get_family (main_desc);
+		font_size = pango_font_description_get_size (input_style->font_desc) / PANGO_SCALE;
+		/* font_family points into main_desc — we need to copy it since main_desc
+		 * will be freed after building the CSS string, but we use it below */
+		font_family = g_strdup (font_family);
+		pango_font_description_free (main_desc);
+	}
+
 
 	/* Apply theme colors to chanview tree, userlist, and all .hexchat-list views.
 	 * ID selectors for chanview/userlist; class selector for dialog list views. */
@@ -650,6 +673,7 @@ apply_tree_css (void)
 	}
 
 	gtk_css_provider_load_from_string (tree_css_provider, css_buf);
+	g_free (font_family);
 }
 
 void
@@ -675,6 +699,8 @@ fe_init (void)
 			gtk_css_provider_load_from_string (layout_css,
 				/* Ensure paned handles don't take excess space */
 				"paned > separator { min-width: 1px; min-height: 1px; background: none; } "
+				/* Nick button — let input box drive the row height */
+				"#hexchat-nickbutton { min-height: 0; padding-top: 0; padding-bottom: 0; } "
 				/* GtkStack (used as page container) styling */
 				"stack { padding: 0; margin: 0; } "
 				/* Mode buttons in topic bar - reduce horizontal padding */
@@ -686,7 +712,21 @@ fe_init (void)
 				"#hexchat-tab { "
 				"  padding: 2px 4px; "
 				"} "
-				/* Userlist buttons - minimal padding for shrinkable panel */
+				/* HexInputEdit — entry-like appearance without Adwaita min-height */
+			"hexinput { "
+			"  border: 1px solid @borders; "
+			"  border-radius: 6px; "
+			"  padding: 0; "
+			"  background-color: @theme_base_color; "
+			"  overflow: hidden; "
+			"  transition: all 200ms ease; "
+			"} "
+			"hexinput:focus-within { "
+			"  outline: 2px solid @theme_selected_bg_color; "
+			"  outline-offset: -2px; "
+			"  -gtk-outline-border-radius: 6px; "
+			"} "
+			/* Userlist buttons - minimal padding for shrinkable panel */
 				".hexchat-userlistbutton { "
 				"  padding: 1px 2px; "
 				"  margin: 0; "
@@ -696,7 +736,7 @@ fe_init (void)
 			gtk_style_context_add_provider_for_display (
 				gdk_display_get_default (),
 				GTK_STYLE_PROVIDER (layout_css),
-				GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+				GTK_STYLE_PROVIDER_PRIORITY_USER);
 		}
 
 		/* Compact mode row padding is now in apply_tree_css() for live updates */

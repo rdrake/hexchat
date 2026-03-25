@@ -85,6 +85,10 @@ void        hex_input_edit_set_emoji_cache (HexInputEdit *edit,
 void        hex_input_edit_set_palette (HexInputEdit *edit,
                                         const GdkRGBA *palette);
 
+/* Font */
+void        hex_input_edit_set_font    (HexInputEdit *edit,
+                                        PangoFontDescription *font_desc);
+
 /* Spell checking */
 void        hex_input_edit_set_checked        (HexInputEdit *edit, gboolean checked);
 gboolean    hex_input_edit_is_checked         (HexInputEdit *edit);

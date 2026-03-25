@@ -2419,6 +2419,8 @@ mg_create_chanmodebuttons (session_gui *gui, GtkWidget *box)
 	gui->key_entry = hex_input_edit_new ();
 	hex_input_edit_set_multiline (HEX_INPUT_EDIT (gui->key_entry), FALSE);
 	hex_input_edit_set_checked (HEX_INPUT_EDIT (gui->key_entry), FALSE);
+	if (input_style && input_style->font_desc)
+		hex_input_edit_set_font (HEX_INPUT_EDIT (gui->key_entry), input_style->font_desc);
 	hex_input_edit_set_max_chars (HEX_INPUT_EDIT (gui->key_entry), 23);
 	hex_input_edit_set_width_chars (HEX_INPUT_EDIT (gui->key_entry), 8);
 	hex_input_edit_set_max_width_chars (HEX_INPUT_EDIT (gui->key_entry), 12);
@@ -2439,6 +2441,8 @@ mg_create_chanmodebuttons (session_gui *gui, GtkWidget *box)
 	gui->limit_entry = hex_input_edit_new ();
 	hex_input_edit_set_multiline (HEX_INPUT_EDIT (gui->limit_entry), FALSE);
 	hex_input_edit_set_checked (HEX_INPUT_EDIT (gui->limit_entry), FALSE);
+	if (input_style && input_style->font_desc)
+		hex_input_edit_set_font (HEX_INPUT_EDIT (gui->limit_entry), input_style->font_desc);
 	hex_input_edit_set_max_chars (HEX_INPUT_EDIT (gui->limit_entry), 10);
 	hex_input_edit_set_width_chars (HEX_INPUT_EDIT (gui->limit_entry), 4);
 	hex_input_edit_set_max_width_chars (HEX_INPUT_EDIT (gui->limit_entry), 5);
@@ -2537,6 +2541,8 @@ mg_create_topicbar (session *sess, GtkWidget *box)
 	gui->topic_entry = topic = hex_input_edit_new ();
 	hex_input_edit_set_multiline (HEX_INPUT_EDIT (topic), FALSE);
 	hex_input_edit_set_checked (HEX_INPUT_EDIT (topic), FALSE);
+	if (input_style && input_style->font_desc)
+		hex_input_edit_set_font (HEX_INPUT_EDIT (topic), input_style->font_desc);
 	gtk_widget_set_name (topic, "hexchat-inputbox");
 	gtk_widget_set_hexpand (topic, TRUE);
 	gtk_box_append (GTK_BOX (hbox), topic);
@@ -3820,6 +3826,7 @@ mg_create_entry (session *sess, GtkWidget *box)
 
 	gui->nick_label = but = gtk_button_new ();
 	gtk_widget_add_css_class (but, "flat");
+	gtk_widget_set_name (but, "hexchat-nickbutton");
 	gtk_widget_set_can_focus (but, FALSE);
 	{
 		GtkWidget *btn_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
@@ -3834,13 +3841,15 @@ mg_create_entry (session *sess, GtkWidget *box)
 
 	gui->input_box = entry = hex_input_edit_new ();
 	hex_input_edit_set_max_lines (HEX_INPUT_EDIT (entry), prefs.hex_gui_input_lines);
+	if (input_style && input_style->font_desc)
+		hex_input_edit_set_font (HEX_INPUT_EDIT (entry), input_style->font_desc);
 
 	g_signal_connect (G_OBJECT (entry), "activate",
 							G_CALLBACK (mg_inputbox_cb), gui);
 
 	/* Add directly — measure vfunc handles max height clamping */
 	gtk_widget_set_hexpand (entry, TRUE);
-	gtk_widget_set_valign (entry, GTK_ALIGN_CENTER);
+	gtk_widget_set_valign (entry, GTK_ALIGN_FILL);
 	gtk_box_append (GTK_BOX (hbox), entry);
 
 	gtk_widget_set_name (entry, "hexchat-inputbox");
@@ -4226,6 +4235,9 @@ mg_apply_setup (void)
 	while (list)
 	{
 		sess = list->data;
+		/* Re-apply tab colors so "Smaller Text" takes effect immediately */
+		if (sess->res->tab)
+			chan_set_color (sess->res->tab, plain_list);
 		gtk_xtext_set_time_stamp (sess->res->buffer, prefs.hex_stamp_text);
 		((xtext_buffer *)sess->res->buffer)->needs_recalc = TRUE;
 		if (!sess->gui->is_tab || !done_main)

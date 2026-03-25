@@ -152,7 +152,7 @@ undo_snapshot_free (gpointer data)
 
 /* --- Margins/padding --- */
 #define HPAD 12		/* horizontal padding inside widget */
-#define VPAD 10		/* vertical padding inside widget */
+#define VPAD 4		/* vertical padding inside widget */
 
 /* --- Caret blink interval (ms) --- */
 #define BLINK_INTERVAL 500
@@ -632,20 +632,15 @@ update_font_metrics (HexInputEdit *edit)
 {
 	HexInputEditPriv *priv = edit->priv;
 	PangoContext *pctx = gtk_widget_get_pango_context (GTK_WIDGET (edit));
-	PangoFontDescription *desc = priv->font_desc
-		? priv->font_desc
-		: (PangoFontDescription *) pango_context_get_font_description (pctx);
-	PangoFontMetrics *metrics = pango_context_get_metrics (pctx, desc, NULL);
+	if (priv->font_desc)
+		pango_context_set_font_description (pctx, priv->font_desc);
+	PangoFontMetrics *metrics = pango_context_get_metrics (pctx, NULL, NULL);
 
 	priv->ascent = pango_font_metrics_get_ascent (metrics) / PANGO_SCALE;
 	priv->descent = pango_font_metrics_get_descent (metrics) / PANGO_SCALE;
 	priv->fontsize = priv->ascent + priv->descent;
 
-	/* Always reserve height for emoji sprites so the text baseline
-	 * stays consistent whether or not emoji are present. */
 	priv->line_height = priv->fontsize;
-	if (priv->emoji_cache && priv->emoji_cache->target_size > priv->line_height)
-		priv->line_height = priv->emoji_cache->target_size;
 
 	pango_font_metrics_unref (metrics);
 }
@@ -1964,15 +1959,32 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 	graphene_rect_init (&bounds, 0, 0, width, height);
 	cairo_t *cr = gtk_snapshot_append_cairo (snapshot, &bounds);
 
-	/* Background — our palette BG (theme background suppressed via CSS) */
+	/* Background — rounded rect to match CSS border-radius */
+	{
+		double r = 5.0;  /* slightly less than CSS 6px to stay inside border */
+		double x0 = 0, y0 = 0, x1 = width, y1 = height;
+		cairo_new_sub_path (cr);
+		cairo_arc (cr, x1 - r, y0 + r, r, -G_PI_2, 0);
+		cairo_arc (cr, x1 - r, y1 - r, r, 0, G_PI_2);
+		cairo_arc (cr, x0 + r, y1 - r, r, G_PI_2, G_PI);
+		cairo_arc (cr, x0 + r, y0 + r, r, G_PI, 3 * G_PI_2);
+		cairo_close_path (cr);
+	}
 	gdk_cairo_set_source_rgba (cr, &pal[XTEXT_BG]);
-	cairo_rectangle (cr, 0, 0, width, height);
 	cairo_fill (cr);
-
 
 	/* Clip content to inside border (prevents text overflow when scrolling) */
 	cairo_save (cr);
-	cairo_rectangle (cr, 1, 1, width - 2, height - 2);
+	{
+		double r = 5.0;
+		double x0 = 1, y0 = 1, x1 = width - 1, y1 = height - 1;
+		cairo_new_sub_path (cr);
+		cairo_arc (cr, x1 - r, y0 + r, r, -G_PI_2, 0);
+		cairo_arc (cr, x1 - r, y1 - r, r, 0, G_PI_2);
+		cairo_arc (cr, x0 + r, y1 - r, r, G_PI_2, G_PI);
+		cairo_arc (cr, x0 + r, y0 + r, r, G_PI, 3 * G_PI_2);
+		cairo_close_path (cr);
+	}
 	cairo_clip (cr);
 
 	/* Horizontal text origin (HPAD with single-line scroll offset) */
@@ -2159,8 +2171,7 @@ hex_input_edit_measure (GtkWidget *widget, GtkOrientation orientation,
 	HexInputEdit *edit = HEX_INPUT_EDIT (widget);
 	HexInputEditPriv *priv = edit->priv;
 
-	if (!priv->fontsize)
-		update_font_metrics (edit);
+	update_font_metrics (edit);
 
 	if (orientation == GTK_ORIENTATION_HORIZONTAL)
 	{
@@ -2585,7 +2596,7 @@ hex_input_edit_class_init (HexInputEditClass *klass)
 
 	klass->word_check = default_word_check;
 
-	gtk_widget_class_set_css_name (widget_class, "entry");
+	gtk_widget_class_set_css_name (widget_class, "hexinput");
 
 	/* Widget-class actions for context menu */
 	gtk_widget_class_install_action (widget_class, "edit.undo", NULL, action_undo);
@@ -2762,6 +2773,23 @@ hex_input_edit_set_palette (HexInputEdit *edit, const GdkRGBA *palette)
 	g_return_if_fail (HEX_IS_INPUT_EDIT (edit));
 	edit->priv->palette = palette;
 	gtk_widget_queue_draw (GTK_WIDGET (edit));
+}
+
+void
+hex_input_edit_set_font (HexInputEdit *edit, PangoFontDescription *font_desc)
+{
+	g_return_if_fail (HEX_IS_INPUT_EDIT (edit));
+	HexInputEditPriv *priv = edit->priv;
+
+	if (priv->font_desc)
+		pango_font_description_free (priv->font_desc);
+	priv->font_desc = font_desc ? pango_font_description_copy (font_desc) : NULL;
+
+	/* Reset cached metrics so they're recomputed from the new font */
+	priv->fontsize = 0;
+	priv->parse_dirty = TRUE;
+	g_clear_object (&priv->layout);
+	gtk_widget_queue_resize (GTK_WIDGET (edit));
 }
 
 /* --- Layout line queries --- */

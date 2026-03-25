@@ -49,6 +49,7 @@
 
 InputStyle *create_input_style (InputStyle *);
 void apply_tree_css (void);
+extern InputStyle *input_style;
 
 #define LABEL_INDENT 12
 
@@ -2259,6 +2260,13 @@ setup_apply_to_sess (session_gui *gui)
 	                                GTK_XTEXT (gui->xtext)->emoji_cache);
 	hex_input_edit_set_palette (HEX_INPUT_EDIT (gui->input_box),
 	                            GTK_XTEXT (gui->xtext)->palette);
+	if (input_style && input_style->font_desc)
+	{
+		hex_input_edit_set_font (HEX_INPUT_EDIT (gui->input_box), input_style->font_desc);
+		hex_input_edit_set_font (HEX_INPUT_EDIT (gui->topic_entry), input_style->font_desc);
+		hex_input_edit_set_font (HEX_INPUT_EDIT (gui->key_entry), input_style->font_desc);
+		hex_input_edit_set_font (HEX_INPUT_EDIT (gui->limit_entry), input_style->font_desc);
+	}
 }
 
 static void

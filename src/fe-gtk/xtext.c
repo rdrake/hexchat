@@ -360,6 +360,16 @@ backend_font_open_real (char *name)
 	if (!font)
 		font = pango_font_description_from_string ("sans 11");
 
+	/* hex_text_font is a combined main+alternative font string whose size
+	 * may be stale on startup.  Override with hex_text_font_main's size. */
+	{
+		PangoFontDescription *main_desc = pango_font_description_from_string (prefs.hex_text_font_main);
+		int main_size = pango_font_description_get_size (main_desc);
+		if (main_size > 0)
+			pango_font_description_set_size (font, main_size);
+		pango_font_description_free (main_desc);
+	}
+
 	return font;
 }
 
