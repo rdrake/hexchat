@@ -119,7 +119,7 @@ editlist_save (GtkWidget *igad, gchar *file)
 				g_snprintf (buf, sizeof (buf), "NAME %s\nCMD %s\n\n",
 				            item->name ? item->name : "",
 				            item->cmd ? item->cmd : "");
-				write (fh, buf, strlen (buf));
+				HC_IGNORE_RESULT (write (fh, buf, strlen (buf)));
 				g_object_unref (item);
 			}
 		}
@@ -468,7 +468,7 @@ editlist_gui_open (char *title1, char *title2, GSList *list, char *title, char *
 {
 	GtkWidget *vbox, *box;
 	GtkWidget *view;
-	GListStore *store;
+	GListStore *store = NULL;
 
 	if (editlist_win)
 	{
@@ -492,7 +492,6 @@ editlist_gui_open (char *title1, char *title2, GSList *list, char *title, char *
 	hc_button_box_set_layout_impl (GTK_WIDGET (box), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (box, 6);
 	gtk_box_append (GTK_BOX (vbox), box);
-	gtk_widget_show (box);
 
 	gtkutil_button (box, "document-new", 0, editlist_add,
 					NULL, _("Add"));
@@ -505,5 +504,5 @@ editlist_gui_open (char *title1, char *title2, GSList *list, char *title, char *
 
 	editlist_load (store, list);
 
-	gtk_widget_show (editlist_win);
+	gtk_window_present (GTK_WINDOW (editlist_win));
 }

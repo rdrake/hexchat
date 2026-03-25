@@ -51,7 +51,7 @@ static int ignored_total = 0;
  *          NULL, otherwise
  */
 struct ignore *
-ignore_exists (char *mask)
+ignore_exists (const char *mask)
 {
 	struct ignore *ig = NULL;
 	GSList *list;
@@ -77,7 +77,7 @@ ignore_exists (char *mask)
  */
 
 int
-ignore_add (char *mask, int type, gboolean overwrite)
+ignore_add (const char *mask, int type, gboolean overwrite)
 {
 	struct ignore *ig = NULL;
 	int change_only = FALSE;
@@ -287,7 +287,7 @@ ignore_load ()
 		if (st.st_size)
 		{
 			cfg = g_malloc0 (st.st_size + 1);
-			read (fh, cfg, st.st_size);
+			HC_IGNORE_RESULT (read (fh, cfg, st.st_size));
 			my_cfg = cfg;
 			while (my_cfg)
 			{
@@ -321,7 +321,7 @@ ignore_save ()
 			{
 				g_snprintf (buf, sizeof (buf), "mask = %s\ntype = %u\n\n",
 							 ig->mask, ig->type);
-				write (fh, buf, strlen (buf));
+				HC_IGNORE_RESULT (write (fh, buf, strlen (buf)));
 			}
 			temp = temp->next;
 		}

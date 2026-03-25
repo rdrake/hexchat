@@ -114,7 +114,7 @@ scrollback_save_msg (session *sess, char *text, time_t stamp, const char *msgid)
 			return;
 	}
 
-	if (!sess->channel || !sess->channel[0])
+	if (!sess->channel[0])
 		return;
 
 	db = get_scrollback_db (sess);
@@ -218,7 +218,7 @@ scrollback_load (session *sess)
 			return;
 	}
 
-	if (!sess->channel || !sess->channel[0])
+	if (!sess->channel[0])
 		return;
 
 	network = server_get_network (sess->server, FALSE);

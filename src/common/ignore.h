@@ -43,8 +43,8 @@ struct ignore
 	unsigned int type;	/* one of more of IG_* ORed together */
 };
 
-struct ignore *ignore_exists (char *mask);
-int ignore_add (char *mask, int type, gboolean overwrite);
+struct ignore *ignore_exists (const char *mask);
+int ignore_add (const char *mask, int type, gboolean overwrite);
 void ignore_showlist (session *sess);
 int ignore_del (char *mask, struct ignore *ig);
 int ignore_check (char *mask, int type);

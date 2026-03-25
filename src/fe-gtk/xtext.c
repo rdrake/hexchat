@@ -5467,9 +5467,9 @@ gtk_xtext_draw_toasts (GtkXText *xtext, int width, int height)
 			bg_g = xtext->palette[XTEXT_BG].green * 0.85 + accent[1] * 0.08 - 0.05;
 			bg_b = xtext->palette[XTEXT_BG].blue * 0.85 + accent[2] * 0.08 - 0.05;
 		}
-		if (bg_r < 0) bg_r = 0; if (bg_r > 1) bg_r = 1;
-		if (bg_g < 0) bg_g = 0; if (bg_g > 1) bg_g = 1;
-		if (bg_b < 0) bg_b = 0; if (bg_b > 1) bg_b = 1;
+		bg_r = CLAMP(bg_r, 0.0, 1.0);
+		bg_g = CLAMP(bg_g, 0.0, 1.0);
+		bg_b = CLAMP(bg_b, 0.0, 1.0);
 
 		/* Background rounded rect - fully opaque for contrast */
 		xtext_draw_rounded_rect (cr, box_x, y, box_w, box_h, TOAST_CORNER_R);

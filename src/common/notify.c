@@ -135,13 +135,13 @@ notify_save (void)
 		while (list)
 		{
 			notify = (struct notify *) list->data;
-			write (fh, notify->name, strlen (notify->name));
+			HC_IGNORE_RESULT (write (fh, notify->name, strlen (notify->name)));
 			if (notify->networks)
 			{
-				write (fh, " ", 1);
-				write (fh, notify->networks, strlen (notify->networks));
+				HC_IGNORE_RESULT (write (fh, " ", 1));
+				HC_IGNORE_RESULT (write (fh, notify->networks, strlen (notify->networks)));
 			}
-			write (fh, "\n", 1);
+			HC_IGNORE_RESULT (write (fh, "\n", 1));
 			list = list->next;
 		}
 		close (fh);
@@ -629,7 +629,7 @@ notify_adduser (char *name, char *networks)
 }
 
 gboolean
-notify_is_in_list (server *serv, char *name)
+notify_is_in_list (server *serv, const char *name)
 {
 	struct notify *notify;
 	GSList *list = notify_list;
