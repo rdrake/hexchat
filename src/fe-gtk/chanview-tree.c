@@ -91,7 +91,6 @@ hc_chan_item_new (chan *ch, gboolean is_server)
 
 /* Forward declarations for GTK4 functions */
 static void cv_tree_rebuild_model (chanview *cv);
-static HcChanItem *cv_tree_find_item (chanview *cv, chan *ch);
 static HcChanItem *cv_tree_find_server_item (chanview *cv, void *family);
 static chan *cv_tree_get_parent (chan *ch);
 
@@ -952,56 +951,6 @@ cv_tree_find_server_item (chanview *cv, void *family)
 		}
 		if (item)
 			g_object_unref (item);
-	}
-
-	return NULL;
-}
-
-/*
- * Find an item in the model by chan pointer
- */
-static HcChanItem *
-cv_tree_find_item (chanview *cv, chan *ch)
-{
-	treeview *tv = (treeview *)cv;
-	guint n_root, n_children, i, j;
-	HcChanItem *server_item, *child_item;
-
-	if (!tv->root_store)
-		return NULL;
-
-	n_root = g_list_model_get_n_items (G_LIST_MODEL (tv->root_store));
-
-	for (i = 0; i < n_root; i++)
-	{
-		server_item = g_list_model_get_item (G_LIST_MODEL (tv->root_store), i);
-		if (!server_item)
-			continue;
-
-		/* Check if this is the item we're looking for */
-		if (server_item->ch == ch)
-		{
-			return server_item; /* caller must unref */
-		}
-
-		/* Search in children */
-		if (server_item->children)
-		{
-			n_children = g_list_model_get_n_items (G_LIST_MODEL (server_item->children));
-			for (j = 0; j < n_children; j++)
-			{
-				child_item = g_list_model_get_item (G_LIST_MODEL (server_item->children), j);
-				if (child_item && child_item->ch == ch)
-				{
-					g_object_unref (server_item);
-					return child_item; /* caller must unref */
-				}
-				if (child_item)
-					g_object_unref (child_item);
-			}
-		}
-
-		g_object_unref (server_item);
 	}
 
 	return NULL;

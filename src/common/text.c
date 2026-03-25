@@ -72,37 +72,6 @@ static ca_context *ca_con;
 static void mkdir_p (char *filename);
 static char *log_create_filename (char *channame);
 
-static char *
-scrollback_get_filename (session *sess)
-{
-	char *net, *chan, *buf, *ret = NULL;
-
-	net = server_get_network (sess->server, FALSE);
-	if (!net)
-		return NULL;
-
-	net = log_create_filename (net);
-	buf = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "scrollback" G_DIR_SEPARATOR_S "%s" G_DIR_SEPARATOR_S "%s.txt", get_xdir (), net, "");
-	mkdir_p (buf);
-	g_free (buf);
-
-	chan = log_create_filename (sess->channel);
-	if (chan[0])
-		buf = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "scrollback" G_DIR_SEPARATOR_S "%s" G_DIR_SEPARATOR_S "%s.txt", get_xdir (), net, chan);
-	else
-		buf = NULL;
-	g_free (chan);
-	g_free (net);
-
-	if (buf)
-	{
-		ret = g_filename_from_utf8 (buf, -1, NULL, NULL, NULL);
-		g_free (buf);
-	}
-
-	return ret;
-}
-
 void
 scrollback_close (session *sess)
 {
@@ -387,9 +356,9 @@ log_close (session *sess)
 	if (sess->logfd != -1)
 	{
 		currenttime = time (NULL);
-		write (sess->logfd, obuf,
+		HC_IGNORE_RESULT (write (sess->logfd, obuf,
 			 g_snprintf (obuf, sizeof (obuf) - 1, _("**** ENDING LOGGING AT %s\n"),
-						  ctime (&currenttime)));
+						  ctime (&currenttime))));
 		close (sess->logfd);
 		sess->logfd = -1;
 	}
@@ -599,9 +568,9 @@ log_open_file (char *servname, char *channame, char *netname)
 	if (fd == -1)
 		return -1;
 	currenttime = time (NULL);
-	write (fd, buf,
+	HC_IGNORE_RESULT (write (fd, buf,
 			 g_snprintf (buf, sizeof (buf), _("**** BEGIN LOGGING AT %s\n"),
-						  ctime (&currenttime)));
+						  ctime (&currenttime))));
 
 	return fd;
 }
@@ -729,17 +698,17 @@ log_write (session *sess, char *text, time_t ts)
 		len = get_stamp_str (prefs.hex_stamp_log_format, ts, &stamp);
 		if (len)
 		{
-			write (sess->logfd, stamp, len);
+			HC_IGNORE_RESULT (write (sess->logfd, stamp, len));
 			g_free (stamp);
 		}
 	}
 
 	temp = strip_color (text, -1, STRIP_ALL);
 	len = strlen (temp);
-	write (sess->logfd, temp, len);
+	HC_IGNORE_RESULT (write (sess->logfd, temp, len));
 	/* lots of scripts/plugins print without a \n at the end */
 	if (temp[len - 1] != '\n')
-		write (sess->logfd, "\n", 1);	/* emulate what xtext would display */
+		HC_IGNORE_RESULT (write (sess->logfd, "\n", 1));	/* emulate what xtext would display */
 	g_free (temp);
 }
 
@@ -1694,7 +1663,7 @@ pevent_load (char *filename)
 		return 1;
 	}
 	ibuf = g_malloc (st.st_size);
-	read (fd, ibuf, st.st_size);
+	HC_IGNORE_RESULT (read (fd, ibuf, st.st_size));
 	close (fd);
 
 	while (buf_get_line (ibuf, &buf, &pnt, st.st_size))
@@ -2222,10 +2191,10 @@ pevent_save (char *fn)
 
 	for (i = 0; i < NUM_XP; i++)
 	{
-		write (fd, buf, g_snprintf (buf, sizeof (buf),
-										  "event_name=%s\n", te[i].name));
-		write (fd, buf, g_snprintf (buf, sizeof (buf),
-										  "event_text=%s\n\n", pntevts_text[i]));
+		HC_IGNORE_RESULT (write (fd, buf, g_snprintf (buf, sizeof (buf),
+										  "event_name=%s\n", te[i].name)));
+		HC_IGNORE_RESULT (write (fd, buf, g_snprintf (buf, sizeof (buf),
+										  "event_text=%s\n\n", pntevts_text[i])));
 	}
 
 	close (fd);
@@ -2395,10 +2364,10 @@ sound_save ()
 	{
 		if (sound_files[i] && sound_files[i][0])
 		{
-			write (fd, buf, g_snprintf (buf, sizeof (buf),
-											  "event=%s\n", te[i].name));
-			write (fd, buf, g_snprintf (buf, sizeof (buf),
-											  "sound=%s\n\n", sound_files[i]));
+			HC_IGNORE_RESULT (write (fd, buf, g_snprintf (buf, sizeof (buf),
+											  "event=%s\n", te[i].name)));
+			HC_IGNORE_RESULT (write (fd, buf, g_snprintf (buf, sizeof (buf),
+											  "sound=%s\n\n", sound_files[i])));
 		}
 	}
 

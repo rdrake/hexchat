@@ -226,7 +226,6 @@ gtk_xtext_strip_color (unsigned char *text, int len, unsigned char *outbuf,
 							  int *newlen, GSList **slp, int strip_hidden);
 static gboolean gtk_xtext_check_ent_visibility (GtkXText * xtext, textentry *find_ent, int add);
 static int gtk_xtext_render_page_timeout (GtkXText * xtext);
-static int gtk_xtext_search_offset (xtext_buffer *buf, textentry *ent, unsigned int off);
 static GList * gtk_xtext_search_textentry (xtext_buffer *, textentry *);
 static void gtk_xtext_search_textentry_add (xtext_buffer *, textentry *, GList *, gboolean);
 static void gtk_xtext_search_textentry_del (xtext_buffer *, textentry *);
@@ -344,16 +343,6 @@ backend_init (GtkXText *xtext)
 		xtext->layout = gtk_widget_create_pango_layout (GTK_WIDGET (xtext), 0); 
 		if (xtext->font)
 			pango_layout_set_font_description (xtext->layout, xtext->font->font);
-	}
-}
-
-static void
-backend_deinit (GtkXText *xtext)
-{
-	if (xtext->layout)
-	{
-		g_object_unref (xtext->layout);
-		xtext->layout = NULL;
 	}
 }
 
@@ -520,31 +509,6 @@ xtext_set_source_color (GtkXText *xtext, int color_index)
 	}
 }
 
-static void
-backend_draw_text_emph (GtkXText *xtext, int dofill, int x, int y,
-						 char *str, int len, int str_width, int emphasis)
-{
-	PangoLayoutLine *line;
-
-	pango_layout_set_attributes (xtext->layout, attr_lists[emphasis]);
-	pango_layout_set_text (xtext->layout, str, len);
-
-	if (dofill)
-	{
-		/* Draw background using the current background color */
-		xtext_set_source_color (xtext, xtext->col_back);
-		cairo_rectangle (xtext->cr, x, y - xtext->font->ascent, str_width, xtext->fontsize);
-		cairo_fill (xtext->cr);
-	}
-
-	/* Set foreground color for text */
-	xtext_set_source_color (xtext, xtext->col_fore);
-
-	line = pango_layout_get_lines (xtext->layout)->data;
-
-	xtext_draw_layout_line (xtext, x, y, line);
-}
-
 /* In GTK3/Cairo, we don't have separate GC objects - we just track the color indices
    and set them on the cairo context when needed */
 static void
@@ -639,19 +603,18 @@ static void
 gtk_xtext_adjustment_set (xtext_buffer *buf, int fire_signal)
 {
 	GtkAdjustment *adj = buf->xtext->adj;
-	GtkAllocation alloc;
 	gdouble upper, page_size, value;
 
 	if (buf->xtext->buffer == buf)
 	{
-		gtk_widget_get_allocation (GTK_WIDGET (buf->xtext), &alloc);
+		int widget_height = gtk_widget_get_height (GTK_WIDGET (buf->xtext));
 
 		upper = buf->num_lines;
 		if (upper == 0)
 			upper = 1;
 
 		{
-			int effective_height = alloc.height;
+			int effective_height = widget_height;
 			if (buf->xtext->status_strip_visible)
 				effective_height -= (buf->xtext->fontsize * 2 / 3 + 4);
 			page_size = (double)effective_height / buf->xtext->fontsize;
@@ -1328,8 +1291,7 @@ gtk_xtext_draw_marker (GtkXText * xtext, textentry * ent, int y)
 	else return;
 
 	x = 0;
-	gtk_widget_get_allocation (GTK_WIDGET (xtext), &alloc);
-	width = alloc.width;
+	width = gtk_widget_get_width (GTK_WIDGET (xtext));
 
 	gdk_cairo_set_source_rgba (xtext->cr, &xtext->palette[XTEXT_MARKER]);
 	cairo_move_to (xtext->cr, x, render_y + 0.5);
@@ -1346,15 +1308,14 @@ static void
 gtk_xtext_paint (GtkWidget *widget, GdkRectangle *area)
 {
 	GtkXText *xtext = GTK_XTEXT (widget);
-	GtkAllocation alloc;
 	textentry *ent_start, *ent_end;
 	int x, y;
-
-	gtk_widget_get_allocation (widget, &alloc);
+	int widget_width = gtk_widget_get_width (widget);
+	int widget_height = gtk_widget_get_height (widget);
 
 	if (area->x == 0 && area->y == 0 &&
-		 area->height == alloc.height &&
-		 area->width == alloc.width)
+		 area->height == widget_height &&
+		 area->width == widget_width)
 	{
 		dontscroll (xtext->buffer);	/* force scrolling off */
 		gtk_xtext_render_page (xtext);
@@ -2136,9 +2097,8 @@ gtk_xtext_motion_notify (GtkEventControllerMotion *controller, double event_x, d
 
 	if (xtext->moving_separator)
 	{
-		GtkAllocation alloc;
-		gtk_widget_get_allocation (widget, &alloc);
-		if (x < (3 * alloc.width) / 5 && x > 15)
+		int widget_width = gtk_widget_get_width (widget);
+		if (x < (3 * widget_width) / 5 && x > 15)
 		{
 			tmp = xtext->buffer->indent;
 			xtext->buffer->indent = x;
@@ -2362,11 +2322,10 @@ gtk_xtext_button_release (GtkGestureClick *gesture, int n_press, double x, doubl
 
 	if (xtext->moving_separator)
 	{
-		GtkAllocation alloc;
-		gtk_widget_get_allocation (widget, &alloc);
+		int widget_width = gtk_widget_get_width (widget);
 		xtext->moving_separator = FALSE;
 		old = xtext->buffer->indent;
-		if (x < (4 * alloc.width) / 5 && x > 15)
+		if (x < (4 * widget_width) / 5 && x > 15)
 			xtext->buffer->indent = (int)x;
 		gtk_xtext_fix_indent (xtext->buffer);
 		if (xtext->buffer->indent != old)
@@ -2900,18 +2859,6 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 	xtext->select_end_y = y;
 }
 
-/* another program has claimed the selection */
-
-static gboolean
-gtk_xtext_selection_kill (GtkXText *xtext, void *event)
-{
-#ifndef WIN32
-	if (xtext->buffer->last_ent_start_id)
-		gtk_xtext_unselect (xtext);
-#endif
-	return TRUE;
-}
-
 static gboolean
 gtk_xtext_is_selecting (GtkXText *xtext)
 {
@@ -3354,63 +3301,6 @@ gtk_xtext_reset (GtkXText * xtext, int mark)
 		xtext->col_fore = XTEXT_FG;
 		xtext->col_back = XTEXT_BG;
 	}
-}
-
-/*
- * gtk_xtext_search_offset (buf, ent, off) --
- * Look for arg offset in arg textentry
- * Return one or more flags:
- * 	GTK_MATCH_MID if we are in a match
- * 	GTK_MATCH_START if we're at the first byte of it
- * 	GTK_MATCH_END if we're at the first byte past it
- * 	GTK_MATCH_CUR if it is the current match
- */
-#define GTK_MATCH_START	1
-#define GTK_MATCH_MID	2
-#define GTK_MATCH_END	4
-#define GTK_MATCH_CUR	8
-static int
-gtk_xtext_search_offset (xtext_buffer *buf, textentry *ent, unsigned int off)
-{
-	GList *gl;
-	offsets_t o;
-	int flags = 0;
-
-	for (gl = g_list_first (ent->marks); gl; gl = g_list_next (gl))
-	{
-		o.u = GPOINTER_TO_UINT (gl->data);
-		if (off < o.o.start || off > o.o.end)
-			continue;
-		flags = GTK_MATCH_MID;
-		if (off == o.o.start)
-			flags |= GTK_MATCH_START;
-		if (off == o.o.end)
-		{
-			gl = g_list_next (gl);
-			if (gl)
-			{
-				o.u = GPOINTER_TO_UINT (gl->data);
-				if (off ==  o.o.start)	/* If subseq match is adjacent */
-				{
-					flags |= (gl == buf->curmark)? GTK_MATCH_CUR: 0;
-				}
-				else		/* If subseq match is not adjacent */
-				{
-					flags |= GTK_MATCH_END;
-				}
-			}
-			else		/* If there is no subseq match */
-			{
-				flags |= GTK_MATCH_END;
-			}
-		}
-		else if (gl == buf->curmark)	/* If not yet at the end of this match */
-		{
-			flags |= GTK_MATCH_CUR;
-		}
-		break;
-	}
-	return flags;
 }
 
 /* render a single line, which WONT wrap, and parse mIRC colors */
@@ -4729,8 +4619,8 @@ gtk_xtext_save (GtkXText * xtext, int fh)
 	{
 		buf = gtk_xtext_strip_color (ent->str, ent->str_len, NULL,
 											  &newlen, NULL, FALSE);
-		write (fh, buf, newlen);
-		write (fh, "\n", 1);
+		HC_IGNORE_RESULT (write (fh, buf, newlen));
+		HC_IGNORE_RESULT (write (fh, "\n", 1));
 		g_free (buf);
 		ent = ent->next;
 	}

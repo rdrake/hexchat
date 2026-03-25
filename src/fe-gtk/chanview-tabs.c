@@ -51,15 +51,6 @@ static int tab_right_is_moving = 0;
  * If we don't intervene here, the GtkViewport will be granted its
  * request, even at the expense of resizing the top-level window.
  */
-static void
-cv_tabs_sizerequest (GtkWidget *viewport, GtkRequisition *requisition, chanview *cv)
-{
-	if (!cv->vertical)
-		requisition->width = 1;
-	else
-		requisition->height = 1;
-}
-
 /*
  * Core logic to check overflow and show/hide scroll buttons.
  * Called from both size-allocate callback and adjustment changed callback.
@@ -163,7 +154,6 @@ tab_search_offset (GtkWidget *inner, gint start_offset,
 	GList *tabs;
 	GtkWidget *box;
 	GtkWidget *button;
-	GtkAllocation allocation;
 	gint found;
 
 	boxes = hc_container_get_children (inner);
@@ -181,14 +171,15 @@ tab_search_offset (GtkWidget *inner, gint start_offset,
 
 		while (tabs)
 		{
+			double bx, by;
 			button = (GtkWidget *)tabs->data;
 			tabs = (forward ? tabs->next : tabs->prev);
 
 			if (!GTK_IS_TOGGLE_BUTTON (button))
 				continue;
 
-			gtk_widget_get_allocation (button, &allocation);
-			found = (vertical ? allocation.y : allocation.x);
+			gtk_widget_translate_coordinates (button, inner, 0, 0, &bx, &by);
+			found = (gint)(vertical ? by : bx);
 			if ((forward && found > start_offset) ||
 				(!forward && found < start_offset))
 				return found;
