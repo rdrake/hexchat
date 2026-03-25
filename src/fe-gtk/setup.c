@@ -2352,11 +2352,9 @@ setup_apply_real (int new_pix, int do_ulist, int do_layout, int do_identd)
 static void
 setup_apply (struct hexchatprefs *pr)
 {
-#ifdef WIN32
 	PangoFontDescription *old_desc;
 	PangoFontDescription *new_desc;
 	char buffer[4 * FONTNAMELEN + 1];
-#endif
 	int new_pix = FALSE;
 	int noapply = FALSE;
 	int do_ulist = FALSE;
@@ -2424,7 +2422,6 @@ setup_apply (struct hexchatprefs *pr)
 
 	memcpy (&prefs, pr, sizeof (prefs));
 
-#ifdef WIN32
 	/* merge hex_font_main and hex_font_alternative into hex_font_normal */
 	old_desc = pango_font_description_from_string (prefs.hex_text_font_main);
 	sprintf (buffer, "%s,%s", pango_font_description_get_family (old_desc), prefs.hex_text_font_alternative);
@@ -2433,12 +2430,8 @@ setup_apply (struct hexchatprefs *pr)
 	pango_font_description_set_style (new_desc, pango_font_description_get_style (old_desc));
 	pango_font_description_set_size (new_desc, pango_font_description_get_size (old_desc));
 	sprintf (prefs.hex_text_font, "%s", pango_font_description_to_string (new_desc));
-
-	/* FIXME this is not required after pango_font_description_from_string()
-	g_free (old_desc);
-	g_free (new_desc);
-	*/
-#endif
+	pango_font_description_free (old_desc);
+	pango_font_description_free (new_desc);
 
 	if (prefs.hex_irc_real_name[0] == 0)
 	{
@@ -2475,10 +2468,11 @@ setup_ok_cb (GtkWidget *but, GtkWidget *win)
 
 	/* Apply must happen BEFORE memcpy, because setup_apply uses DIFF(a) =
 	 * (pr->a != prefs.a) to detect what changed.  If we copy first, all
-	 * diffs would be FALSE and nothing would be applied. */
+	 * diffs would be FALSE and nothing would be applied.
+	 * setup_apply() does memcpy(prefs, pr) internally and then merges
+	 * hex_text_font from hex_text_font_main + alternatives, so we must
+	 * NOT overwrite prefs again afterwards — that would clobber the merge. */
 	setup_apply (&setup_prefs);
-
-	memcpy (&prefs, &setup_prefs, sizeof (prefs));
 	save_config ();
 	palette_save ();
 
