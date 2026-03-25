@@ -1,7 +1,7 @@
 # Vendored zstd (single-file amalgamation, v1.5.7)
 zstd_lib = static_library('zstd',
   sources: 'zstd/zstd.c',
-  c_args: ['-DZSTD_DISABLE_ASM'],
+  c_args: ['-DZSTD_DISABLE_ASM', '-Wno-inline'],
   pic: true,
 )
 zstd_dep = declare_dependency(

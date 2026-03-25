@@ -50,6 +50,7 @@
 #include "server.h"
 #include "servlist.h"
 #include "outbound.h"
+#include "scrollback.h"
 #include "text.h"
 #include "url.h"
 #include "hexchatc.h"
@@ -1031,6 +1032,7 @@ hexchat_exit (void)
 	notify_save ();
 	ignore_save ();
 	free_sessions ();
+	scrollback_shutdown ();
 	chanopt_save_all (TRUE);
 	servlist_cleanup ();
 	fe_exit ();

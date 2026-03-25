@@ -636,6 +636,16 @@ static int
 zvfs_unlock (sqlite3_file *file, int level)
 {
 	zstd_vfs_file *f = (zstd_vfs_file *)file;
+
+	/* When dropping below RESERVED, the inner SQLite's implicit
+	 * transaction is done — commit the outer DB.  With journal_mode=MEMORY,
+	 * xSync may never be called, so this is our commit point. */
+	if (level < 2 && f->lock_level >= 2 && f->in_transaction)
+	{
+		sqlite3_exec (f->outer_db, "COMMIT", NULL, NULL, NULL);
+		f->in_transaction = 0;
+	}
+
 	f->lock_level = level;
 	return SQLITE_OK;
 }
