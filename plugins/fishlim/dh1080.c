@@ -127,7 +127,7 @@ dh1080_decode_b64 (const char *data, gsize *out_len)
 		g_string_append_c (str, '=');
 
 	ret = g_base64_decode_inplace (str->str, out_len);
-	(void) g_string_free_and_steal (str);
+	if (g_string_free_and_steal (str)) {}
 	return ret;
 }
 
