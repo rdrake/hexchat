@@ -54,6 +54,10 @@
     <ClInclude Include="secure-storage.h" />
     <ClInclude Include="chathistory.h" />
     <ClInclude Include="scrollback.h" />
+    <ClInclude Include="sqlite-zstd-vfs.h" />
+    <ClInclude Include="zstd\zstd.h" />
+    <ClInclude Include="zstd\zstd_errors.h" />
+    <ClInclude Include="zstd\zdict.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="cfgfiles.c" />
@@ -89,6 +93,10 @@
     <ClCompile Include="secure-storage.c" />
     <ClCompile Include="chathistory.c" />
     <ClCompile Include="scrollback.c" />
+    <ClCompile Include="sqlite-zstd-vfs.c" />
+    <ClCompile Include="zstd\zstd.c">
+      <PreprocessorDefinitions>ZSTD_DISABLE_ASM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\win32\config.h.tt" />
@@ -110,13 +118,13 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;$(OwnFlags);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(HexChatLib);$(DepsRoot)\include;$(OpenSSLInclude);$(Glib);$(Gtk);$(LibWebSocketsInclude);$(JanssonInclude);$(LibCurlInclude);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)zstd;$(HexChatLib);$(DepsRoot)\include;$(OpenSSLInclude);$(Glib);$(Gtk);$(LibWebSocketsInclude);$(JanssonInclude);$(LibCurlInclude);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <PreprocessorDefinitions>WIN32;_WIN64;_AMD64_;NDEBUG;_LIB;$(OwnFlags);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(HexChatLib);$(DepsRoot)\include;$(OpenSSLInclude);$(Glib);$(Gtk);$(LibWebSocketsInclude);$(JanssonInclude);$(LibCurlInclude);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)zstd;$(HexChatLib);$(DepsRoot)\include;$(OpenSSLInclude);$(Glib);$(Gtk);$(LibWebSocketsInclude);$(JanssonInclude);$(LibCurlInclude);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
   </ItemDefinitionGroup>

@@ -1,3 +1,14 @@
+# Vendored zstd (single-file amalgamation, v1.5.7)
+zstd_lib = static_library('zstd',
+  sources: 'zstd/zstd.c',
+  c_args: ['-DZSTD_DISABLE_ASM'],
+  pic: true,
+)
+zstd_dep = declare_dependency(
+  link_with: zstd_lib,
+  include_directories: include_directories('zstd'),
+)
+
 common_sources = [
   'cfgfiles.c',
   'chanopt.c',
@@ -20,6 +31,7 @@ common_sources = [
   'scram.c',
   'scrollback.c',
   'server.c',
+  'sqlite-zstd-vfs.c',
   'servlist.c',
 	'text.c',
   'tree.c',
@@ -34,6 +46,7 @@ common_deps = [
   libgio_dep,
   libcanberra_dep,
   libsqlite3_dep,
+  zstd_dep,
 ] + global_deps
 
 common_includes = [

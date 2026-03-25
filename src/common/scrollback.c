@@ -31,6 +31,7 @@
 #include "hexchat.h"
 #include "hexchatc.h"
 #include "scrollback.h"
+#include "sqlite-zstd-vfs.h"
 #include "cfgfiles.h"
 #include "text.h"
 
@@ -55,6 +56,11 @@ struct scrollback_db {
 	sqlite3_stmt *stmt_load_reply;
 	sqlite3_stmt *stmt_update_pending;
 	sqlite3_stmt *stmt_redact;
+
+	/* Channel name normalization */
+	sqlite3_stmt *stmt_channel_insert;
+	sqlite3_stmt *stmt_channel_lookup;
+	GHashTable *channel_id_cache;    /* channel name -> GINT_TO_POINTER(channel_id) */
 };
 
 /* Hash table of open databases: network -> scrollback_db */
@@ -90,6 +96,42 @@ get_db_path (const char *network)
 	g_free (safe_network);
 
 	return full_path;
+}
+
+/* --- Channel ID resolver --- */
+
+static gint64
+scrollback_get_channel_id (scrollback_db *sdb, const char *channel)
+{
+	gint64 id;
+	gpointer cached;
+
+	if (!channel || !channel[0])
+		return -1;
+
+	/* Check cache first */
+	if (sdb->channel_id_cache &&
+	    g_hash_table_lookup_extended (sdb->channel_id_cache, channel, NULL, &cached))
+		return (gint64)GPOINTER_TO_INT (cached);
+
+	/* Insert if new, then fetch ID */
+	sqlite3_reset (sdb->stmt_channel_insert);
+	sqlite3_bind_text (sdb->stmt_channel_insert, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_step (sdb->stmt_channel_insert);
+
+	sqlite3_reset (sdb->stmt_channel_lookup);
+	sqlite3_bind_text (sdb->stmt_channel_lookup, 1, channel, -1, SQLITE_TRANSIENT);
+	if (sqlite3_step (sdb->stmt_channel_lookup) == SQLITE_ROW)
+		id = sqlite3_column_int64 (sdb->stmt_channel_lookup, 0);
+	else
+		return -1;
+
+	/* Cache it */
+	if (!sdb->channel_id_cache)
+		sdb->channel_id_cache = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+	g_hash_table_insert (sdb->channel_id_cache, g_strdup (channel), GINT_TO_POINTER ((int)id));
+
+	return id;
 }
 
 static gboolean
@@ -148,7 +190,13 @@ init_database (scrollback_db *sdb)
 		");";
 
 	char *errmsg = NULL;
-	int rc = sqlite3_exec (sdb->db, schema, NULL, NULL, &errmsg);
+	int rc;
+
+	/* Inner DB uses MEMORY journal — atomicity comes from the outer
+	 * (compressed) DB's own transactions via the zstd VFS. */
+	sqlite3_exec (sdb->db, "PRAGMA journal_mode=MEMORY;", NULL, NULL, NULL);
+
+	rc = sqlite3_exec (sdb->db, schema, NULL, NULL, &errmsg);
 
 	if (rc != SQLITE_OK)
 	{
@@ -157,13 +205,65 @@ init_database (scrollback_db *sdb)
 		return FALSE;
 	}
 
-	/* Enable WAL mode for better write performance */
-	rc = sqlite3_exec (sdb->db, "PRAGMA journal_mode=WAL;", NULL, NULL, &errmsg);
-	if (rc != SQLITE_OK)
+	/* Channel name normalization table */
+	sqlite3_exec (sdb->db,
+		"CREATE TABLE IF NOT EXISTS channels ("
+		"    id INTEGER PRIMARY KEY,"
+		"    name TEXT NOT NULL UNIQUE"
+		");",
+		NULL, NULL, NULL);
+
+	/* Add channel_id column to messages (NULL = legacy, use channel TEXT) */
+	sqlite3_exec (sdb->db,
+		"ALTER TABLE messages ADD COLUMN channel_id INTEGER REFERENCES channels(id);",
+		NULL, NULL, NULL);
+
+	/* Add channel_id column to reactions */
+	sqlite3_exec (sdb->db,
+		"ALTER TABLE reactions ADD COLUMN channel_id INTEGER REFERENCES channels(id);",
+		NULL, NULL, NULL);
+
+	/* Index on channel_id for messages (replaces idx_channel_time over time) */
+	sqlite3_exec (sdb->db,
+		"CREATE INDEX IF NOT EXISTS idx_channel_id_time ON messages(channel_id, timestamp);",
+		NULL, NULL, NULL);
+
+	/* Index on channel_id for reactions */
+	sqlite3_exec (sdb->db,
+		"CREATE INDEX IF NOT EXISTS idx_reactions_channel_id ON reactions(channel_id, target_msgid);",
+		NULL, NULL, NULL);
+
+	/* Migrate existing rows: populate channels table and channel_id */
 	{
-		g_warning ("Failed to enable WAL mode: %s", errmsg);
-		sqlite3_free (errmsg);
-		/* Not fatal, continue anyway */
+		int migrated = 0;
+		sqlite3_stmt *sel_ch;
+		rc = sqlite3_prepare_v2 (sdb->db,
+			"SELECT DISTINCT channel FROM messages WHERE channel_id IS NULL AND channel IS NOT NULL",
+			-1, &sel_ch, NULL);
+		if (rc == SQLITE_OK)
+		{
+			while (sqlite3_step (sel_ch) == SQLITE_ROW)
+			{
+				const char *ch_name = (const char *)sqlite3_column_text (sel_ch, 0);
+				if (ch_name)
+				{
+					char *sql = sqlite3_mprintf (
+						"INSERT OR IGNORE INTO channels (name) VALUES (%Q);"
+						"UPDATE messages SET channel_id = (SELECT id FROM channels WHERE name = %Q) "
+						"WHERE channel = %Q AND channel_id IS NULL;"
+						"UPDATE reactions SET channel_id = (SELECT id FROM channels WHERE name = %Q) "
+						"WHERE channel = %Q AND channel_id IS NULL;",
+						ch_name, ch_name, ch_name, ch_name, ch_name);
+					sqlite3_exec (sdb->db, sql, NULL, NULL, NULL);
+					sqlite3_free (sql);
+					migrated++;
+				}
+			}
+			sqlite3_finalize (sel_ch);
+			if (migrated > 0)
+				g_message ("scrollback: migrated %d channels to normalized IDs for %s",
+				           migrated, sdb->network);
+		}
 	}
 
 	return TRUE;
@@ -174,36 +274,49 @@ prepare_statements (scrollback_db *sdb)
 {
 	int rc;
 
-	/* Insert statement */
+	/* Channel name resolution */
 	rc = sqlite3_prepare_v2 (sdb->db,
-		"INSERT OR IGNORE INTO messages (channel, timestamp, msgid, text) VALUES (?, ?, ?, ?)",
+		"INSERT OR IGNORE INTO channels (name) VALUES (?)",
+		-1, &sdb->stmt_channel_insert, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT id FROM channels WHERE name = ?",
+		-1, &sdb->stmt_channel_lookup, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Insert statement (channel kept for NOT NULL compat with original schema) */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"INSERT OR IGNORE INTO messages (channel, channel_id, timestamp, msgid, text) "
+		"VALUES (?, ?, ?, ?, ?)",
 		-1, &sdb->stmt_insert, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
 	/* Load statement - get newest N messages in chronological order */
 	rc = sqlite3_prepare_v2 (sdb->db,
-		"SELECT id, channel, timestamp, msgid, text, redacted_by, redact_reason, redact_time "
-		"FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT ?",
+		"SELECT id, channel_id, timestamp, msgid, text, redacted_by, redact_reason, "
+		"redact_time "
+		"FROM messages WHERE channel_id = ? ORDER BY timestamp DESC LIMIT ?",
 		-1, &sdb->stmt_load, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
 	/* Get newest msgid */
 	rc = sqlite3_prepare_v2 (sdb->db,
-		"SELECT msgid FROM messages WHERE channel = ? AND msgid IS NOT NULL "
+		"SELECT msgid FROM messages WHERE channel_id = ? AND msgid IS NOT NULL "
 		"AND msgid NOT LIKE 'pending:%' ORDER BY timestamp DESC LIMIT 1",
 		-1, &sdb->stmt_newest_msgid, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
 	/* Get oldest msgid */
 	rc = sqlite3_prepare_v2 (sdb->db,
-		"SELECT msgid FROM messages WHERE channel = ? AND msgid IS NOT NULL "
+		"SELECT msgid FROM messages WHERE channel_id = ? AND msgid IS NOT NULL "
 		"AND msgid NOT LIKE 'pending:%' ORDER BY timestamp ASC LIMIT 1",
 		-1, &sdb->stmt_oldest_msgid, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
 	/* Get newest timestamp */
 	rc = sqlite3_prepare_v2 (sdb->db,
-		"SELECT MAX(timestamp) FROM messages WHERE channel = ?",
+		"SELECT MAX(timestamp) FROM messages WHERE channel_id = ?",
 		-1, &sdb->stmt_newest_time, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
@@ -215,14 +328,14 @@ prepare_statements (scrollback_db *sdb)
 
 	/* Clear channel */
 	rc = sqlite3_prepare_v2 (sdb->db,
-		"DELETE FROM messages WHERE channel = ?",
+		"DELETE FROM messages WHERE channel_id = ?",
 		-1, &sdb->stmt_clear, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
-	/* IRCv3 reactions: save */
+	/* IRCv3 reactions: save (channel kept for NOT NULL compat) */
 	rc = sqlite3_prepare_v2 (sdb->db,
-		"INSERT OR REPLACE INTO reactions (channel, target_msgid, reaction_text, nick, is_self, timestamp) "
-		"VALUES (?, ?, ?, ?, ?, ?)",
+		"INSERT OR REPLACE INTO reactions (channel, channel_id, target_msgid, reaction_text, nick, is_self, timestamp) "
+		"VALUES (?, ?, ?, ?, ?, ?, ?)",
 		-1, &sdb->stmt_save_reaction, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
@@ -235,7 +348,7 @@ prepare_statements (scrollback_db *sdb)
 	/* IRCv3 reactions: load all for a channel */
 	rc = sqlite3_prepare_v2 (sdb->db,
 		"SELECT target_msgid, reaction_text, nick, is_self FROM reactions "
-		"WHERE channel = ? ORDER BY target_msgid, reaction_text",
+		"WHERE channel_id = ? ORDER BY target_msgid, reaction_text",
 		-1, &sdb->stmt_load_reactions, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
@@ -250,13 +363,13 @@ prepare_statements (scrollback_db *sdb)
 	rc = sqlite3_prepare_v2 (sdb->db,
 		"SELECT r.msgid, r.target_msgid, r.target_nick, r.target_preview "
 		"FROM replies r INNER JOIN messages m ON r.msgid = m.msgid "
-		"WHERE m.channel = ?",
+		"WHERE m.channel_id = ?",
 		-1, &sdb->stmt_load_reply, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
 	/* Echo-message: update pending placeholder msgid to real msgid */
 	rc = sqlite3_prepare_v2 (sdb->db,
-		"UPDATE messages SET msgid = ?1 WHERE channel = ?2 AND msgid = ?3",
+		"UPDATE messages SET msgid = ?1 WHERE channel_id = ?2 AND msgid = ?3",
 		-1, &sdb->stmt_update_pending, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
@@ -277,6 +390,8 @@ fail:
 static void
 finalize_statements (scrollback_db *sdb)
 {
+	if (sdb->stmt_channel_insert) sqlite3_finalize (sdb->stmt_channel_insert);
+	if (sdb->stmt_channel_lookup) sqlite3_finalize (sdb->stmt_channel_lookup);
 	if (sdb->stmt_insert) sqlite3_finalize (sdb->stmt_insert);
 	if (sdb->stmt_load) sqlite3_finalize (sdb->stmt_load);
 	if (sdb->stmt_newest_msgid) sqlite3_finalize (sdb->stmt_newest_msgid);
@@ -291,17 +406,25 @@ finalize_statements (scrollback_db *sdb)
 	if (sdb->stmt_load_reply) sqlite3_finalize (sdb->stmt_load_reply);
 	if (sdb->stmt_update_pending) sqlite3_finalize (sdb->stmt_update_pending);
 	if (sdb->stmt_redact) sqlite3_finalize (sdb->stmt_redact);
+	if (sdb->channel_id_cache) g_hash_table_destroy (sdb->channel_id_cache);
 }
 
 scrollback_db *
 scrollback_open (const char *network)
 {
+	static gboolean vfs_registered = FALSE;
 	scrollback_db *sdb;
 	char *path;
 	int rc;
 
 	if (!network || !network[0])
 		return NULL;
+
+	if (!vfs_registered)
+	{
+		zstd_vfs_register ("zstd");
+		vfs_registered = TRUE;
+	}
 
 	/* Check if already open */
 	if (open_dbs)
@@ -318,7 +441,8 @@ scrollback_open (const char *network)
 	sdb->network = g_strdup (network);
 
 	path = get_db_path (network);
-	rc = sqlite3_open (path, &sdb->db);
+	rc = sqlite3_open_v2 (path, &sdb->db,
+	                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, "zstd");
 
 	if (rc != SQLITE_OK)
 	{
@@ -379,16 +503,21 @@ scrollback_db_save (scrollback_db *db, const char *channel,
 	if (!db || !channel || !text)
 		return FALSE;
 
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return FALSE;
+
 	sqlite3_reset (db->stmt_insert);
 	sqlite3_bind_text (db->stmt_insert, 1, channel, -1, SQLITE_TRANSIENT);
-	sqlite3_bind_int64 (db->stmt_insert, 2, (sqlite3_int64)timestamp);
+	sqlite3_bind_int64 (db->stmt_insert, 2, channel_id);
+	sqlite3_bind_int64 (db->stmt_insert, 3, (sqlite3_int64)timestamp);
 
 	if (msgid && msgid[0])
-		sqlite3_bind_text (db->stmt_insert, 3, msgid, -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text (db->stmt_insert, 4, msgid, -1, SQLITE_TRANSIENT);
 	else
-		sqlite3_bind_null (db->stmt_insert, 3);
+		sqlite3_bind_null (db->stmt_insert, 4);
 
-	sqlite3_bind_text (db->stmt_insert, 4, text, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_insert, 5, text, -1, SQLITE_TRANSIENT);
 
 	rc = sqlite3_step (db->stmt_insert);
 
@@ -412,18 +541,19 @@ scrollback_db_load (scrollback_db *db, const char *channel, int limit)
 	if (!db || !channel)
 		return NULL;
 
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return NULL;
+
 	if (limit <= 0)
 		limit = 500; /* Default */
 
-	/* Purge unconfirmed echo-message entries from a previous session.
-	 * These have "pending:<label>" placeholder msgids that were never
-	 * updated to real msgids (e.g., quit before echo arrived).
-	 * Chathistory will replay them with the correct msgid. */
+	/* Purge unconfirmed echo-message entries from a previous session. */
 	{
 		char *errmsg = NULL;
 		char *sql = sqlite3_mprintf (
-			"DELETE FROM messages WHERE channel = %Q AND msgid LIKE 'pending:%%'",
-			channel);
+			"DELETE FROM messages WHERE channel_id = %lld AND msgid LIKE 'pending:%%'",
+			(long long)channel_id);
 		sqlite3_exec (db->db, sql, NULL, NULL, &errmsg);
 		if (errmsg)
 		{
@@ -434,7 +564,7 @@ scrollback_db_load (scrollback_db *db, const char *channel, int limit)
 	}
 
 	sqlite3_reset (db->stmt_load);
-	sqlite3_bind_text (db->stmt_load, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64 (db->stmt_load, 1, channel_id);
 	sqlite3_bind_int (db->stmt_load, 2, limit);
 
 	while ((rc = sqlite3_step (db->stmt_load)) == SQLITE_ROW)
@@ -442,7 +572,7 @@ scrollback_db_load (scrollback_db *db, const char *channel, int limit)
 		scrollback_msg *msg = g_new0 (scrollback_msg, 1);
 
 		msg->id = sqlite3_column_int64 (db->stmt_load, 0);
-		msg->channel = g_strdup ((const char *)sqlite3_column_text (db->stmt_load, 1));
+		msg->channel = g_strdup (channel);
 		msg->timestamp = (time_t)sqlite3_column_int64 (db->stmt_load, 2);
 
 		const char *msgid_text = (const char *)sqlite3_column_text (db->stmt_load, 3);
@@ -477,8 +607,12 @@ scrollback_get_newest_msgid (scrollback_db *db, const char *channel)
 	if (!db || !channel)
 		return NULL;
 
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return NULL;
+
 	sqlite3_reset (db->stmt_newest_msgid);
-	sqlite3_bind_text (db->stmt_newest_msgid, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64 (db->stmt_newest_msgid, 1, channel_id);
 
 	rc = sqlite3_step (db->stmt_newest_msgid);
 	if (rc == SQLITE_ROW)
@@ -500,8 +634,12 @@ scrollback_get_oldest_msgid (scrollback_db *db, const char *channel)
 	if (!db || !channel)
 		return NULL;
 
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return NULL;
+
 	sqlite3_reset (db->stmt_oldest_msgid);
-	sqlite3_bind_text (db->stmt_oldest_msgid, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64 (db->stmt_oldest_msgid, 1, channel_id);
 
 	rc = sqlite3_step (db->stmt_oldest_msgid);
 	if (rc == SQLITE_ROW)
@@ -523,8 +661,12 @@ scrollback_get_newest_time (scrollback_db *db, const char *channel)
 	if (!db || !channel)
 		return 0;
 
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return 0;
+
 	sqlite3_reset (db->stmt_newest_time);
-	sqlite3_bind_text (db->stmt_newest_time, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64 (db->stmt_newest_time, 1, channel_id);
 
 	rc = sqlite3_step (db->stmt_newest_time);
 	if (rc == SQLITE_ROW)
@@ -554,12 +696,18 @@ scrollback_update_pending_msgid (scrollback_db *db, const char *channel,
 {
 	int rc;
 
+	gint64 channel_id;
+
 	if (!db || !db->stmt_update_pending || !channel || !pending_msgid || !real_msgid)
+		return FALSE;
+
+	channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id <= 0)
 		return FALSE;
 
 	sqlite3_reset (db->stmt_update_pending);
 	sqlite3_bind_text (db->stmt_update_pending, 1, real_msgid, -1, SQLITE_TRANSIENT);
-	sqlite3_bind_text (db->stmt_update_pending, 2, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64 (db->stmt_update_pending, 2, channel_id);
 	sqlite3_bind_text (db->stmt_update_pending, 3, pending_msgid, -1, SQLITE_TRANSIENT);
 
 	rc = sqlite3_step (db->stmt_update_pending);
@@ -592,11 +740,17 @@ scrollback_redact_message (scrollback_db *db, const char *msgid,
 void
 scrollback_clear (scrollback_db *db, const char *channel)
 {
+	gint64 channel_id;
+
 	if (!db || !channel)
 		return;
 
+	channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id <= 0)
+		return;
+
 	sqlite3_reset (db->stmt_clear);
-	sqlite3_bind_text (db->stmt_clear, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64 (db->stmt_clear, 1, channel_id);
 	sqlite3_step (db->stmt_clear);
 }
 
@@ -748,7 +902,6 @@ scrollback_migrate (scrollback_db *db, const char *network, const char *channel)
 void
 scrollback_init (void)
 {
-	/* SQLite is initialized automatically on first use */
 	if (!open_dbs)
 		open_dbs = g_hash_table_new (g_str_hash, g_str_equal);
 }
@@ -772,6 +925,7 @@ scrollback_shutdown (void)
 		g_hash_table_destroy (open_dbs);
 		open_dbs = NULL;
 	}
+	zstd_vfs_shutdown ();
 }
 
 /* IRCv3 reactions: save a reaction to scrollback */
@@ -782,17 +936,24 @@ scrollback_save_reaction (scrollback_db *db, const char *channel,
 {
 	int rc;
 
+	gint64 channel_id;
+
 	if (!db || !db->stmt_save_reaction || !channel || !target_msgid ||
 	    !reaction_text || !nick)
 		return FALSE;
 
+	channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id <= 0)
+		return FALSE;
+
 	sqlite3_reset (db->stmt_save_reaction);
 	sqlite3_bind_text (db->stmt_save_reaction, 1, channel, -1, SQLITE_TRANSIENT);
-	sqlite3_bind_text (db->stmt_save_reaction, 2, target_msgid, -1, SQLITE_TRANSIENT);
-	sqlite3_bind_text (db->stmt_save_reaction, 3, reaction_text, -1, SQLITE_TRANSIENT);
-	sqlite3_bind_text (db->stmt_save_reaction, 4, nick, -1, SQLITE_TRANSIENT);
-	sqlite3_bind_int (db->stmt_save_reaction, 5, is_self ? 1 : 0);
-	sqlite3_bind_int64 (db->stmt_save_reaction, 6, (sqlite3_int64)timestamp);
+	sqlite3_bind_int64 (db->stmt_save_reaction, 2, channel_id);
+	sqlite3_bind_text (db->stmt_save_reaction, 3, target_msgid, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_save_reaction, 4, reaction_text, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text (db->stmt_save_reaction, 5, nick, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int (db->stmt_save_reaction, 6, is_self ? 1 : 0);
+	sqlite3_bind_int64 (db->stmt_save_reaction, 7, (sqlite3_int64)timestamp);
 
 	rc = sqlite3_step (db->stmt_save_reaction);
 	return rc == SQLITE_DONE;
@@ -827,11 +988,17 @@ scrollback_load_reactions (scrollback_db *db, const char *channel)
 	GSList *list = NULL;
 	int rc;
 
+	gint64 channel_id;
+
 	if (!db || !db->stmt_load_reactions || !channel)
 		return NULL;
 
+	channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id <= 0)
+		return NULL;
+
 	sqlite3_reset (db->stmt_load_reactions);
-	sqlite3_bind_text (db->stmt_load_reactions, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64 (db->stmt_load_reactions, 1, channel_id);
 
 	while ((rc = sqlite3_step (db->stmt_load_reactions)) == SQLITE_ROW)
 	{
@@ -899,11 +1066,17 @@ scrollback_load_replies (scrollback_db *db, const char *channel)
 	GSList *list = NULL;
 	int rc;
 
+	gint64 channel_id;
+
 	if (!db || !db->stmt_load_reply || !channel)
 		return NULL;
 
+	channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id <= 0)
+		return NULL;
+
 	sqlite3_reset (db->stmt_load_reply);
-	sqlite3_bind_text (db->stmt_load_reply, 1, channel, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64 (db->stmt_load_reply, 1, channel_id);
 
 	while ((rc = sqlite3_step (db->stmt_load_reply)) == SQLITE_ROW)
 	{
