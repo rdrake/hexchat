@@ -8204,8 +8204,17 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 	if (target_line < 0)
 		return;  /* Entry not found (shouldn't happen) */
 
-	/* Add subline offset */
-	target_line += anchor->subline_offset;
+	/* Add subline offset, clamped to the entry's current subline count
+	 * (wrap points may have changed after reflow at a new width) */
+	{
+		int text_sublines = (int)g_slist_length (ent->sublines) + 1;
+		int clamped = anchor->subline_offset;
+		if (clamped >= text_sublines)
+			clamped = text_sublines - 1;
+		if (clamped < 0)
+			clamped = 0;
+		target_line += clamped;
+	}
 
 	/* Clamp to valid range */
 	upper = gtk_adjustment_get_upper (adj);

@@ -3338,10 +3338,24 @@ mg_change_nick (int cancel, char *text, gpointer userdata)
 }
 
 static void
+mg_nick_dialog_destroyed (GtkWidget *w, GtkWidget *button)
+{
+	gtk_widget_set_sensitive (button, TRUE);
+}
+
+static void
 mg_nickclick_cb (GtkWidget *button, gpointer userdata)
 {
-	fe_get_str (_("Enter new nickname:"), current_sess->server->nick,
+	GtkWidget *dialog;
+
+	gtk_widget_set_sensitive (button, FALSE);
+	dialog = fe_get_str (_("Enter new nickname:"), current_sess->server->nick,
 					mg_change_nick, (void *) 1);
+	if (dialog)
+		g_signal_connect (dialog, "destroy",
+						  G_CALLBACK (mg_nick_dialog_destroyed), button);
+	else
+		gtk_widget_set_sensitive (button, TRUE);
 }
 
 /* make sure chanview and userlist positions are sane */

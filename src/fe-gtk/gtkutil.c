@@ -367,10 +367,10 @@ gtkutil_str_cancel (GtkWidget *button, GtkWidget *dialog)
 	hc_window_destroy_fn (GTK_WINDOW (dialog));
 }
 
-void
+void *
 fe_get_str (char *msg, char *def, void *callback, void *userdata)
 {
-	GtkWidget *dialog;
+	GtkWidget *dialog = NULL;
 	GtkWidget *entry;
 	GtkWidget *hbox;
 	GtkWidget *label;
@@ -426,6 +426,7 @@ fe_get_str (char *msg, char *def, void *callback, void *userdata)
 	gtk_box_append (GTK_BOX (vbox), button_box);
 
 	gtk_window_present (GTK_WINDOW (dialog));
+	return dialog;
 }
 
 static void
