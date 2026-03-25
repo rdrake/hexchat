@@ -1370,13 +1370,13 @@ mg_open_quit_dialog (gboolean minimize_button)
 	}
 
 	quit_dialog = gtk_window_new ();
-	hc_widget_set_margin_all (quit_dialog, 6);
 	gtk_window_set_title (GTK_WINDOW (quit_dialog), _("Quit HexChat?"));
 	gtk_window_set_transient_for (GTK_WINDOW (quit_dialog), GTK_WINDOW (parent_window));
 	gtk_window_set_resizable (GTK_WINDOW (quit_dialog), FALSE);
 	gtk_window_set_destroy_with_parent (GTK_WINDOW (quit_dialog), TRUE);
 
 	dialog_vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+	hc_widget_set_margin_all (dialog_vbox1, 6);
 	gtk_window_set_child (GTK_WINDOW (quit_dialog), dialog_vbox1);
 
 	table1 = gtk_grid_new ();

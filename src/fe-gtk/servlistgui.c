@@ -2068,7 +2068,6 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	editwindow = gtk_window_new ();
 	if (fe_get_application ())
 		gtk_window_set_application (GTK_WINDOW (editwindow), fe_get_application ());
-	hc_widget_set_margin_all (editwindow, 4);
 	g_snprintf (buf, sizeof (buf), _("Edit %s - %s"), net->name, _(DISPLAY_NAME));
 	gtk_window_set_title (GTK_WINDOW (editwindow), buf);
 	gtk_window_set_default_size (GTK_WINDOW (editwindow), netedit_win_width, netedit_win_height);
@@ -2076,6 +2075,7 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	gtk_window_set_modal (GTK_WINDOW (editwindow), TRUE);
 
 	vbox5 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	hc_widget_set_margin_all (vbox5, 4);
 	gtk_window_set_child (GTK_WINDOW (editwindow), vbox5);
 
 
@@ -2412,7 +2412,6 @@ servlist_open_networks (void)
 	servlist = gtk_window_new ();
 	if (fe_get_application ())
 		gtk_window_set_application (GTK_WINDOW (servlist), fe_get_application ());
-	hc_widget_set_margin_all (servlist, 4);
 	g_snprintf(buf, sizeof(buf), _("Network List - %s"), _(DISPLAY_NAME));
 	gtk_window_set_title (GTK_WINDOW (servlist), buf);
 	gtk_window_set_default_size (GTK_WINDOW (servlist), netlist_win_width, netlist_win_height);
@@ -2432,6 +2431,7 @@ servlist_open_networks (void)
 	}
 
 	vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	hc_widget_set_margin_all (vbox1, 4);
 	gtk_window_set_child (GTK_WINDOW (servlist), vbox1);
 
 	label2 = bold_label (_("User Information"));
