@@ -1493,16 +1493,6 @@ servlist_edit_tabswitch_cb (GtkNotebook *nb, gpointer *newtab, guint newindex, g
 	return FALSE;
 }
 
-static void
-servlist_combo_cb (GtkEntry *entry, gpointer userdata)
-{
-	if (!selected_net)
-		return;
-
-	g_free (selected_net->encoding);
-	selected_net->encoding = g_strdup (hc_entry_get_text (GTK_WIDGET (entry)));
-}
-
 #ifdef USE_LIBWEBSOCKETS
 /* Helper to show error/info messages parented to the edit dialog */
 static void

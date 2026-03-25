@@ -171,15 +171,17 @@ tab_search_offset (GtkWidget *inner, gint start_offset,
 
 		while (tabs)
 		{
-			double bx, by;
+			graphene_point_t p;
 			button = (GtkWidget *)tabs->data;
 			tabs = (forward ? tabs->next : tabs->prev);
 
 			if (!GTK_IS_TOGGLE_BUTTON (button))
 				continue;
 
-			gtk_widget_translate_coordinates (button, inner, 0, 0, &bx, &by);
-			found = (gint)(vertical ? by : bx);
+			if (!gtk_widget_compute_point (button, inner,
+					&GRAPHENE_POINT_INIT (0, 0), &p))
+				continue;
+			found = (gint)(vertical ? p.y : p.x);
 			if ((forward && found > start_offset) ||
 				(!forward && found < start_offset))
 				return found;

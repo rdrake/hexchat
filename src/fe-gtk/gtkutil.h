@@ -41,11 +41,6 @@ gboolean gtkutil_close_request_focus_parent (GtkWindow *win, gpointer parent);
 GtkApplication *fe_get_application (void);
 void gtkutil_copy_to_clipboard (GtkWidget *widget, gboolean primary_only,
                                 const gchar *str);
-GtkWidget *gtkutil_treeview_new (GtkWidget *box, GtkTreeModel *model,
-                                 GtkTreeCellDataFunc mapper, ...);
-gboolean gtkutil_treemodel_string_to_iter (GtkTreeModel *model, gchar *pathstr, GtkTreeIter *iter_ret);
-gboolean gtkutil_treeview_get_selected_iter (GtkTreeView *view, GtkTreeIter *iter_ret);
-gboolean gtkutil_treeview_get_selected (GtkTreeView *view, GtkTreeIter *iter_ret, ...);
 gboolean gtkutil_tray_icon_supported (GtkWindow *window);
 
 #if defined (WIN32) || defined (__APPLE__)

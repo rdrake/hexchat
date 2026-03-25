@@ -38,7 +38,8 @@
 #include "maingui.h"
 #include "menu.h"
 #include "gtkutil.h"
-#include "plugin-tray.h"
+/* Forward declaration — defined later, platform-specific */
+gboolean tray_toggle_visibility (gboolean force_hide);
 
 #ifndef WIN32
 #include <unistd.h>

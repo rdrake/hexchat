@@ -59,7 +59,7 @@ static gboolean color_change;
 static gboolean setup_applying = FALSE; /* Guard against callbacks during apply/destroy */
 static struct hexchatprefs setup_prefs;
 static GtkWidget *cancel_button;
-static GtkWidget *font_dialog = NULL;
+static GCancellable *font_dialog_cancel = NULL;
 
 enum
 {
@@ -1082,28 +1082,29 @@ setup_browsefile_cb (GtkWidget *button, GtkWidget *entry)
 }
 
 static void
-setup_fontsel_destroy (GtkWidget *dialog, gpointer user_data)
+setup_fontsel_chosen_cb (GObject *source, GAsyncResult *result, gpointer user_data)
 {
-	font_dialog = NULL;
-}
+	GtkFontDialog *fd = GTK_FONT_DIALOG (source);
+	GtkWidget *entry = GTK_WIDGET (user_data);
+	PangoFontDescription *desc;
+	GError *error = NULL;
 
-static void
-setup_fontsel_response (GtkWindow *dialog, gint response_id, GtkWidget *entry)
-{
-	if (response_id == GTK_RESPONSE_OK) /* GtkFontChooserDialog response */
+	g_clear_object (&font_dialog_cancel);
+
+	desc = gtk_font_dialog_choose_font_finish (fd, result, &error);
+	if (desc)
 	{
-		char *font_name;
-
-		font_name = gtk_font_chooser_get_font (GTK_FONT_CHOOSER (dialog));
-		if (font_name)
-		{
-			hc_entry_set_text (entry, font_name);
-			g_free (font_name);
-		}
+		char *font_name = pango_font_description_to_string (desc);
+		hc_entry_set_text (entry, font_name);
+		g_free (font_name);
+		pango_font_description_free (desc);
 	}
-
-	hc_window_destroy_fn (GTK_WINDOW (dialog));
-	font_dialog = NULL;
+	else if (error && !g_error_matches (error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_DISMISSED) &&
+	         !g_error_matches (error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_CANCELLED))
+	{
+		g_warning ("Font dialog error: %s", error->message);
+	}
+	g_clear_error (&error);
 }
 
 static void
@@ -1115,22 +1116,34 @@ setup_browsefolder_cb (GtkWidget *button, GtkEntry *entry)
 static void
 setup_browsefont_cb (GtkWidget *button, GtkWidget *entry)
 {
-	GtkWidget *dialog;
+	GtkFontDialog *fd;
+	PangoFontDescription *initial_desc = NULL;
+	const char *current_font;
 
-	dialog = gtk_font_chooser_dialog_new (_("Select font"), GTK_WINDOW (setup_window));
-	font_dialog = dialog;	/* global var */
+	/* Cancel any already-open font dialog */
+	if (font_dialog_cancel)
+	{
+		g_cancellable_cancel (font_dialog_cancel);
+		g_clear_object (&font_dialog_cancel);
+	}
 
-	gtk_window_set_modal (GTK_WINDOW (dialog), TRUE);
+	fd = gtk_font_dialog_new ();
+	gtk_font_dialog_set_title (fd, _("Select font"));
+	gtk_font_dialog_set_modal (fd, TRUE);
 
-	if (hc_entry_get_text (entry)[0])
-		gtk_font_chooser_set_font (GTK_FONT_CHOOSER (dialog), hc_entry_get_text (entry));
+	current_font = hc_entry_get_text (entry);
+	if (current_font && current_font[0])
+		initial_desc = pango_font_description_from_string (current_font);
 
-	g_signal_connect (G_OBJECT (dialog), "destroy",
-							G_CALLBACK (setup_fontsel_destroy), NULL);
-	g_signal_connect (G_OBJECT (dialog), "response",
-							G_CALLBACK (setup_fontsel_response), entry);
+	font_dialog_cancel = g_cancellable_new ();
 
-	gtk_window_present (GTK_WINDOW (dialog));
+	gtk_font_dialog_choose_font (fd, GTK_WINDOW (setup_window), initial_desc,
+	                             font_dialog_cancel, setup_fontsel_chosen_cb, entry);
+
+	if (initial_desc)
+		pango_font_description_free (initial_desc);
+
+	g_object_unref (fd);
 }
 
 static void
@@ -2508,10 +2521,10 @@ setup_close_cb (GtkWidget *win, GtkWidget **swin)
 {
 	*swin = NULL;
 
-	if (font_dialog)
+	if (font_dialog_cancel)
 	{
-		hc_window_destroy_fn (GTK_WINDOW (font_dialog));
-		font_dialog = NULL;
+		g_cancellable_cancel (font_dialog_cancel);
+		g_clear_object (&font_dialog_cancel);
 	}
 }
 

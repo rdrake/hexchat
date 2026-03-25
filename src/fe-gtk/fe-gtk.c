@@ -1962,7 +1962,9 @@ fe_open_url_inner (const char *url)
 #else
 	char *escaped_url = maybe_escape_uri (url);
 	g_debug ("Opening URL \"%s\" (%s)", escaped_url, url);
-	gtk_show_uri (NULL, escaped_url, GDK_CURRENT_TIME);
+	GtkUriLauncher *launcher = gtk_uri_launcher_new (escaped_url);
+	gtk_uri_launcher_launch (launcher, NULL, NULL, NULL, NULL);
+	g_object_unref (launcher);
 	g_free (escaped_url);
 #endif
 }

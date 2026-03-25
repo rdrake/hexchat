@@ -278,7 +278,7 @@ mg_set_access_icon (session_gui *gui, GdkPixbuf *pix, gboolean away)
 	btn_box = gtk_button_get_child (GTK_BUTTON (gui->nick_label));
 	if (pix && prefs.hex_gui_input_icon && btn_box)
 	{
-		gui->op_xpm = gtk_image_new_from_pixbuf (pix);
+		gui->op_xpm = gtk_image_new_from_paintable (GDK_PAINTABLE (gdk_texture_new_for_pixbuf (pix)));
 		g_object_set_data (G_OBJECT (gui->op_xpm), "source-pixbuf", pix);
 		gtk_box_prepend (GTK_BOX (btn_box), gui->op_xpm);
 	}
@@ -1522,105 +1522,6 @@ mg_link_gentab (chan *ch, GtkWidget *box)
 	gtk_window_present (GTK_WINDOW (win));
 
 	g_object_unref (box);
-}
-
-static void
-mg_detach_tab_cb (GtkWidget *item, chan *ch)
-{
-	if (chan_get_tag (ch) == TAG_IRC)	/* IRC tab */
-	{
-		/* userdata is session * */
-		mg_link_irctab (chan_get_userdata (ch), 1);
-		return;
-	}
-
-	/* userdata is GtkWidget * */
-	mg_link_gentab (ch, chan_get_userdata (ch));	/* non-IRC tab */
-}
-
-static void
-mg_destroy_tab_cb (GtkWidget *item, chan *ch)
-{
-	/* treat it just like the X button press */
-	mg_xbutton_cb (mg_gui->chanview, ch, chan_get_tag (ch), chan_get_userdata (ch));
-}
-
-static void
-mg_set_guint8 (GtkCheckButton *item, guint8 *setting)
-{
-	session *sess = current_sess;
-	guint8 logging = sess->text_logging;
-
-	*setting = SET_OFF;
-	if (gtk_check_button_get_active (item))
-		*setting = SET_ON;
-
-	/* has the logging setting changed? */
-	if (logging != sess->text_logging)
-		log_open_or_close (sess);
-
-	chanopt_save (sess);
-	chanopt_save_all (FALSE);
-}
-
-static void
-mg_perchan_menu_item (char *label, GtkWidget *menu, guint8 *setting, guint global)
-{
-	guint8 initial_value = *setting;
-
-	/* if it's using global value, use that as initial state */
-	if (initial_value == SET_DEFAULT)
-		initial_value = global;
-
-	menu_toggle_item (label, menu, mg_set_guint8, setting, initial_value);
-}
-
-static void
-mg_create_perchannelmenu (session *sess, GtkWidget *menu)
-{
-	GtkWidget *submenu;
-
-	submenu = menu_quick_sub (_("_Settings"), menu, NULL, XCMENU_MNEMONIC, -1);
-
-	mg_perchan_menu_item (_("_Log to Disk"), submenu, &sess->text_logging, prefs.hex_irc_logging);
-	mg_perchan_menu_item (_("_Reload Scrollback"), submenu, &sess->text_scrollback, prefs.hex_text_replay);
-	if (sess->type == SESS_CHANNEL)
-	{
-		mg_perchan_menu_item (_("Strip _Colors"), submenu, &sess->text_strip, prefs.hex_text_stripcolor_msg);
-		mg_perchan_menu_item (_("_Hide Join/Part Messages"), submenu, &sess->text_hidejoinpart, prefs.hex_irc_conf_mode);
-	}
-}
-
-static void
-mg_create_alertmenu (session *sess, GtkWidget *menu)
-{
-	GtkWidget *submenu;
-	int hex_balloon, hex_beep, hex_tray, hex_flash;
-
-
-	switch (sess->type) {
-		case SESS_DIALOG:
-			hex_balloon = prefs.hex_input_balloon_priv;
-			hex_beep = prefs.hex_input_beep_priv;
-			hex_tray = prefs.hex_input_tray_priv;
-			hex_flash = prefs.hex_input_flash_priv;
-			break;
-		default:
-			hex_balloon = prefs.hex_input_balloon_chans;
-			hex_beep = prefs.hex_input_beep_chans;
-			hex_tray = prefs.hex_input_tray_chans;
-			hex_flash = prefs.hex_input_flash_chans;
-	}
-
-	submenu = menu_quick_sub(_("_Extra Alerts"), menu, NULL, XCMENU_MNEMONIC, -1);
-
-	mg_perchan_menu_item(_("Show Notifications"), submenu, &sess->alert_balloon, hex_balloon);
-
-	mg_perchan_menu_item(_("Beep on _Message"), submenu, &sess->alert_beep, hex_beep);
-
-	mg_perchan_menu_item(_("Blink Tray _Icon"), submenu, &sess->alert_tray, hex_tray);
-
-	mg_perchan_menu_item(_("Blink Task _Bar"), submenu, &sess->alert_taskbar, hex_flash);
 }
 
 /* GTK4: Tab menu action callbacks and context state */

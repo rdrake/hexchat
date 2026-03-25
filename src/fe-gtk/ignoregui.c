@@ -537,7 +537,7 @@ ignore_gui_open ()
 	char *mask;
 	gboolean private, chan, notice, ctcp, dcc, invite, unignore;
 	char buf[128];
-	GListStore *store;
+	GListStore *store = NULL;
 	HcIgnoreItem *item;
 
 	if (ignorewin)

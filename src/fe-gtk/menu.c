@@ -88,18 +88,6 @@ enum
 	M_MENUSUB
 };
 
-struct mymenu
-{
-	char *text;
-	void *callback;
-	char *image;
-	unsigned char type;	/* M_XXX */
-	unsigned char id;		/* MENU_ID_XXX (menu.h) */
-	unsigned char state;	/* ticked or not? */
-	unsigned char sensitive;	/* shaded out? */
-	guint key;				/* GDK_KEY_x */
-};
-
 #define XCMENU_DOLIST 1
 #define XCMENU_SHADED 1
 #define XCMENU_MARKUP 2
@@ -230,29 +218,6 @@ userlist_button_cb (GtkWidget * button, char *cmd)
 
 	g_free (nicks);
 	g_free (allnicks);
-}
-
-/* a popup-menu-item has been selected */
-
-static void
-popup_menu_cb (GtkWidget * item, char *cmd)
-{
-	char *nick;
-
-	/* the userdata is set in menu_quick_item() */
-	nick = g_object_get_data (G_OBJECT (item), "u");
-
-	if (!nick)	/* userlist popup menu */
-	{
-		/* treat it just like a userlist button */
-		userlist_button_cb (NULL, cmd);
-		return;
-	}
-
-	if (!current_sess)	/* for url grabber window */
-		nick_command_parse (sess_list->data, cmd, nick, nick);
-	else
-		nick_command_parse (current_sess, cmd, nick, nick);
 }
 
 GtkWidget *
@@ -1749,16 +1714,6 @@ menu_middlemenu (session *sess, GtkWidget *parent, double x, double y)
 	g_object_unref (gmenu);
 }
 
-static void
-open_url_cb (GtkWidget *item, char *url)
-{
-	char buf[512];
-
-	/* pass this to /URL so it can handle irc:// */
-	g_snprintf (buf, sizeof (buf), "URL %s", url);
-	handle_command (current_sess, buf, FALSE);
-}
-
 /* Action callbacks for URL menu */
 static char **url_handler_cmds = NULL;   /* array of URL handler commands */
 static int url_handler_cmd_count = 0;    /* count of URL handler commands */
@@ -2102,42 +2057,6 @@ menu_urlmenu (GtkWidget *parent, double x, double y, char *url)
 
 	gtk_popover_popup (GTK_POPOVER (popover));
 	g_object_unref (gmenu);
-}
-
-static void
-menu_chan_cycle (GtkWidget * menu, char *chan)
-{
-	char tbuf[256];
-
-	if (current_sess)
-	{
-		g_snprintf (tbuf, sizeof tbuf, "CYCLE %s", chan);
-		handle_command (current_sess, tbuf, FALSE);
-	}
-}
-
-static void
-menu_chan_part (GtkWidget * menu, char *chan)
-{
-	char tbuf[256];
-
-	if (current_sess)
-	{
-		g_snprintf (tbuf, sizeof tbuf, "part %s", chan);
-		handle_command (current_sess, tbuf, FALSE);
-	}
-}
-
-static void
-menu_chan_focus (GtkWidget * menu, char *chan)
-{
-	char tbuf[256];
-
-	if (current_sess)
-	{
-		g_snprintf (tbuf, sizeof tbuf, "doat %s gui focus", chan);
-		handle_command (current_sess, tbuf, FALSE);
-	}
 }
 
 static void
@@ -2977,114 +2896,6 @@ menu_about (GtkWidget *wid, gpointer sess)
 	
 }
 
-static struct mymenu mymenu[] = {
-	{N_("He_xChat"), 0, 0, M_NEWMENU, MENU_ID_HEXCHAT, 0, 1},
-	{N_("Network Li_st"), menu_open_server_list, (char *)&pix_book, M_MENUPIX, 0, 0, 1, GDK_KEY_s},
-	{0, 0, 0, M_SEP, 0, 0, 0},
-
-	{N_("_New"), 0, "document-new", M_MENUSUB, 0, 0, 1},
-		{N_("Server Tab"), menu_newserver_tab, 0, M_MENUITEM, 0, 0, 1, GDK_KEY_t},
-		{N_("Channel Tab"), menu_newchannel_tab, 0, M_MENUITEM, 0, 0, 1},
-		{N_("Server Window"), menu_newserver_window, 0, M_MENUITEM, 0, 0, 1, GDK_KEY_n},
-		{N_("Channel Window"), menu_newchannel_window, 0, M_MENUITEM, 0, 0, 1},
-		{0, 0, 0, M_END, 0, 0, 0},
-	{0, 0, 0, M_SEP, 0, 0, 0},
-
-	{N_("_Load Plugin or Script" ELLIPSIS), menu_loadplugin, "document-revert", M_MENUSTOCK, 0, 0, 1},
-	{0, 0, 0, M_SEP, 0, 0, 0},	/* 11 */
-#define DETACH_OFFSET (12)
-	{0, menu_detach, "edit-redo", M_MENUSTOCK, 0, 0, 1},	/* 12 */
-#define CLOSE_OFFSET (13)
-	{0, menu_close, "window-close", M_MENUSTOCK, 0, 0, 1},
-	{0, 0, 0, M_SEP, 0, 0, 0},
-	{N_("_Quit"), menu_quit, "application-exit", M_MENUSTOCK, 0, 0, 1, GDK_KEY_q},	/* 15 */
-
-	{N_("_View"), 0, 0, M_NEWMENU, 0, 0, 1},
-#define MENUBAR_OFFSET (17)
-	{N_("_Menu Bar"), menu_bar_toggle_cb, 0, M_MENUTOG, MENU_ID_MENUBAR, 0, 1, GDK_KEY_F9},
-	{N_("_Topic Bar"), menu_topicbar_toggle, 0, M_MENUTOG, MENU_ID_TOPICBAR, 0, 1},
-	{N_("_User List"), menu_userlist_toggle, 0, M_MENUTOG, MENU_ID_USERLIST, 0, 1, GDK_KEY_F7},
-	{N_("U_ser List Buttons"), menu_ulbuttons_toggle, 0, M_MENUTOG, MENU_ID_ULBUTTONS, 0, 1},
-	{N_("M_ode Buttons"), menu_cmbuttons_toggle, 0, M_MENUTOG, MENU_ID_MODEBUTTONS, 0, 1},
-	{0, 0, 0, M_SEP, 0, 0, 0},
-	{N_("_Channel Switcher"), 0, 0, M_MENUSUB, 0, 0, 1},	/* 23 */
-#define TABS_OFFSET (24)
-		{N_("_Tabs"), NULL, 0, M_MENURADIO, MENU_ID_LAYOUT_TABS, 0, 1},
-		{N_("T_ree"), 0, 0, M_MENURADIO, MENU_ID_LAYOUT_TREE, 0, 1},
-		{0, 0, 0, M_END, 0, 0, 0},
-	{N_("_Network Meters"), 0, 0, M_MENUSUB, 0, 0, 1},	/* 27 */
-#define METRE_OFFSET (28)
-		{N_("Off"), NULL, 0, M_MENURADIO, 0, 0, 1},
-		{N_("Graph"), NULL, 0, M_MENURADIO, 0, 0, 1},
-		{N_("Text"), NULL, 0, M_MENURADIO, 0, 0, 1},
-		{N_("Both"), NULL, 0, M_MENURADIO, 0, 0, 1},
-		{0, 0, 0, M_END, 0, 0, 0},	/* 32 */
-	{ 0, 0, 0, M_SEP, 0, 0, 0 },
-	{N_ ("_Fullscreen"), menu_fullscreen_toggle, 0, M_MENUTOG, MENU_ID_FULLSCREEN, 0, 1, GDK_KEY_F11},
-
-	{N_("_Server"), 0, 0, M_NEWMENU, 0, 0, 1},
-	{N_("_Disconnect"), menu_disconnect, "network-offline", M_MENUSTOCK, MENU_ID_DISCONNECT, 0, 1},
-	{N_("_Reconnect"), menu_reconnect, "network-transmit-receive", M_MENUSTOCK, MENU_ID_RECONNECT, 0, 1},
-	{N_("_Join a Channel" ELLIPSIS), menu_join, "go-jump", M_MENUSTOCK, MENU_ID_JOIN, 0, 1},
-	{N_("Channel _List"), menu_chanlist, "format-justify-fill", M_MENUITEM, 0, 0, 1},
-	{0, 0, 0, M_SEP, 0, 0, 0},
-#define AWAY_OFFSET (41)
-	{N_("Marked _Away"), NULL, 0, M_MENUTOG, MENU_ID_AWAY, 0, 1, GDK_KEY_a},
-
-	{N_("_Usermenu"), 0, 0, M_NEWMENU, MENU_ID_USERMENU, 0, 1},	/* 40 */
-
-	{N_("S_ettings"), 0, 0, M_NEWMENU, 0, 0, 1},
-	{N_("_Preferences"), menu_settings, "preferences-system", M_MENUSTOCK, 0, 0, 1},
-	{0, 0, 0, M_SEP, 0, 0, 0},
-	{N_("Auto Replace"), menu_rpopup, 0, M_MENUITEM, 0, 0, 1},
-	{N_("CTCP Replies"), menu_ctcpguiopen, 0, M_MENUITEM, 0, 0, 1},
-	{N_("Dialog Buttons"), menu_dlgbuttons, 0, M_MENUITEM, 0, 0, 1},
-	{N_("Keyboard Shortcuts"), menu_keypopup, 0, M_MENUITEM, 0, 0, 1},
-	{N_("Text Events"), menu_evtpopup, 0, M_MENUITEM, 0, 0, 1},
-	{N_("URL Handlers"), menu_urlhandlers, 0, M_MENUITEM, 0, 0, 1},
-	{N_("User Commands"), menu_usercommands, 0, M_MENUITEM, 0, 0, 1},
-	{N_("User List Buttons"), menu_ulbuttons, 0, M_MENUITEM, 0, 0, 1},
-	{N_("User List Popup"), menu_ulpopup, 0, M_MENUITEM, 0, 0, 1},	/* 52 */
-
-	{N_("_Window"), 0, 0, M_NEWMENU, 0, 0, 1},
-	{N_("_Ban List"), menu_banlist, 0, M_MENUITEM, 0, 0, 1},
-	{N_("Character Chart"), ascii_open, 0, M_MENUITEM, 0, 0, 1},
-	{N_("Direct Chat"), menu_dcc_chat_win, 0, M_MENUITEM, 0, 0, 1},
-	{N_("File _Transfers"), menu_dcc_win, 0, M_MENUITEM, 0, 0, 1},
-	{N_("Friends List"), notify_opengui, 0, M_MENUITEM, 0, 0, 1},
-	{N_("Ignore List"), ignore_gui_open, 0, M_MENUITEM, 0, 0, 1},
-	{N_("_Plugins and Scripts"), menu_pluginlist, 0, M_MENUITEM, 0, 0, 1},
-	{N_("_Raw Log"), menu_rawlog, 0, M_MENUITEM, 0, 0, 1},	/* 61 */
-	{N_("_URL Grabber"), url_opengui, 0, M_MENUITEM, 0, 0, 1},
-	{0, 0, 0, M_SEP, 0, 0, 0},
-	{N_("Reset Marker Line"), menu_resetmarker, 0, M_MENUITEM, 0, 0, 1, GDK_KEY_m},
-	{N_("Move to Marker Line"), menu_movetomarker, 0, M_MENUITEM, 0, 0, 1, GDK_KEY_M},
-	{N_("_Copy Selection"), menu_copy_selection, 0, M_MENUITEM, 0, 0, 1, GDK_KEY_C},
-	{N_("C_lear Text"), menu_flushbuffer, "edit-clear", M_MENUSTOCK, 0, 0, 1},
-	{N_("Save Text" ELLIPSIS), menu_savebuffer, "document-save", M_MENUSTOCK, 0, 0, 1},
-#define SEARCH_OFFSET (70)
-	{N_("Search"), 0, "format-justify-left", M_MENUSUB, 0, 0, 1},
-		{N_("Search Text" ELLIPSIS), menu_search, "edit-find", M_MENUSTOCK, 0, 0, 1, GDK_KEY_f},
-		{N_("Search Next"   ), menu_search_next, "edit-find", M_MENUSTOCK, 0, 0, 1, GDK_KEY_g},
-		{N_("Search Previous"   ), menu_search_prev, "edit-find", M_MENUSTOCK, 0, 0, 1, GDK_KEY_G},
-		{0, 0, 0, M_END, 0, 0, 0},
-
-	{N_("_Help"), 0, 0, M_NEWMENU, 0, 0, 1},	/* 74 */
-	{N_("_Contents"), menu_docs, "help-browser", M_MENUSTOCK, 0, 0, 1, GDK_KEY_F1},
-	{N_("_About"), menu_about, "help-about", M_MENUSTOCK, 0, 0, 1},
-
-	{0, 0, 0, M_END, 0, 0, 0},
-};
-
-/* Override the default GTK2.4 handler, which would make menu
-   bindings not work when the menu-bar is hidden. */
-static gboolean
-menu_canacaccel (GtkWidget *widget, guint signal_id, gpointer user_data)
-{
-	/* GTK2.2 behaviour */
-	return gtk_widget_is_sensitive (widget);
-}
-
 /* === STUFF FOR /MENU === */
 /* Legacy GTK3 menu item/find/update/toggle/radio code removed.
    Plugin menus now use the GTK4 GMenu/GAction system below. */
@@ -3306,15 +3117,6 @@ menu_add_plugin_items (GtkWidget *menu, char *root, char *target)
 	 * Context menu code should call menu_add_plugin_items_gmenu() instead.
 	 * This stub exists for any code that still calls the old API. */
 	(void)menu; (void)root; (void)target;
-}
-
-static void
-menu_add_plugin_mainmenu_items (GtkWidget *menu)
-{
-	/* Main menu bar items require rebuilding the menu bar.
-	 * For now, main menu plugin items are not yet supported in GTK4.
-	 * This would require storing the GMenu and rebuilding it on changes. */
-	(void)menu;
 }
 
 /*

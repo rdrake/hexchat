@@ -42,16 +42,6 @@
 
 
 static void
-joind_radio2_cb (GtkWidget *radio, server *serv)
-{
-	if (gtk_check_button_get_active (GTK_CHECK_BUTTON (radio)))
-	{
-		gtk_widget_grab_focus (serv->gui->joind_entry);
-		gtk_editable_set_position (GTK_EDITABLE (serv->gui->joind_entry), 999);
-	}
-}
-
-static void
 joind_entryenter_cb (GtkWidget *entry, GtkWidget *ok)
 {
 	gtk_widget_grab_focus (ok);
