@@ -1152,8 +1152,16 @@ setup_entry_cb (GtkEntry *entry, setting *set)
 {
 	int size;
 	int pos;
-	unsigned char *p = (unsigned char*)hc_entry_get_text (GTK_WIDGET (entry));
-	int len = strlen (p);
+	unsigned char *p;
+	int len;
+
+	/* Window destruction clears entries, firing "changed" with empty text.
+	 * Ignore callbacks while we're in the apply/destroy path. */
+	if (setup_applying)
+		return;
+
+	p = (unsigned char*)hc_entry_get_text (GTK_WIDGET (entry));
+	len = strlen (p);
 
 	/* need to truncate? */
 	if (len >= set->extra)
