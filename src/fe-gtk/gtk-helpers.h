@@ -384,7 +384,7 @@ hc_container_get_children (GtkWidget *container)
 }
 
 /* Type-dispatching container removal (GTK4 has no generic gtk_container_remove) */
-static void
+static void G_GNUC_UNUSED
 hc_container_remove (GtkWidget *container, GtkWidget *widget)
 {
 	if (GTK_IS_BOX (container))

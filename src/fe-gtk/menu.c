@@ -1169,68 +1169,6 @@ menu_bar_toggle (void)
 	menu_setting_foreach (menu_showhide_cb, MENU_ID_MENUBAR, !prefs.hex_gui_hide_menu);
 }
 
-static void
-menu_bar_toggle_cb (void)
-{
-	menu_bar_toggle ();
-	if (prefs.hex_gui_hide_menu)
-		fe_message (_("The Menubar is now hidden. You can show it again"
-						  " by pressing Control+F9 or right-clicking in a blank part of"
-						  " the main text area."), FE_MSG_INFO);
-}
-
-static void
-menu_topicbar_toggle (GtkWidget *wid, gpointer ud)
-{
-	prefs.hex_gui_topicbar = !prefs.hex_gui_topicbar;
-	menu_setting_foreach (menu_topic_showhide_cb, MENU_ID_TOPICBAR,
-								 prefs.hex_gui_topicbar);
-}
-
-static void
-menu_userlist_toggle (GtkWidget *wid, gpointer ud)
-{
-	prefs.hex_gui_ulist_hide = !prefs.hex_gui_ulist_hide;
-	menu_setting_foreach (menu_userlist_showhide_cb, MENU_ID_USERLIST,
-								 !prefs.hex_gui_ulist_hide);
-}
-
-static void
-menu_ulbuttons_toggle (GtkWidget *wid, gpointer ud)
-{
-	prefs.hex_gui_ulist_buttons = !prefs.hex_gui_ulist_buttons;
-	menu_setting_foreach (menu_ulbuttons_showhide_cb, MENU_ID_ULBUTTONS,
-								 prefs.hex_gui_ulist_buttons);
-}
-
-static void
-menu_cmbuttons_toggle (GtkWidget *wid, gpointer ud)
-{
-	prefs.hex_gui_mode_buttons = !prefs.hex_gui_mode_buttons;
-	menu_setting_foreach (menu_cmbuttons_showhide_cb, MENU_ID_MODEBUTTONS,
-								 prefs.hex_gui_mode_buttons);
-}
-
-static void
-menu_fullscreen_toggle (GtkWidget *wid, gpointer ud)
-{
-	if (!prefs.hex_gui_win_fullscreen)
-		gtk_window_fullscreen (GTK_WINDOW(parent_window));
-	else
-	{
-		gtk_window_unfullscreen (GTK_WINDOW(parent_window));
-
-#ifdef WIN32
-		if (!prefs.hex_gui_win_state) /* not maximized */
-		{
-			/* other window managers seem to handle this */
-			gtk_window_set_default_size (GTK_WINDOW (parent_window),
-				prefs.hex_gui_win_width, prefs.hex_gui_win_height);
-		}
-#endif
-	}
-}
-
 /* Action callbacks for middle-click menu */
 static session *middle_menu_sess = NULL;
 static char *middle_menu_clicked_msgid = NULL;  /* msgid of right-clicked message */

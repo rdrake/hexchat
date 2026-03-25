@@ -411,21 +411,6 @@ byte_to_char (const char *str, int byte_off)
 	return (int) g_utf8_pointer_to_offset (str, str + byte_off);
 }
 
-/* Clamp a byte offset to a valid UTF-8 character boundary. */
-static int
-clamp_byte (const char *str, int len, int byte_off)
-{
-	if (byte_off <= 0)
-		return 0;
-	if (byte_off >= len)
-		return len;
-	/* Walk back to valid UTF-8 start */
-	const char *p = g_utf8_find_prev_char (str, str + byte_off);
-	if (p)
-		return (int)(g_utf8_next_char (p) - str);
-	return byte_off;
-}
-
 /* Get the stripped-text byte offset for the cursor position. */
 static int
 cursor_stripped_offset (HexInputEditPriv *priv)
@@ -910,9 +895,10 @@ im_retrieve_surrounding_cb (GtkIMContext *ctx, gpointer data)
 	HexInputEdit *edit = HEX_INPUT_EDIT (data);
 	HexInputEditPriv *priv = edit->priv;
 
-	gtk_im_context_set_surrounding (ctx,
+	gtk_im_context_set_surrounding_with_selection (ctx,
 	                                priv->text->str,
 	                                (int) priv->text->len,
+	                                priv->cursor_byte,
 	                                priv->cursor_byte);
 	return TRUE;
 }
@@ -2005,7 +1991,6 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 		/* Get pixel ranges from Pango for each line */
 		PangoLayoutIter *iter = pango_layout_get_iter (priv->layout);
 		do {
-			PangoLayoutRun *run = pango_layout_iter_get_run_readonly (iter);
 			PangoRectangle line_ext;
 			pango_layout_iter_get_line_extents (iter, NULL, &line_ext);
 			int line_y = PANGO_PIXELS (line_ext.y) + (int)text_y;

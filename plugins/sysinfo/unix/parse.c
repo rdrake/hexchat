@@ -285,17 +285,17 @@ int xs_parse_distro(char *name)
 	char buffer[bsize], *pos = NULL;
 
 	if((fp = fopen("/etc/redhat-release", "r")) != NULL)
-		fgets(buffer, bsize, fp);
+		{ if (!fgets(buffer, bsize, fp)) buffer[0] = '\0'; }
 	else if((fp = fopen("/etc/mageia-release", "r")) != NULL)
-		fgets(buffer, bsize, fp);
+		{ if (!fgets(buffer, bsize, fp)) buffer[0] = '\0'; }
 	else if((fp = fopen("/etc/slackware-version", "r")) != NULL)
-		fgets(buffer, bsize, fp);
+		{ if (!fgets(buffer, bsize, fp)) buffer[0] = '\0'; }
 	else if((fp = fopen("/etc/mandrake-release", "r")) != NULL)
-		fgets(buffer, bsize, fp);
+		{ if (!fgets(buffer, bsize, fp)) buffer[0] = '\0'; }
 	else if((fp = fopen("/etc/SuSE-release", "r")) != NULL)
-		fgets(buffer, bsize, fp);
+		{ if (!fgets(buffer, bsize, fp)) buffer[0] = '\0'; }
 	else if((fp = fopen("/etc/turbolinux-release", "r")) != NULL)
-		fgets(buffer, bsize, fp);
+		{ if (!fgets(buffer, bsize, fp)) buffer[0] = '\0'; }
 	else if((fp = fopen("/etc/arch-release", "r")) != NULL)
 		g_snprintf(buffer, bsize, "ArchLinux");
 	else if((fp = fopen("/etc/lsb-release", "r")) != NULL)
@@ -315,7 +315,7 @@ int xs_parse_distro(char *name)
 	else if((fp = fopen("/etc/debian_version", "r")) != NULL)
 	{
 		char release[bsize];
-		fgets(release, bsize, fp);
+		if (!fgets(release, bsize, fp)) release[0] = '\0';
 		g_snprintf(buffer, bsize, "Debian %s", release);
 	}
 	else if((fp = fopen("/etc/portage/make.conf", "r")) != NULL ||
