@@ -60,7 +60,7 @@ config_h.set('GDK_PIXBUF_DISABLE_SINGLE_INCLUDES', true)
 config_h.set('GLIB_VERSION_MIN_REQUIRED', 'GLIB_VERSION_2_80')
 config_h.set('GLIB_VERSION_MAX_ALLOWED', 'GLIB_VERSION_2_82')
 config_h.set('GDK_VERSION_MIN_REQUIRED', 'GDK_VERSION_4_14')
-config_h.set('GDK_VERSION_MAX_ALLOWED', 'GDK_VERSION_4_16')
+config_h.set('GDK_VERSION_MAX_ALLOWED', 'GDK_VERSION_4_14')
 
 # Detected features
 config_h.set('HAVE_MEMRCHR', cc.has_function('memrchr'))
