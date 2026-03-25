@@ -1158,12 +1158,16 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 		textentry *old_last = gtk_xtext_buffer_get_last (sess->res->buffer);
 		PrintTextRawInsertSorted (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
 
-		/* Associate msgid: find the new entry (it may not be at the end) */
+		/* Associate msgid with the newly inserted entry.  The entry was
+		 * inserted at a timestamp-sorted position BEFORE old_last (the
+		 * chathistory messages predate the join banner).  Walk backwards
+		 * from old_last to find the first entry without a msgid. */
 		if (sess->current_msgid)
 		{
 			textentry *ent;
-			/* Walk from the end backwards to find an entry without msgid at this stamp */
-			for (ent = gtk_xtext_buffer_get_last (sess->res->buffer); ent;
+			textentry *search_start = old_last ? gtk_xtext_entry_get_prev (old_last)
+			                                   : gtk_xtext_buffer_get_last (sess->res->buffer);
+			for (ent = search_start; ent;
 			     ent = gtk_xtext_entry_get_prev (ent))
 			{
 				if (!gtk_xtext_get_msgid (ent))
@@ -1171,8 +1175,6 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 					gtk_xtext_set_msgid (sess->res->buffer, ent, sess->current_msgid);
 					break;
 				}
-				if (ent == old_last)
-					break;
 			}
 		}
 

@@ -449,13 +449,23 @@ inbound_action (session *sess, char *chan, char *from, char *ip, char *text,
 									  tags_data->timestamp);
 
 check_action_reply:
-	/* IRCv3 +draft/reply on ACTIONs */
+	/* IRCv3 +draft/reply on ACTIONs — same current_msgid restore as check_reply */
 	if (prefs.hex_irc_reply_show && tags_data->all_tags)
 	{
 		const char *reply_msgid = g_hash_table_lookup (tags_data->all_tags,
 		                                                "+draft/reply");
 		if (reply_msgid)
-			fe_reply_context_set (sess, reply_msgid);
+		{
+			if (tags_data->msgid && !sess->current_msgid)
+			{
+				sess->current_msgid = g_strdup (tags_data->msgid);
+				fe_reply_context_set (sess, reply_msgid);
+				g_free (sess->current_msgid);
+				sess->current_msgid = NULL;
+			}
+			else
+				fe_reply_context_set (sess, reply_msgid);
+		}
 	}
 }
 
@@ -541,15 +551,27 @@ inbound_chanmsg (server *serv, session *sess, char *chan, char *from,
 
 check_reply:
 	/* IRCv3 +draft/reply: attach reply context to the just-emitted message.
-	 * The entry was just appended to the buffer by EMIT_SIGNAL_TIMESTAMP.
-	 * See https://ircv3.net/specs/client-tags/reply
+	 * EMIT_SIGNAL → PrintTextTimeStamp → fe_print_text clears current_msgid,
+	 * but fe_reply_context_set needs it to find the correct entry (especially
+	 * in sorted-insert mode where the entry may not be the last one).
+	 * Restore it temporarily so the lookup succeeds.
 	 */
 	if (prefs.hex_irc_reply_show && tags_data->all_tags)
 	{
 		const char *reply_msgid = g_hash_table_lookup (tags_data->all_tags,
 		                                                "+draft/reply");
 		if (reply_msgid)
-			fe_reply_context_set (sess, reply_msgid);
+		{
+			if (tags_data->msgid && !sess->current_msgid)
+			{
+				sess->current_msgid = g_strdup (tags_data->msgid);
+				fe_reply_context_set (sess, reply_msgid);
+				g_free (sess->current_msgid);
+				sess->current_msgid = NULL;
+			}
+			else
+				fe_reply_context_set (sess, reply_msgid);
+		}
 	}
 }
 
