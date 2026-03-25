@@ -12,6 +12,7 @@ For more information on HexChat please read our [documentation](https://hexchat.
 ---
 
 full dependancy list including for new features for debian derived systems:
+
 sudo apt install build-essential meson ninja-build gettext libgtk-4-dev libssl-dev libdbus-glib-1-dev libcanberra-dev libnotify-dev liblua5.4-dev libpython3-dev libperl-dev libx11-dev python3-cffi libluajit-5.1-dev libpci-dev libperl-dev libssl-dev python3-dev desktop-file-utils libsqlite3-dev libjansson-dev libsoup-3.0-dev libwebsockets-dev libsecret-1-dev 
 
 ---
