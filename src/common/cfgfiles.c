@@ -42,7 +42,7 @@
 #ifdef WIN32
 #define DEF_FONT_ALTER "Arial Unicode MS,Segoe UI Emoji,Lucida Sans Unicode,Meiryo,Symbola,Unifont"
 #else
-#define DEF_FONT_ALTER "Noto Color Emoji,Symbola,Unifont"
+#define DEF_FONT_ALTER "Noto Sans,Symbola,Unifont"
 #endif
 
 const char * const languages[LANGUAGES_LENGTH] = {
