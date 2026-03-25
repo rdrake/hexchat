@@ -176,8 +176,8 @@ net_bind (netstore * tobindto, int sok4, int sok6)
 void
 net_sockets (int *sok4, int *sok6)
 {
-	*sok4 = socket (AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	*sok6 = socket (AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+	*sok4 = (int) socket (AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	*sok6 = (int) socket (AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 	net_set_socket_options (*sok4);
 	net_set_socket_options (*sok6);
 }
@@ -185,6 +185,6 @@ net_sockets (int *sok4, int *sok6)
 void
 udp_sockets (int *sok4, int *sok6)
 {
-	*sok4 = socket (AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	*sok6 = socket (AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+	*sok4 = (int) socket (AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	*sok6 = (int) socket (AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
 }

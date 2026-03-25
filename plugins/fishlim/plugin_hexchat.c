@@ -377,8 +377,9 @@ static int handle_incoming(char *word[], char *word_eol[], hexchat_event_attrs *
 
     if (attrs->server_time_utc)
     {
-        GTimeVal tv = { (glong)attrs->server_time_utc, 0 };
-        char *timestamp = g_time_val_to_iso8601 (&tv);
+        GDateTime *dt = g_date_time_new_from_unix_utc (attrs->server_time_utc);
+        char *timestamp = g_date_time_format_iso8601 (dt);
+        g_date_time_unref (dt);
 
        g_string_append (message, "@time=");
        g_string_append (message, timestamp);

@@ -36,6 +36,9 @@
 #endif
 #endif
 
+/* Suppress -Wunused-result for fire-and-forget I/O */
+#define HC_IGNORE_RESULT(expr) do { if (expr) {} } while (0)
+
 #include "history.h"
 #include "tree.h"
 

@@ -948,9 +948,9 @@ static GtkWidget *proxy_user; 	/* username GtkEntry */
 static GtkWidget *proxy_pass; 	/* password GtkEntry */
 
 static void
-setup_menu_cb (GtkWidget *cbox, const setting *set)
+setup_menu_cb (GObject *cbox, GParamSpec *pspec, const setting *set)
 {
-	int n = gtk_combo_box_get_active (GTK_COMBO_BOX (cbox));
+	int n = gtk_drop_down_get_selected (GTK_DROP_DOWN (cbox));
 
 	/* set the prefs.<field> */
 	setup_set_int (&setup_prefs, set, n + set->extra);
@@ -1030,15 +1030,22 @@ setup_create_menu (GtkWidget *table, int row, const setting *set)
 	gtk_widget_set_margin_start (wid, LABEL_INDENT);
 	gtk_grid_attach (GTK_GRID (table), wid, 2, row, 1, 1);
 
-	cbox = gtk_combo_box_text_new ();
+	{
+		/* Build NULL-terminated array of translated strings for GtkStringList */
+		GPtrArray *items = g_ptr_array_new ();
+		for (i = 0; text[i]; i++)
+			g_ptr_array_add (items, (gpointer)_(text[i]));
+		g_ptr_array_add (items, NULL);
 
-	for (i = 0; text[i]; i++)
-		gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (cbox), _(text[i]));
+		GtkStringList *model = gtk_string_list_new ((const char * const *)items->pdata);
+		g_ptr_array_free (items, TRUE);
 
-	gtk_combo_box_set_active (GTK_COMBO_BOX (cbox),
-									  setup_get_int (&setup_prefs, set) - set->extra);
-	g_signal_connect (G_OBJECT (cbox), "changed",
-							G_CALLBACK (setup_menu_cb), (gpointer)set);
+		cbox = gtk_drop_down_new (G_LIST_MODEL (model), NULL);
+		gtk_drop_down_set_selected (GTK_DROP_DOWN (cbox),
+										  setup_get_int (&setup_prefs, set) - set->extra);
+		g_signal_connect (cbox, "notify::selected",
+								G_CALLBACK (setup_menu_cb), (gpointer)set);
+	}
 
 	box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_box_append (GTK_BOX (box), cbox);
@@ -1081,9 +1088,9 @@ setup_fontsel_destroy (GtkWidget *dialog, gpointer user_data)
 }
 
 static void
-setup_fontsel_response (GtkDialog *dialog, gint response_id, GtkWidget *entry)
+setup_fontsel_response (GtkWindow *dialog, gint response_id, GtkWidget *entry)
 {
-	if (response_id == GTK_RESPONSE_OK)
+	if (response_id == GTK_RESPONSE_OK) /* GtkFontChooserDialog response */
 	{
 		char *font_name;
 
@@ -1123,7 +1130,7 @@ setup_browsefont_cb (GtkWidget *button, GtkWidget *entry)
 	g_signal_connect (G_OBJECT (dialog), "response",
 							G_CALLBACK (setup_fontsel_response), entry);
 
-	gtk_widget_show (dialog);
+	gtk_window_present (GTK_WINDOW (dialog));
 }
 
 static void
@@ -1355,26 +1362,34 @@ setup_create_page (const setting *set)
 	return tab;
 }
 
-/* Helper function to set button background color using CSS */
+/* Helper function to set button background color using CSS.
+ * Uses per-widget CssProvider stored via g_object_set_data to avoid leaking
+ * providers on repeated color changes. The style_context API has no
+ * non-deprecated replacement in GTK 4.14 — suppress until one exists. */
 static void
 setup_color_button_set_color (GtkWidget *button, GdkRGBA *col)
 {
 	GtkCssProvider *provider;
-	GtkStyleContext *context;
 	char css[192];
+
+	provider = g_object_get_data (G_OBJECT (button), "hc-css-provider");
+	if (!provider)
+	{
+		provider = gtk_css_provider_new ();
+		g_object_set_data_full (G_OBJECT (button), "hc-css-provider",
+			provider, g_object_unref);
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+		gtk_style_context_add_provider (gtk_widget_get_style_context (button),
+			GTK_STYLE_PROVIDER (provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+G_GNUC_END_IGNORE_DEPRECATIONS
+	}
 
 	g_snprintf (css, sizeof (css),
 		"button { background-color: rgba(%d, %d, %d, %g); background-image: none; "
 		"min-width: 0; min-height: 0; padding: 4px 6px; }",
 		(int)(col->red * 255), (int)(col->green * 255), (int)(col->blue * 255), col->alpha);
 
-	provider = gtk_css_provider_new ();
-	gtk_css_provider_load_from_data (provider, css, -1);
-
-	context = gtk_widget_get_style_context (button);
-	gtk_style_context_add_provider (context, GTK_STYLE_PROVIDER (provider),
-		GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-	g_object_unref (provider);
+	gtk_css_provider_load_from_string (provider, css);
 }
 
 /* Callback for GtkColorDialog async completion */
@@ -1818,15 +1833,12 @@ setup_create_sound_page (void)
 
 	vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	hc_widget_set_margin_all (vbox1, 6);
-	gtk_widget_show (vbox1);
 
 	vbox2 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-	gtk_widget_show (vbox2);
 	gtk_box_append (GTK_BOX (vbox1), vbox2);
 
 	scrolledwindow1 = gtk_scrolled_window_new ();
 	gtk_widget_set_vexpand (scrolledwindow1, TRUE);
-	gtk_widget_show (scrolledwindow1);
 	gtk_box_append (GTK_BOX (vbox2), scrolledwindow1);
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolledwindow1),
 											  GTK_POLICY_AUTOMATIC, GTK_POLICY_ALWAYS);
@@ -1858,18 +1870,15 @@ setup_create_sound_page (void)
 	sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (sound_column_view));
 	g_signal_connect (sel_model, "selection-changed", G_CALLBACK (setup_snd_row_cb), NULL);
 
-	gtk_widget_show (sound_column_view);
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow1), sound_column_view);
 
 	table1 = gtk_grid_new ();
-	gtk_widget_show (table1);
 	gtk_widget_set_margin_top (table1, 8);
 	gtk_box_append (GTK_BOX (vbox2), table1);
 	gtk_grid_set_row_spacing (GTK_GRID (table1), 2);
 	gtk_grid_set_column_spacing (GTK_GRID (table1), 4);
 
 	sound_label = gtk_label_new_with_mnemonic (_("Sound file:"));
-	gtk_widget_show (sound_label);
 	gtk_widget_set_halign (sound_label, GTK_ALIGN_START);
 	gtk_widget_set_valign (sound_label, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table1), sound_label, 0, 0, 1, 1);
@@ -1877,20 +1886,17 @@ setup_create_sound_page (void)
 	sndfile_entry = gtk_entry_new ();
 	g_signal_connect (G_OBJECT (sndfile_entry), "changed",
 							G_CALLBACK (setup_snd_changed_cb), NULL);
-	gtk_widget_show (sndfile_entry);
 	gtk_widget_set_hexpand (sndfile_entry, TRUE);
 	gtk_grid_attach (GTK_GRID (table1), sndfile_entry, 0, 1, 1, 1);
 
 	sound_browse = gtk_button_new_with_mnemonic (_("_Browse..."));
 	g_signal_connect (G_OBJECT (sound_browse), "clicked",
 							G_CALLBACK (setup_snd_browse_cb), sndfile_entry);
-	gtk_widget_show (sound_browse);
 	gtk_grid_attach (GTK_GRID (table1), sound_browse, 1, 1, 1, 1);
 
 	sound_play = gtk_button_new_from_icon_name ("media-playback-start");
 	g_signal_connect (G_OBJECT (sound_play), "clicked",
 							G_CALLBACK (setup_snd_play_cb), sndfile_entry);
-	gtk_widget_show (sound_play);
 	gtk_grid_attach (GTK_GRID (table1), sound_play, 2, 1, 1, 1);
 
 	/* Trigger initial selection update */
@@ -2227,9 +2233,9 @@ setup_apply_to_sess (session_gui *gui)
 	 * override needed in GTK4. */
 
 	if (prefs.hex_gui_ulist_buttons)
-		gtk_widget_show (gui->button_box);
+		gtk_widget_set_visible (gui->button_box, TRUE);
 	else
-		gtk_widget_hide (gui->button_box);
+		gtk_widget_set_visible (gui->button_box, FALSE);
 
 	/* update active languages */
 	hex_input_edit_deactivate_language (HEX_INPUT_EDIT (gui->input_box), NULL);

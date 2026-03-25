@@ -56,6 +56,93 @@
 static void replace_handle (GtkWidget * wid);
 void key_action_tab_clean (void);
 
+/* Replacement for deprecated GCompletion (removed in GLib 2.26) */
+typedef gchar* (*HcCompletionFunc)(gpointer);
+typedef gint (*HcCompletionStrncmpFunc)(const gchar*, const gchar*, gsize);
+
+typedef struct {
+	GList *items;
+	HcCompletionFunc func;
+	HcCompletionStrncmpFunc strncmp_func;
+} HcCompletion;
+
+static HcCompletion *
+hc_completion_new (HcCompletionFunc func)
+{
+	HcCompletion *comp = g_new0 (HcCompletion, 1);
+	comp->func = func;
+	comp->strncmp_func = strncmp;
+	return comp;
+}
+
+static void
+hc_completion_add_items (HcCompletion *comp, GList *items)
+{
+	comp->items = g_list_concat (comp->items, g_list_copy (items));
+}
+
+static void
+hc_completion_set_compare (HcCompletion *comp, HcCompletionStrncmpFunc cmp)
+{
+	comp->strncmp_func = cmp;
+}
+
+static GList *
+hc_completion_complete_utf8 (HcCompletion *comp, const char *prefix, char **new_prefix)
+{
+	GList *matches = NULL;
+	GList *l;
+	gsize prefix_len = strlen (prefix);
+	const char *first_match = NULL;
+	gsize common_len = 0;
+
+	for (l = comp->items; l; l = l->next)
+	{
+		const char *str = comp->func ? comp->func (l->data) : (const char *)l->data;
+		if (str && comp->strncmp_func (str, prefix, prefix_len) == 0)
+		{
+			matches = g_list_prepend (matches, l->data);
+			if (!first_match)
+			{
+				first_match = str;
+				common_len = strlen (str);
+			}
+			else
+			{
+				gsize i;
+				gsize slen = strlen (str);
+				if (slen < common_len)
+					common_len = slen;
+				for (i = 0; i < common_len; i++)
+				{
+					if (comp->strncmp_func (str + i, first_match + i, 1) != 0)
+					{
+						common_len = i;
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	if (new_prefix)
+	{
+		if (first_match && common_len > 0)
+			*new_prefix = g_strndup (first_match, common_len);
+		else
+			*new_prefix = NULL;
+	}
+
+	return g_list_reverse (matches);
+}
+
+static void
+hc_completion_free (HcCompletion *comp)
+{
+	g_list_free (comp->items);
+	g_free (comp);
+}
+
 /***************** Key Binding Code ******************/
 
 /* NOTES:
@@ -1035,7 +1122,7 @@ key_save_kbs (void)
 									 0x180, XOF_DOMODE);
 	if (fd < 0)
 		return 1;
-	write (fd, buf, g_snprintf (buf, 510, "# HexChat key bindings config file\n\n"));
+	HC_IGNORE_RESULT (write (fd, buf, g_snprintf (buf, 510, "# HexChat key bindings config file\n\n")));
 
 	while (list)
 	{
@@ -1044,20 +1131,20 @@ key_save_kbs (void)
 		accel_text = gtk_accelerator_name (kb->keyval, kb->mod);
 
 		g_snprintf (buf, 510, "ACCEL=%s\n%s\n", accel_text, key_actions[kb->action].name);
-		write (fd, buf, strlen (buf));
+		HC_IGNORE_RESULT (write (fd, buf, strlen (buf)));
 		g_free (accel_text);
 
 		if (kb->data1 && kb->data1[0])
-			write (fd, buf, g_snprintf (buf, 510, "D1:%s\n", kb->data1));
+			HC_IGNORE_RESULT (write (fd, buf, g_snprintf (buf, 510, "D1:%s\n", kb->data1)));
 		else
-			write (fd, "D1!\n", 4);
+			HC_IGNORE_RESULT (write (fd, "D1!\n", 4));
 
 		if (kb->data2 && kb->data2[0])
-			write (fd, buf, g_snprintf (buf, 510, "D2:%s\n", kb->data2));
+			HC_IGNORE_RESULT (write (fd, buf, g_snprintf (buf, 510, "D2:%s\n", kb->data2)));
 		else
-			write (fd, "D2!\n", 4);
+			HC_IGNORE_RESULT (write (fd, "D2!\n", 4));
 
-		write (fd, "\n", 1);
+		HC_IGNORE_RESULT (write (fd, "\n", 1));
 
 		list = g_slist_next (list);
 	}
@@ -1143,7 +1230,7 @@ key_load_kbs (void)
 		}
 
 		ibuf = g_malloc(st.st_size);
-		read (fd, ibuf, st.st_size);
+		HC_IGNORE_RESULT (read (fd, ibuf, st.st_size));
 		size = st.st_size;
 		close (fd);
 	}
@@ -1661,7 +1748,7 @@ key_action_tab_comp (GtkWidget *t, KEY_EVENT_PARAM, char *d1, char *d2,
 	char ent[CHANLEN], *postfix = NULL, *result, *ch;
 	GList *list = NULL, *tmp_list = NULL;
 	const char *text;
-	GCompletion *gcomp = NULL;
+	HcCompletion *gcomp = NULL;
 	GString *buf;
 
 	/* force the IM Context to reset */
@@ -1747,14 +1834,14 @@ key_action_tab_comp (GtkWidget *t, KEY_EVENT_PARAM, char *d1, char *d2,
 	{
 		if (is_nick)
 		{
-			gcomp = g_completion_new((GCompletionFunc)gcomp_nick_func);
+			gcomp = hc_completion_new((HcCompletionFunc)gcomp_nick_func);
 			tmp_list = userlist_double_list(sess); /* create a temp list so we can free the memory */
 			if (prefs.hex_completion_sort == 1)	/* sort in last-talk order? */
 				tmp_list = g_list_sort (tmp_list, (void *)talked_recent_cmp);
 		}
 		else
 		{
-			gcomp = g_completion_new (NULL);
+			gcomp = hc_completion_new (NULL);
 			if (is_cmd)
 			{
 				tmp_list = cmdlist_double_list (command_list);
@@ -1768,10 +1855,10 @@ key_action_tab_comp (GtkWidget *t, KEY_EVENT_PARAM, char *d1, char *d2,
 				tmp_list = chanlist_double_list (sess_list);
 		}
 		tmp_list = g_list_reverse(tmp_list); /* make the comp entries turn up in the right order */
-		g_completion_set_compare (gcomp, (GCompletionStrncmpFunc)rfc_ncasecmp);
+		hc_completion_set_compare (gcomp, (HcCompletionStrncmpFunc)rfc_ncasecmp);
 		if (tmp_list)
 		{
-			g_completion_add_items (gcomp, tmp_list);
+			hc_completion_add_items (gcomp, tmp_list);
 			g_list_free (tmp_list);
 		}
 
@@ -1781,11 +1868,11 @@ key_action_tab_comp (GtkWidget *t, KEY_EVENT_PARAM, char *d1, char *d2,
 			comp = 0;
 		}
 
-		list = g_completion_complete_utf8 (gcomp, comp ? old_gcomp.data : ent, &result);
+		list = hc_completion_complete_utf8 (gcomp, comp ? old_gcomp.data : ent, &result);
 
 		if (result == NULL) /* No matches found */
 		{
-			g_completion_free(gcomp);
+			hc_completion_free(gcomp);
 			return 2;
 		}
 
@@ -1823,7 +1910,7 @@ key_action_tab_comp (GtkWidget *t, KEY_EVENT_PARAM, char *d1, char *d2,
 			else
 			{
 				g_free(result);
-				g_completion_free(gcomp);
+				hc_completion_free(gcomp);
 				return 2;
 			}
 		}
@@ -1877,7 +1964,7 @@ key_action_tab_comp (GtkWidget *t, KEY_EVENT_PARAM, char *d1, char *d2,
 						list = list->next;
 					}
 					PrintText (sess, buf->str);
-					g_completion_free(gcomp);
+					hc_completion_free(gcomp);
 					g_string_free (buf, TRUE);
 					return 2;
 				}
@@ -1905,7 +1992,7 @@ key_action_tab_comp (GtkWidget *t, KEY_EVENT_PARAM, char *d1, char *d2,
 		g_string_free (buf, TRUE);
 	}
 	if (gcomp)
-		g_completion_free(gcomp);
+		hc_completion_free(gcomp);
 	return 2;
 }
 #undef COMP_BUF

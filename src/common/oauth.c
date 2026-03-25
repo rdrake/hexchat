@@ -347,7 +347,6 @@ oauth_generate_code_challenge(const char *code_verifier)
 #ifdef USE_OPENSSL
 	unsigned char hash[SHA256_DIGEST_LENGTH];
 	char *challenge;
-	gsize out_len;
 
 	if (!code_verifier)
 		return NULL;

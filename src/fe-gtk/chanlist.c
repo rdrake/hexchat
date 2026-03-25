@@ -800,9 +800,9 @@ chanlist_closegui (GtkWidget *wid, server *serv)
 }
 
 static void
-chanlist_combo_cb (GtkWidget *combo, server *serv)
+chanlist_combo_cb (GObject *combo, GParamSpec *pspec, server *serv)
 {
-	serv->gui->chanlist_search_type = gtk_combo_box_get_active (GTK_COMBO_BOX (combo));
+	serv->gui->chanlist_search_type = gtk_drop_down_get_selected (GTK_DROP_DOWN (combo));
 }
 
 /*
@@ -1234,14 +1234,16 @@ chanlist_opengui (server *serv, int do_refresh)
 	gtk_widget_set_valign (wid, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table), wid, 0, 1, 1, 1);
 
-	wid = gtk_combo_box_text_new ();
-	gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (wid), _("Simple Search"));
-	gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (wid), _("Pattern Match (Wildcards)"));
-	gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (wid), _("Regular Expression"));
-	gtk_combo_box_set_active (GTK_COMBO_BOX (wid), serv->gui->chanlist_search_type);
-	gtk_grid_attach (GTK_GRID (table), wid, 1, 1, 1, 1);
-	g_signal_connect (G_OBJECT (wid), "changed",
-							G_CALLBACK (chanlist_combo_cb), serv);
+	{
+		GtkStringList *model = gtk_string_list_new (
+			(const char *[]){ _("Simple Search"), _("Pattern Match (Wildcards)"),
+			                   _("Regular Expression"), NULL });
+		wid = gtk_drop_down_new (G_LIST_MODEL (model), NULL);
+		gtk_drop_down_set_selected (GTK_DROP_DOWN (wid), serv->gui->chanlist_search_type);
+		gtk_grid_attach (GTK_GRID (table), wid, 1, 1, 1, 1);
+		g_signal_connect (wid, "notify::selected",
+								G_CALLBACK (chanlist_combo_cb), serv);
+	}
 
 	/* ============================================================= */
 

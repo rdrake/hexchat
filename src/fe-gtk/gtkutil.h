@@ -38,7 +38,6 @@ void show_and_unfocus (GtkWidget * wid);
 void gtkutil_set_icon (GtkWidget *win);
 GtkWidget *gtkutil_window_new (char *title, char *role, int width, int height, int flags);
 gboolean gtkutil_close_request_focus_parent (GtkWindow *win, gpointer parent);
-void gtkutil_dialog_response_destroy (GtkDialog *dialog, int response, gpointer user_data);
 GtkApplication *fe_get_application (void);
 void gtkutil_copy_to_clipboard (GtkWidget *widget, gboolean primary_only,
                                 const gchar *str);

@@ -13,7 +13,7 @@ gnome = import('gnome')
 cc = meson.get_compiler('c')
 
 
-libgio_dep = dependency('gio-2.0', version: '>= 2.44.0')
+libgio_dep = dependency('gio-2.0', version: '>= 2.80.0')
 libgmodule_dep = dependency('gmodule-2.0')
 
 libcanberra_dep = dependency('libcanberra', version: '>= 0.22',
@@ -55,9 +55,12 @@ config_h.set('G_DISABLE_SINGLE_INCLUDES', true)
 config_h.set('GTK_DISABLE_SINGLE_INCLUDES', true)
 config_h.set('GDK_PIXBUF_DISABLE_SINGLE_INCLUDES', true)
 
-# GTK4 configuration (GTK3 no longer supported)
-config_h.set('GLIB_VERSION_MAX_ALLOWED', 'GLIB_VERSION_2_76')
-config_h.set('GLIB_VERSION_MIN_REQUIRED', 'GLIB_VERSION_2_66')
+# Min target: Mint 22 / Ubuntu 24.04 (GLib 2.80, GTK 4.14)
+# Max target: Debian 13 / Fedora 41 (GLib 2.82, GTK 4.16)
+config_h.set('GLIB_VERSION_MIN_REQUIRED', 'GLIB_VERSION_2_80')
+config_h.set('GLIB_VERSION_MAX_ALLOWED', 'GLIB_VERSION_2_82')
+config_h.set('GDK_VERSION_MIN_REQUIRED', 'GDK_VERSION_4_14')
+config_h.set('GDK_VERSION_MAX_ALLOWED', 'GDK_VERSION_4_16')
 
 # Detected features
 config_h.set('HAVE_MEMRCHR', cc.has_function('memrchr'))

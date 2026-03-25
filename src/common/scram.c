@@ -203,7 +203,7 @@ process_server_first (scram_session *session, const char *data, char **output,
 	session->salted_password = g_malloc (session->digest_size);
 
 	PKCS5_PBKDF2_HMAC (session->password, strlen (session->password), (unsigned char *) salt,
-					   salt_len, iteration_count, session->digest, session->digest_size,
+					   (int) salt_len, iteration_count, session->digest, (int) session->digest_size,
 					   session->salted_password);
 
 	// AuthMessage := client-first-message-bare + "," +

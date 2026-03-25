@@ -945,11 +945,11 @@ dcc_exp_cb (GtkWidget *exp, GtkWidget *box)
 {
 	if (gtk_widget_get_visible (box))
 	{
-		gtk_widget_hide (box);
+		gtk_widget_set_visible (box, FALSE);
 	}
 	else
 	{
-		gtk_widget_show (box);
+		gtk_widget_set_visible (box, TRUE);
 	}
 }
 
@@ -979,23 +979,22 @@ dcc_configure_cb (GtkWindow *win, GParamSpec *pspec, gpointer data)
  * GTK4 Column View factory callbacks for file transfer list
  */
 
-/* Helper to apply color to label via CSS */
+/* Helper to apply color to label via Pango attributes */
 static void
 dcc_apply_colour (GtkWidget *label, GdkRGBA *colour)
 {
 	if (colour)
 	{
-		char css[128];
-		GtkCssProvider *provider;
-		g_snprintf (css, sizeof(css), "label { color: rgba(%d,%d,%d,%.2f); }",
-		            (int)(colour->red * 255), (int)(colour->green * 255),
-		            (int)(colour->blue * 255), colour->alpha);
-		provider = gtk_css_provider_new ();
-		gtk_css_provider_load_from_string (provider, css);
-		gtk_style_context_add_provider (gtk_widget_get_style_context (label),
-		                                GTK_STYLE_PROVIDER (provider),
-		                                GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-		g_object_unref (provider);
+		PangoAttrList *attrs = pango_attr_list_new ();
+		pango_attr_list_insert (attrs, pango_attr_foreground_new (
+			(guint16)(colour->red * 65535),
+			(guint16)(colour->green * 65535),
+			(guint16)(colour->blue * 65535)));
+		if (colour->alpha < 1.0)
+			pango_attr_list_insert (attrs, pango_attr_foreground_alpha_new (
+				(guint16)(colour->alpha * 65535)));
+		gtk_label_set_attributes (GTK_LABEL (label), attrs);
+		pango_attr_list_unref (attrs);
 	}
 }
 

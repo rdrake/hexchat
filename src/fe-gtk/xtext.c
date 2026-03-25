@@ -1270,7 +1270,6 @@ static void
 gtk_xtext_draw_marker (GtkXText * xtext, textentry * ent, int y)
 {
 	int x, width, render_y;
-	GtkAllocation alloc;
 
 	if (!xtext->marker) return;
 
@@ -1339,14 +1338,14 @@ gtk_xtext_paint (GtkWidget *widget, GdkRectangle *area)
 	/* y is the last pixel y location it rendered text at */
 	y = gtk_xtext_render_ents (xtext, ent_start, ent_end);
 
-	if (y && y < alloc.height && !ent_end->next)
+	if (y && y < widget_height && !ent_end->next)
 	{
 		GdkRectangle rect;
 
 		rect.x = 0;
 		rect.y = y;
-		rect.width = alloc.width;
-		rect.height = alloc.height - y;
+		rect.width = widget_width;
+		rect.height = widget_height - y;
 
 		/* fill any space below the last line that also intersects with
 			the exposure rectangle */
@@ -3569,7 +3568,7 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 				/* Draw highlight background */
 				GdkRGBA hl_bg = xtext->palette[XTEXT_MARK_BG];
 				if (!is_current)
-					hl_bg.alpha = 0.4;  /* translucent for non-current matches */
+					hl_bg.alpha = 0.4f;  /* translucent for non-current matches */
 				gdk_cairo_set_source_rgba (xtext->cr, &hl_bg);
 				cairo_rectangle (xtext->cr, hl_x1, y - xtext->font->ascent,
 				                 hl_x2 - hl_x1, xtext->fontsize);
@@ -3930,7 +3929,7 @@ gtk_xtext_render_reply_context (GtkXText *xtext, textentry *ent, int line, int w
 	 * distinct from the hover highlight which uses the FG color. */
 	xtext_draw_bg (xtext, 0, y - xtext->font->ascent, win_width + MARGIN, xtext->fontsize);
 	{
-		GdkRGBA tint = { 0.5, 0.5, 0.5, 0.08 };
+		GdkRGBA tint = { 0.5f, 0.5f, 0.5f, 0.08f };
 		gdk_cairo_set_source_rgba (xtext->cr, &tint);
 		cairo_rectangle (xtext->cr, 0, y - xtext->font->ascent, win_width + MARGIN, xtext->fontsize);
 		cairo_fill (xtext->cr);
@@ -4362,9 +4361,9 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 		btn_xs[2] = base_x + (btn_size + gap) * 2;
 
 		btn_bg = xtext->palette[XTEXT_FG];
-		btn_bg.alpha = 0.15;
+		btn_bg.alpha = 0.15f;
 		fg = xtext->palette[XTEXT_FG];
-		fg.alpha = 0.7;
+		fg.alpha = 0.7f;
 
 		for (i = 0; i < 3; i++)
 		{
@@ -4477,8 +4476,8 @@ gtk_xtext_set_palette (GtkXText * xtext, GdkRGBA palette[])
 	}
 
 	/* Phase 4: state colors (xtext-internal, not from external palette) */
-	xtext->palette[XTEXT_PENDING_FG] = (GdkRGBA){0.6, 0.6, 0.6, 1.0};
-	xtext->palette[XTEXT_REDACTED_FG] = (GdkRGBA){0.5, 0.5, 0.5, 1.0};
+	xtext->palette[XTEXT_PENDING_FG] = (GdkRGBA){0.6f, 0.6f, 0.6f, 1.0f};
+	xtext->palette[XTEXT_REDACTED_FG] = (GdkRGBA){0.5f, 0.5f, 0.5f, 1.0f};
 
 	if (gtk_widget_get_realized (GTK_WIDGET(xtext)))
 	{

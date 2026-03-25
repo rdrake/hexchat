@@ -109,7 +109,7 @@ set_topic (session *sess, char *topic, char *stripped_topic)
 	{
 		char tbuf[1024];
 		g_snprintf (tbuf, sizeof (tbuf), "[%s has address %s]\n", sess->channel, stripped_topic);
-		write (sess->logfd, tbuf, strlen (tbuf));
+		HC_IGNORE_RESULT (write (sess->logfd, tbuf, strlen (tbuf)));
 	}
 
 	g_free (sess->topic);
@@ -3044,7 +3044,7 @@ sasl_send_authenticate (server *serv, const char *encoded)
 	if (len % 400 == 0)
 		g_string_append (buf, "AUTHENTICATE +\r\n");
 
-	tcp_send_len (serv, buf->str, buf->len);
+	tcp_send_len (serv, buf->str, (int) buf->len);
 	g_string_free (buf, TRUE);
 }
 

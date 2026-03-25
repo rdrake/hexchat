@@ -31,9 +31,8 @@ hexchat_gtk_sources = [
   'hex-emoji-chooser.c'
 ]
 
-# GTK4 dependency (GTK3 no longer supported)
-# GTK 4.10 required for GtkColorDialog (GtkColorChooserDialog has GSettings issues on Windows)
-gtk_dep = dependency('gtk4', version: '>= 4.10.0')
+# GTK4 dependency — target Mint 22 / Ubuntu 24.04 baseline
+gtk_dep = dependency('gtk4', version: '>= 4.14.0')
 
 hexchat_gtk_deps = [
   hexchat_common_dep,

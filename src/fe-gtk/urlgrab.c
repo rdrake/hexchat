@@ -268,7 +268,6 @@ url_opengui ()
 	hc_button_box_set_layout_impl (GTK_WIDGET (hbox), HC_BUTTONBOX_SPREAD);
 	gtk_widget_set_margin_top (hbox, 6);
 	gtk_box_append (GTK_BOX (vbox), hbox);
-	gtk_widget_show (hbox);
 
 	gtkutil_button (hbox, "edit-clear",
 						 _("Clear list"), url_button_clear, 0, _("Clear"));
@@ -277,7 +276,8 @@ url_opengui ()
 	gtkutil_button (hbox, "document-save-as",
 						 _("Save list to a file"), url_button_save, 0, _("Save As..."));
 
-	gtk_widget_show (urlgrabberwindow);
+	if (GTK_IS_WINDOW (urlgrabberwindow))
+		gtk_window_present (GTK_WINDOW (urlgrabberwindow));
 
 	if (prefs.hex_url_grabber)
 		tree_foreach (url_tree, (tree_traverse_func *)populate_cb, NULL);

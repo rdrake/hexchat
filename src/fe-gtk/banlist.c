@@ -615,14 +615,13 @@ banlist_unban (GtkWidget * wid, banlist_info *banl)
 }
 
 static void
-banlist_clear_cb (GtkDialog *dialog, gint response, gpointer data)
+banlist_clear_cb (GObject *source, GAsyncResult *result, gpointer data)
 {
 	banlist_info *banl = data;
 	GtkSelectionModel *sel_model;
+	int button = gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source), result, NULL);
 
-	hc_window_destroy_fn (GTK_WINDOW (dialog));
-
-	if (response == GTK_RESPONSE_OK)
+	if (button == 1) /* OK */
 	{
 		sel_model = gtk_column_view_get_model (get_view (banl->sess));
 		gtk_selection_model_select_all (sel_model);
@@ -633,15 +632,17 @@ banlist_clear_cb (GtkDialog *dialog, gint response, gpointer data)
 static void
 banlist_clear (GtkWidget * wid, banlist_info *banl)
 {
-	GtkWidget *dialog;
+	GtkAlertDialog *dialog;
+	const char *buttons[] = { _("_Cancel"), _("_OK"), NULL };
 
-	dialog = gtk_message_dialog_new (GTK_WINDOW (banl->sess->gui->window), 0,
-								GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL,
-					_("Are you sure you want to remove all listed items in %s?"), banl->sess->channel);
+	dialog = gtk_alert_dialog_new (_("Are you sure you want to remove all listed items in %s?"), banl->sess->channel);
+	gtk_alert_dialog_set_buttons (dialog, buttons);
+	gtk_alert_dialog_set_cancel_button (dialog, 0);
+	gtk_alert_dialog_set_default_button (dialog, 1);
 
-	g_signal_connect (G_OBJECT (dialog), "response",
-							G_CALLBACK (banlist_clear_cb), banl);
-	gtk_widget_show (dialog);
+	gtk_alert_dialog_choose (dialog, GTK_WINDOW (banl->sess->gui->window),
+		NULL, banlist_clear_cb, banl);
+	g_object_unref (dialog);
 }
 
 static void

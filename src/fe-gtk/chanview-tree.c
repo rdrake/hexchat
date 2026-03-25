@@ -28,8 +28,8 @@
  * hierarchy via a callback that returns child models. This is displayed
  * in a GtkListView with GtkTreeExpander widgets for expand/collapse UI.
  *
- * The backing data is still managed by chanview.c using GtkTreeStore,
- * so we create a "virtual" model that reads from the GtkTreeStore.
+ * The backing data is managed by chanview.c using GListStore (with HcChanItem
+ * objects). The tree view uses cv->store directly as its root model.
  */
 
 typedef struct
@@ -37,61 +37,9 @@ typedef struct
 	GtkListView *view;
 	GtkWidget *scrollw;		/* scrolledWindow */
 	GtkTreeListModel *tree_model;	/* hierarchical model wrapper */
-	GListStore *root_store;		/* root level items */
 } treeview;
 
-/*
- * HcChanItem: GObject wrapper for chan* to use in GListStore
- */
-#define HC_TYPE_CHAN_ITEM (hc_chan_item_get_type())
-G_DECLARE_FINAL_TYPE (HcChanItem, hc_chan_item, HC, CHAN_ITEM, GObject)
-
-struct _HcChanItem {
-	GObject parent;
-	chan *ch;			/* pointer to channel (not owned) */
-	GListStore *children;		/* child channels (for servers) */
-	gboolean is_server;		/* TRUE if this is a server (can have children) */
-};
-
-G_DEFINE_TYPE (HcChanItem, hc_chan_item, G_TYPE_OBJECT)
-
-static void
-hc_chan_item_finalize (GObject *obj)
-{
-	HcChanItem *item = HC_CHAN_ITEM (obj);
-	g_clear_object (&item->children);
-	/* Note: item->ch is not owned by us, don't free */
-	G_OBJECT_CLASS (hc_chan_item_parent_class)->finalize (obj);
-}
-
-static void
-hc_chan_item_class_init (HcChanItemClass *klass)
-{
-	G_OBJECT_CLASS (klass)->finalize = hc_chan_item_finalize;
-}
-
-static void
-hc_chan_item_init (HcChanItem *item)
-{
-	item->ch = NULL;
-	item->children = NULL;
-	item->is_server = FALSE;
-}
-
-static HcChanItem *
-hc_chan_item_new (chan *ch, gboolean is_server)
-{
-	HcChanItem *item = g_object_new (HC_TYPE_CHAN_ITEM, NULL);
-	item->ch = ch;
-	item->is_server = is_server;
-	if (is_server)
-		item->children = g_list_store_new (HC_TYPE_CHAN_ITEM);
-	return item;
-}
-
-/* Forward declarations for GTK4 functions */
-static void cv_tree_rebuild_model (chanview *cv);
-static HcChanItem *cv_tree_find_server_item (chanview *cv, void *family);
+/* Forward declarations */
 static chan *cv_tree_get_parent (chan *ch);
 
 #include <gdk/gdk.h>
@@ -353,26 +301,23 @@ cv_tree_factory_setup_cb (GtkListItemFactory *factory, GtkListItem *item, chanvi
 	g_object_set_data (G_OBJECT (item), "label", label);
 }
 
-/* Bind callback - populate row with data */
+/* Bind callback - populate row with data from HcChanItem fields */
 static void
-cv_tree_factory_bind_cb (GtkListItemFactory *factory, GtkListItem *item, chanview *cv)
+cv_tree_factory_bind_cb (GtkListItemFactory *factory, GtkListItem *list_item, chanview *cv)
 {
 	GtkWidget *expander, *icon, *label;
 	GtkTreeListRow *row;
 	HcChanItem *chan_item;
-	char *name = NULL;
-	GdkPixbuf *pixbuf = NULL;
-	PangoAttrList *attr = NULL;
 
-	expander = g_object_get_data (G_OBJECT (item), "expander");
-	icon = g_object_get_data (G_OBJECT (item), "icon");
-	label = g_object_get_data (G_OBJECT (item), "label");
+	expander = g_object_get_data (G_OBJECT (list_item), "expander");
+	icon = g_object_get_data (G_OBJECT (list_item), "icon");
+	label = g_object_get_data (G_OBJECT (list_item), "label");
 
 	/* Safety checks for stored widget references */
 	if (!expander || !label)
 		return;
 
-	row = gtk_list_item_get_item (item);
+	row = gtk_list_item_get_item (list_item);
 	if (!row)
 		return;
 
@@ -387,24 +332,14 @@ cv_tree_factory_bind_cb (GtkListItemFactory *factory, GtkListItem *item, chanvie
 		return;
 	}
 
-	/* Get data from the GtkTreeStore using the channel's iter */
-	if (gtk_tree_store_iter_is_valid (cv->store, &chan_item->ch->iter))
-	{
-		gtk_tree_model_get (GTK_TREE_MODEL (cv->store), &chan_item->ch->iter,
-		                    COL_NAME, &name,
-		                    COL_ATTR, &attr,
-		                    COL_PIXBUF, &pixbuf,
-		                    -1);
-	}
-
-	/* Set label text and attributes */
-	gtk_label_set_text (GTK_LABEL (label), name ? name : "");
-	gtk_label_set_attributes (GTK_LABEL (label), attr);
+	/* Read data directly from HcChanItem fields */
+	gtk_label_set_text (GTK_LABEL (label), chan_item->name ? chan_item->name : "");
+	gtk_label_set_attributes (GTK_LABEL (label), chan_item->attr);
 
 	/* Set icon if we have one */
-	if (icon && pixbuf)
+	if (icon && chan_item->icon)
 	{
-		GdkTexture *texture = hc_pixbuf_to_texture (pixbuf);
+		GdkTexture *texture = hc_pixbuf_to_texture (chan_item->icon);
 		gtk_picture_set_paintable (GTK_PICTURE (icon), GDK_PAINTABLE (texture));
 		if (texture)
 			g_object_unref (texture);
@@ -414,22 +349,19 @@ cv_tree_factory_bind_cb (GtkListItemFactory *factory, GtkListItem *item, chanvie
 		gtk_picture_set_paintable (GTK_PICTURE (icon), NULL);
 	}
 
-	g_free (name);
-	if (attr)
-		pango_attr_list_unref (attr);
 	g_object_unref (chan_item);
 }
 
 /* Unbind callback - cleanup */
 static void
-cv_tree_factory_unbind_cb (GtkListItemFactory *factory, GtkListItem *item, chanview *cv)
+cv_tree_factory_unbind_cb (GtkListItemFactory *factory, GtkListItem *list_item, chanview *cv)
 {
 	GtkWidget *expander;
 
-	if (!item)
+	if (!list_item)
 		return;
 
-	expander = g_object_get_data (G_OBJECT (item), "expander");
+	expander = g_object_get_data (G_OBJECT (list_item), "expander");
 	if (expander)
 		gtk_tree_expander_set_list_row (GTK_TREE_EXPANDER (expander), NULL);
 }
@@ -468,12 +400,9 @@ cv_tree_init (chanview *cv)
 	gtk_widget_set_vexpand (win, TRUE);
 	gtk_box_append (GTK_BOX (cv->box), win);
 
-	/* Create root store for server items */
-	tv->root_store = g_list_store_new (HC_TYPE_CHAN_ITEM);
-
-	/* Create tree list model that wraps our root store */
+	/* Use cv->store directly as the root model for GtkTreeListModel */
 	tree_model = gtk_tree_list_model_new (
-		G_LIST_MODEL (g_object_ref (tv->root_store)),
+		G_LIST_MODEL (g_object_ref (cv->store)),
 		FALSE,	/* passthrough - FALSE means we get GtkTreeListRow items */
 		TRUE,	/* autoexpand */
 		cv_tree_create_child_model,
@@ -531,38 +460,15 @@ cv_tree_init (chanview *cv)
 static void
 cv_tree_postinit (chanview *cv)
 {
-	/* In GTK4, tree is autoexpanded via GtkTreeListModel setting */
-	/* Rebuild the model from the GtkTreeStore */
-	cv_tree_rebuild_model (cv);
+	/* In GTK4, tree is autoexpanded via GtkTreeListModel setting.
+	 * The GListStore IS the model now, no rebuild needed. */
 }
 
 static void *
-cv_tree_add (chanview *cv, chan *ch, char *name, GtkTreeIter *parent)
+cv_tree_add (chanview *cv, chan *ch, char *name, gboolean has_parent)
 {
-	treeview *tv = (treeview *)cv;
-	HcChanItem *item;
-	HcChanItem *parent_item;
-
-	/* Create item for this channel */
-	item = hc_chan_item_new (ch, parent == NULL); /* is_server if no parent */
-
-	if (parent == NULL)
-	{
-		/* This is a server (root level) - add to root store */
-		g_list_store_append (tv->root_store, item);
-		g_object_unref (item);
-	}
-	else
-	{
-		/* This is a channel - find parent server and add to its children */
-		parent_item = cv_tree_find_server_item (cv, ch->family);
-		if (parent_item && parent_item->children)
-		{
-			g_list_store_append (parent_item->children, item);
-		}
-		g_object_unref (item);
-	}
-
+	/* The item was already added to cv->store (or a parent's children store)
+	 * by chanview_add_real(). Nothing more to do for the tree view. */
 	return NULL;
 }
 
@@ -593,7 +499,6 @@ cv_tree_focus (chan *ch)
 			continue;
 
 		item = gtk_tree_list_row_get_item (row);
-		g_object_unref (row);
 
 		if (item && item->ch == ch)
 		{
@@ -613,11 +518,13 @@ cv_tree_focus (chan *ch)
 			gtk_list_view_scroll_to (tv->view, i, GTK_LIST_SCROLL_SELECT, NULL);
 
 			g_object_unref (item);
+			g_object_unref (row);
 			return;
 		}
 
 		if (item)
 			g_object_unref (item);
+		g_object_unref (row);
 	}
 }
 
@@ -643,99 +550,76 @@ cv_tree_move_focus (chanview *cv, gboolean relative, int num)
 static void
 cv_tree_remove (chan *ch)
 {
-	chanview *cv = ch->cv;
-	treeview *tv = (treeview *)cv;
-	guint n_items, i;
-	HcChanItem *item;
-	GListStore *store;
-	chan *parent_ch;
-
-	if (!tv->root_store)
-		return;
-
-	/* Determine which store to search */
-	parent_ch = cv->func_get_parent ? cv->func_get_parent (ch) : NULL;
-
-	if (parent_ch)
-	{
-		/* It's a child item - find parent's children store */
-		HcChanItem *parent_item = cv_tree_find_server_item (cv, ch->family);
-		if (!parent_item || !parent_item->children)
-		{
-			if (parent_item)
-				g_object_unref (parent_item);
-			return;
-		}
-		store = parent_item->children;
-		g_object_unref (parent_item);
-	}
-	else
-	{
-		/* It's a root (server) item */
-		store = tv->root_store;
-	}
-
-	/* Find and remove the item */
-	n_items = g_list_model_get_n_items (G_LIST_MODEL (store));
-	for (i = 0; i < n_items; i++)
-	{
-		item = g_list_model_get_item (G_LIST_MODEL (store), i);
-		if (item && item->ch == ch)
-		{
-			g_object_unref (item);
-			g_list_store_remove (store, i);
-			return;
-		}
-		if (item)
-			g_object_unref (item);
-	}
+	/* Removal from the GListStore is handled by chan_remove() in chanview.c.
+	 * Nothing extra needed here for the tree view. */
 }
 
 static void
-move_row (chan *ch, int delta, GtkTreeIter *parent)
+cv_tree_move_item_in_store (GListStore *store, guint old_pos, int delta)
 {
-	GtkTreeStore *store = ch->cv->store;
-	GtkTreeIter *src = &ch->iter;
-	GtkTreeIter dest = ch->iter;
-	GtkTreePath *dest_path;
+	guint n_items = g_list_model_get_n_items (G_LIST_MODEL (store));
+	guint new_pos;
+	HcChanItem *item;
 
-	if (delta < 0) /* down */
+	if (n_items < 2)
+		return;
+
+	if (delta < 0) /* move down (next) */
 	{
-		if (gtk_tree_model_iter_next (GTK_TREE_MODEL (store), &dest))
-			gtk_tree_store_swap (store, src, &dest);
-		else	/* move to top */
-			gtk_tree_store_move_after (store, src, NULL);
-
-	} else
-	{
-		dest_path = gtk_tree_model_get_path (GTK_TREE_MODEL (store), &dest);
-		if (gtk_tree_path_prev (dest_path))
-		{
-			gtk_tree_model_get_iter (GTK_TREE_MODEL (store), &dest, dest_path);
-			gtk_tree_store_swap (store, src, &dest);
-		} else
-		{	/* move to bottom */
-			gtk_tree_store_move_before (store, src, NULL);
-		}
-
-		gtk_tree_path_free (dest_path);
+		if (old_pos + 1 < n_items)
+			new_pos = old_pos + 1;
+		else
+			new_pos = 0; /* wrap to top */
 	}
+	else /* move up (prev) */
+	{
+		if (old_pos > 0)
+			new_pos = old_pos - 1;
+		else
+			new_pos = n_items - 1; /* wrap to bottom */
+	}
+
+	item = g_list_model_get_item (G_LIST_MODEL (store), old_pos);
+	if (!item)
+		return;
+
+	g_object_ref (item); /* extra ref for re-insert */
+	g_list_store_remove (store, old_pos);
+	g_list_store_insert (store, new_pos, item);
+	g_object_unref (item);
+	g_object_unref (item); /* drop the get_item ref */
 }
 
 static void
 cv_tree_move (chan *ch, int delta)
 {
-	GtkTreeIter parent;
+	HcChanItem *item = ch->item;
+	guint pos;
 
-	/* do nothing if this is a server row */
-	if (gtk_tree_model_iter_parent (GTK_TREE_MODEL (ch->cv->store), &parent, &ch->iter))
-		move_row (ch, delta, &parent);
+	if (!item || item->is_server)
+		return; /* do nothing for server rows */
+
+	/* Find parent's children store */
+	HcChanItem *parent_item = chanview_find_parent_item (ch->cv, ch->family, NULL);
+	if (parent_item && parent_item->children)
+	{
+		if (g_list_store_find (parent_item->children, item, &pos))
+			cv_tree_move_item_in_store (parent_item->children, pos, delta);
+		g_object_unref (parent_item);
+	}
 }
 
 static void
 cv_tree_move_family (chan *ch, int delta)
 {
-	move_row (ch, delta, NULL);
+	HcChanItem *item = ch->item;
+	guint pos;
+
+	if (!item)
+		return;
+
+	if (g_list_store_find (ch->cv->store, item, &pos))
+		cv_tree_move_item_in_store (ch->cv->store, pos, delta);
 }
 
 static void
@@ -747,8 +631,6 @@ cv_tree_cleanup (chanview *cv)
 		/* kill the scrolled window */
 		hc_widget_destroy_impl (GTK_WIDGET (tv->scrollw));
 
-	/* Clean up GTK4 model */
-	g_clear_object (&tv->root_store);
 	tv->tree_model = NULL; /* owned by list view */
 	tv->view = NULL;
 }
@@ -803,10 +685,12 @@ cv_tree_rebind_chan (chan *ch)
 	GListStore *store;
 	chan *parent_ch = cv_tree_get_parent (ch);
 
+	(void)tv;
+
 	if (parent_ch)
 	{
 		/* It's a channel - find in parent's children store */
-		HcChanItem *parent_item = cv_tree_find_server_item (cv, ch->family);
+		HcChanItem *parent_item = chanview_find_parent_item (cv, ch->family, NULL);
 		if (parent_item && parent_item->children)
 		{
 			store = parent_item->children;
@@ -818,17 +702,19 @@ cv_tree_rebind_chan (chan *ch)
 				{
 					cv_tree_rebind_item (cv, store, i, item);
 					g_object_unref (item);
+					g_object_unref (parent_item);
 					return;
 				}
 				if (item)
 					g_object_unref (item);
 			}
+			g_object_unref (parent_item);
 		}
 	}
 	else
 	{
 		/* It's a server - find in root store */
-		store = tv->root_store;
+		store = cv->store;
 		n_items = g_list_model_get_n_items (G_LIST_MODEL (store));
 		for (i = 0; i < n_items; i++)
 		{
@@ -848,7 +734,7 @@ cv_tree_rebind_chan (chan *ch)
 static void
 cv_tree_set_color (chan *ch, PangoAttrList *list)
 {
-	/* In GTK4, trigger a rebind to pick up the new color from the GtkTreeStore.
+	/* Trigger a rebind to pick up the new color from HcChanItem.
 	 * The rebind helper saves and restores selection to prevent it being cleared. */
 	cv_tree_rebind_chan (ch);
 }
@@ -856,7 +742,7 @@ cv_tree_set_color (chan *ch, PangoAttrList *list)
 static void
 cv_tree_rename (chan *ch, char *name)
 {
-	/* In GTK4, trigger a rebind to pick up the new name from the GtkTreeStore.
+	/* Trigger a rebind to pick up the new name from HcChanItem.
 	 * The rebind helper saves and restores selection to prevent it being cleared. */
 	cv_tree_rebind_chan (ch);
 }
@@ -864,15 +750,22 @@ cv_tree_rename (chan *ch, char *name)
 static chan *
 cv_tree_get_parent (chan *ch)
 {
-	chan *parent_ch = NULL;
-	GtkTreeIter parent;
+	HcChanItem *item = ch->item;
 
-	if (gtk_tree_model_iter_parent (GTK_TREE_MODEL (ch->cv->store), &parent, &ch->iter))
+	/* If it's a server (root item), it has no parent */
+	if (!item || item->is_server)
+		return NULL;
+
+	/* Find the parent server item that contains this channel */
+	HcChanItem *parent_item = chanview_find_parent_item (ch->cv, ch->family, NULL);
+	if (parent_item)
 	{
-		gtk_tree_model_get (GTK_TREE_MODEL (ch->cv->store), &parent, COL_CHAN, &parent_ch, -1);
+		chan *parent_ch = parent_item->ch;
+		g_object_unref (parent_item);
+		return parent_ch;
 	}
 
-	return parent_ch;
+	return NULL;
 }
 
 static gboolean
@@ -918,93 +811,4 @@ cv_tree_is_collapsed (chan *ch)
 	}
 
 	return FALSE;
-}
-
-/*
- * GTK4: Helper functions for managing the GListStore-based model
- */
-
-/*
- * Find a server item in the root store by family pointer
- */
-static HcChanItem *
-cv_tree_find_server_item (chanview *cv, void *family)
-{
-	treeview *tv = (treeview *)cv;
-	guint n_items, i;
-	HcChanItem *item;
-
-	if (!tv->root_store)
-		return NULL;
-
-	n_items = g_list_model_get_n_items (G_LIST_MODEL (tv->root_store));
-
-	for (i = 0; i < n_items; i++)
-	{
-		item = g_list_model_get_item (G_LIST_MODEL (tv->root_store), i);
-		if (item && item->ch && item->ch->family == family)
-		{
-			/* Return without unref - caller must unref */
-			return item;
-		}
-		if (item)
-			g_object_unref (item);
-	}
-
-	return NULL;
-}
-
-/*
- * Rebuild the GListStore model from the GtkTreeStore
- * This is called when the tree view is first created or when
- * the model needs to be refreshed.
- */
-static void
-cv_tree_rebuild_model (chanview *cv)
-{
-	treeview *tv = (treeview *)cv;
-	GtkTreeIter iter, child_iter;
-	chan *ch;
-	HcChanItem *server_item;
-
-	if (!tv->root_store)
-		return;
-
-	/* Clear existing items */
-	g_list_store_remove_all (tv->root_store);
-
-	/* Iterate through the GtkTreeStore and populate our GListStore */
-	if (!gtk_tree_model_get_iter_first (GTK_TREE_MODEL (cv->store), &iter))
-		return;
-
-	do
-	{
-		/* Get the channel for this row */
-		gtk_tree_model_get (GTK_TREE_MODEL (cv->store), &iter, COL_CHAN, &ch, -1);
-		if (!ch)
-			continue;
-
-		/* Create server item */
-		server_item = hc_chan_item_new (ch, TRUE);
-		g_list_store_append (tv->root_store, server_item);
-
-		/* Add children if this server has any */
-		if (gtk_tree_model_iter_children (GTK_TREE_MODEL (cv->store), &child_iter, &iter))
-		{
-			do
-			{
-				gtk_tree_model_get (GTK_TREE_MODEL (cv->store), &child_iter, COL_CHAN, &ch, -1);
-				if (ch && server_item->children)
-				{
-					HcChanItem *child_item = hc_chan_item_new (ch, FALSE);
-					g_list_store_append (server_item->children, child_item);
-					g_object_unref (child_item);
-				}
-			}
-			while (gtk_tree_model_iter_next (GTK_TREE_MODEL (cv->store), &child_iter));
-		}
-
-		g_object_unref (server_item);
-	}
-	while (gtk_tree_model_iter_next (GTK_TREE_MODEL (cv->store), &iter));
 }

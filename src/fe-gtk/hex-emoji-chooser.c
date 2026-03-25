@@ -13,6 +13,10 @@
  * https://github.com/twitter/twemoji
  */
 
+#include "../common/cfgfiles.h"
+#include "../common/hexchat.h"
+#include "../common/hexchatc.h"
+
 #include <gtk/gtk.h>
 #include <gdk/gdk.h>
 #include <pango/pango.h>
@@ -20,9 +24,6 @@
 
 #include "hex-emoji-chooser.h"
 #include "xtext-emoji.h"
-#include "../common/cfgfiles.h"
-#include "../common/hexchat.h"
-#include "../common/hexchatc.h"
 
 #define BOX_SPACE 6
 

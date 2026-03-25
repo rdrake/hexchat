@@ -147,23 +147,22 @@ notify_setup_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer user_d
 	gtk_list_item_set_child (item, label);
 }
 
-/* Helper to apply color to label */
+/* Helper to apply color to label via Pango attributes */
 static void
 notify_apply_colour (GtkWidget *label, GdkRGBA *colour)
 {
 	if (colour)
 	{
-		char css[128];
-		GtkCssProvider *provider;
-		g_snprintf (css, sizeof(css), "label { color: rgba(%d,%d,%d,%.2f); }",
-		            (int)(colour->red * 255), (int)(colour->green * 255),
-		            (int)(colour->blue * 255), colour->alpha);
-		provider = gtk_css_provider_new ();
-		gtk_css_provider_load_from_string (provider, css);
-		gtk_style_context_add_provider (gtk_widget_get_style_context (label),
-		                                GTK_STYLE_PROVIDER (provider),
-		                                GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-		g_object_unref (provider);
+		PangoAttrList *attrs = pango_attr_list_new ();
+		pango_attr_list_insert (attrs, pango_attr_foreground_new (
+			(guint16)(colour->red * 65535),
+			(guint16)(colour->green * 65535),
+			(guint16)(colour->blue * 65535)));
+		if (colour->alpha < 1.0)
+			pango_attr_list_insert (attrs, pango_attr_foreground_alpha_new (
+				(guint16)(colour->alpha * 65535)));
+		gtk_label_set_attributes (GTK_LABEL (label), attrs);
+		pango_attr_list_unref (attrs);
 	}
 }
 
@@ -441,13 +440,14 @@ notify_remove_clicked (GtkWidget * igad)
 }
 
 static void
-notifygui_add_cb (GtkDialog *dialog, gint response, gpointer entry)
+notifygui_add_ok (GtkWidget *button, GtkWidget *dialog)
 {
+	GtkWidget *entry = g_object_get_data (G_OBJECT (dialog), "nick_entry");
 	char *networks;
 	char *text;
 
 	text = (char *)hc_entry_get_text (entry);
-	if (text[0] && response == GTK_RESPONSE_ACCEPT)
+	if (text[0])
 	{
 		networks = (char*)hc_entry_get_text (g_object_get_data (G_OBJECT (entry), "net"));
 		if (g_ascii_strcasecmp (networks, "ALL") == 0 || networks[0] == 0)
@@ -462,7 +462,7 @@ notifygui_add_cb (GtkDialog *dialog, gint response, gpointer entry)
 static void
 notifygui_add_enter (GtkWidget *entry, GtkWidget *dialog)
 {
-	gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_ACCEPT);
+	notifygui_add_ok (NULL, dialog);
 }
 
 void
@@ -473,20 +473,28 @@ fe_notify_ask (char *nick, char *networks)
 	GtkWidget *label;
 	GtkWidget *wid;
 	GtkWidget *table;
+	GtkWidget *vbox;
+	GtkWidget *button_box;
+	GtkWidget *button;
 	char *msg = _("Enter nickname to add:");
 	char buf[256];
 
-	dialog = gtk_dialog_new_with_buttons (msg,
-										parent_window ? GTK_WINDOW (parent_window) : NULL, 0,
-										"_Cancel", GTK_RESPONSE_REJECT,
-										"_OK", GTK_RESPONSE_ACCEPT,
-										NULL);
+	dialog = gtk_window_new ();
+	gtk_window_set_title (GTK_WINDOW (dialog), msg);
+	if (parent_window)
+	{
+		gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (parent_window));
+		gtk_window_set_destroy_with_parent (GTK_WINDOW (dialog), TRUE);
+	}
+
+	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
+	hc_widget_set_margin_all (vbox, 12);
+	gtk_window_set_child (GTK_WINDOW (dialog), vbox);
 
 	table = gtk_grid_new ();
-	hc_widget_set_margin_all (GTK_WIDGET (table), 12);
 	gtk_grid_set_row_spacing (GTK_GRID (table), 3);
 	gtk_grid_set_column_spacing (GTK_GRID (table), 8);
-	gtk_box_append (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), table);
+	gtk_box_append (GTK_BOX (vbox), table);
 
 	label = gtk_label_new (msg);
 	gtk_grid_attach (GTK_GRID (table), label, 0, 0, 1, 1);
@@ -498,8 +506,7 @@ fe_notify_ask (char *nick, char *networks)
 	gtk_widget_set_hexpand (entry, TRUE);
 	gtk_grid_attach (GTK_GRID (table), entry, 1, 0, 1, 1);
 
-	g_signal_connect (G_OBJECT (dialog), "response",
-						   G_CALLBACK (notifygui_add_cb), entry);
+	g_object_set_data (G_OBJECT (dialog), "nick_entry", entry);
 
 	label = gtk_label_new (_("Notify on these networks:"));
 	gtk_grid_attach (GTK_GRID (table), label, 0, 2, 1, 1);
@@ -517,7 +524,21 @@ fe_notify_ask (char *nick, char *networks)
 	gtk_label_set_markup (GTK_LABEL (label), buf);
 	gtk_grid_attach (GTK_GRID (table), label, 1, 3, 1, 1);
 
-	gtk_widget_set_visible (dialog, TRUE);
+	/* Button row */
+	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	gtk_widget_set_halign (button_box, GTK_ALIGN_END);
+
+	button = gtk_button_new_with_mnemonic (_("_Cancel"));
+	g_signal_connect (button, "clicked", G_CALLBACK (gtkutil_destroy), dialog);
+	gtk_box_append (GTK_BOX (button_box), button);
+
+	button = gtk_button_new_with_mnemonic (_("_OK"));
+	g_signal_connect (button, "clicked", G_CALLBACK (notifygui_add_ok), dialog);
+	gtk_box_append (GTK_BOX (button_box), button);
+
+	gtk_box_append (GTK_BOX (vbox), button_box);
+
+	gtk_window_present (GTK_WINDOW (dialog));
 }
 
 static void
@@ -569,5 +590,6 @@ notify_opengui (void)
 
 	notify_gui_update ();
 
-	gtk_widget_show (notify_window);
+	if (GTK_IS_WINDOW (notify_window))
+		gtk_window_present (GTK_WINDOW (notify_window));
 }

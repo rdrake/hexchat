@@ -702,7 +702,7 @@ tab_click_cb (GtkGestureClick *gesture, int n_press, double x, double y, chan *c
 }
 
 static void *
-cv_tabs_add (chanview *cv, chan *ch, char *name, GtkTreeIter *parent)
+cv_tabs_add (chanview *cv, chan *ch, char *name, gboolean has_parent)
 {
 	GtkWidget *but;
 

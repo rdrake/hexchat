@@ -368,7 +368,6 @@ fe_userlist_insert (session *sess, struct User *newuser, gboolean sel)
 	GListStore *store = sess->res->user_model;
 	GdkPixbuf *pix = get_user_icon (sess->server, newuser);
 	HcUserItem *item;
-	char *nick;
 	int nick_color = 0;
 
 	if (prefs.hex_away_track && newuser->away)

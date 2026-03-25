@@ -283,9 +283,6 @@ menu_quick_item_with_callback (void *callback, char *label, GtkWidget * menu,
 GtkWidget *
 menu_quick_sub (char *name, GtkWidget *menu, GtkWidget **sub_item_ret, int flags, int pos)
 {
-	GtkWidget *sub_menu;
-	GtkWidget *sub_item;
-
 	if (!name)
 		return menu;
 
@@ -571,7 +568,7 @@ menu_create_nickinfo_menu (struct User *user, GtkWidget *submenu)
 void
 fe_userlist_update (session *sess, struct User *user)
 {
-	GList *items, *next;
+	GList *items;
 
 	if (!nick_submenu || !str_copy)
 		return;
@@ -1126,18 +1123,18 @@ static void
 menu_showhide_cb (session *sess)
 {
 	if (prefs.hex_gui_hide_menu)
-		gtk_widget_hide (sess->gui->menu);
+		gtk_widget_set_visible (sess->gui->menu, FALSE);
 	else
-		gtk_widget_show (sess->gui->menu);
+		gtk_widget_set_visible (sess->gui->menu, TRUE);
 }
 
 static void
 menu_topic_showhide_cb (session *sess)
 {
 	if (prefs.hex_gui_topicbar)
-		gtk_widget_show (sess->gui->topic_bar);
+		gtk_widget_set_visible (sess->gui->topic_bar, TRUE);
 	else
-		gtk_widget_hide (sess->gui->topic_bar);
+		gtk_widget_set_visible (sess->gui->topic_bar, FALSE);
 }
 
 static void
@@ -1150,9 +1147,9 @@ static void
 menu_ulbuttons_showhide_cb (session *sess)
 {
 	if (prefs.hex_gui_ulist_buttons)
-		gtk_widget_show (sess->gui->button_box);
+		gtk_widget_set_visible (sess->gui->button_box, TRUE);
 	else
-		gtk_widget_hide (sess->gui->button_box);
+		gtk_widget_set_visible (sess->gui->button_box, FALSE);
 }
 
 static void
@@ -1166,10 +1163,10 @@ menu_cmbuttons_showhide_cb (session *sess)
 			gtk_widget_set_visible (sess->gui->topicbutton_box, TRUE);
 		}
 		else
-			gtk_widget_hide (sess->gui->topicbutton_box);
+			gtk_widget_set_visible (sess->gui->topicbutton_box, FALSE);
 		break;
 	default:
-		gtk_widget_hide (sess->gui->topicbutton_box);
+		gtk_widget_set_visible (sess->gui->topicbutton_box, FALSE);
 	}
 }
 
@@ -2639,56 +2636,74 @@ menu_reconnect (GtkWidget * wid, gpointer none)
 }
 
 static void
-menu_join_cb (GtkWidget *dialog, gint response, GtkEntry *entry)
+menu_join_ok_cb (GtkWidget *button, GtkWidget *dialog)
 {
-	switch (response)
-	{
-	case GTK_RESPONSE_ACCEPT:
-		menu_chan_join (NULL, (char *)hc_entry_get_text (GTK_WIDGET(entry)));
-		break;
-
-	case GTK_RESPONSE_HELP:
-		chanlist_opengui (current_sess->server, TRUE);
-		break;
-	}
-
+	GtkWidget *entry = g_object_get_data (G_OBJECT (dialog), "entry");
+	menu_chan_join (NULL, (char *)hc_entry_get_text (entry));
 	hc_window_destroy_fn (GTK_WINDOW (dialog));
 }
 
 static void
-menu_join_entry_cb (GtkWidget *entry, GtkDialog *dialog)
+menu_join_chanlist_cb (GtkWidget *button, GtkWidget *dialog)
 {
-	gtk_dialog_response (dialog, GTK_RESPONSE_ACCEPT);
+	chanlist_opengui (current_sess->server, TRUE);
+	hc_window_destroy_fn (GTK_WINDOW (dialog));
+}
+
+static void
+menu_join_entry_cb (GtkWidget *entry, GtkWidget *dialog)
+{
+	menu_join_ok_cb (NULL, dialog);
 }
 
 static void
 menu_join (GtkWidget * wid, gpointer none)
 {
-	GtkWidget *hbox, *dialog, *entry, *label;
+	GtkWidget *hbox, *vbox, *dialog, *entry, *label, *button_box, *button;
 
-	dialog = gtk_dialog_new_with_buttons (_("Join Channel"),
-									GTK_WINDOW (parent_window), 0,
-									_("Retrieve channel list"), GTK_RESPONSE_HELP,
-									_("_Cancel"), GTK_RESPONSE_REJECT,
-									_("_OK"), GTK_RESPONSE_ACCEPT,
-									NULL);
-	gtk_box_set_homogeneous (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), TRUE);
-	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	dialog = gtk_window_new ();
+	gtk_window_set_title (GTK_WINDOW (dialog), _("Join Channel"));
+	gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (parent_window));
+	gtk_window_set_destroy_with_parent (GTK_WINDOW (dialog), TRUE);
+
+	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
+	hc_widget_set_margin_all (vbox, 12);
+	gtk_window_set_child (GTK_WINDOW (dialog), vbox);
+
+	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+
+	label = gtk_label_new (_("Enter Channel to Join:"));
+	gtk_box_append (GTK_BOX (hbox), label);
 
 	entry = gtk_entry_new ();
+	gtk_widget_set_hexpand (entry, TRUE);
 	gtk_editable_set_editable (GTK_EDITABLE (entry), FALSE);	/* avoid auto-selection */
 	hc_entry_set_text (entry, "#");
 	g_signal_connect (G_OBJECT (entry), "activate",
 						 	G_CALLBACK (menu_join_entry_cb), dialog);
 	gtk_box_append (GTK_BOX (hbox), entry);
 
-	label = gtk_label_new (_("Enter Channel to Join:"));
-	gtk_box_append (GTK_BOX (hbox), label);
+	g_object_set_data (G_OBJECT (dialog), "entry", entry);
 
-	g_signal_connect (G_OBJECT (dialog), "response",
-						   G_CALLBACK (menu_join_cb), entry);
+	gtk_box_append (GTK_BOX (vbox), hbox);
 
-	gtk_box_append (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), hbox);
+	/* Button row */
+	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	gtk_widget_set_halign (button_box, GTK_ALIGN_END);
+
+	button = gtk_button_new_with_label (_("Retrieve channel list"));
+	g_signal_connect (button, "clicked", G_CALLBACK (menu_join_chanlist_cb), dialog);
+	gtk_box_append (GTK_BOX (button_box), button);
+
+	button = gtk_button_new_with_mnemonic (_("_Cancel"));
+	g_signal_connect (button, "clicked", G_CALLBACK (gtkutil_destroy), dialog);
+	gtk_box_append (GTK_BOX (button_box), button);
+
+	button = gtk_button_new_with_mnemonic (_("_OK"));
+	g_signal_connect (button, "clicked", G_CALLBACK (menu_join_ok_cb), dialog);
+	gtk_box_append (GTK_BOX (button_box), button);
+
+	gtk_box_append (GTK_BOX (vbox), button_box);
 
 	gtk_editable_set_editable (GTK_EDITABLE (entry), TRUE);
 	gtk_editable_set_position (GTK_EDITABLE (entry), 1);
@@ -2901,9 +2916,9 @@ menu_apply_metres_cb (session *sess)
 }
 
 static void
-about_dialog_close (GtkDialog *dialog, int response, gpointer data)
+about_dialog_close (GtkWindow *dialog, int response, gpointer data)
 {
-	hc_window_destroy_fn (GTK_WINDOW (dialog));
+	hc_window_destroy_fn (dialog);
 }
 
 static gboolean

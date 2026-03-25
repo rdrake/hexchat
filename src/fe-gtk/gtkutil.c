@@ -56,18 +56,10 @@ extern void path_part (char *file, char *path, int pathlen);
 
 struct file_req
 {
-	GtkWidget *dialog;
 	void *userdata;
 	filereqcallback callback;
 	int flags;		/* FRF_* flags */
 };
-
-static void
-gtkutil_file_req_destroy (GtkWidget * wid, struct file_req *freq)
-{
-	freq->callback (freq->userdata, NULL);
-	g_free (freq);
-}
 
 static void
 gtkutil_check_file (char *filename, struct file_req *freq)
@@ -137,66 +129,98 @@ gtkutil_check_file (char *filename, struct file_req *freq)
 }
 
 static void
-gtkutil_file_req_done (GtkWidget * wid, struct file_req *freq)
+file_req_open_cb (GObject *source, GAsyncResult *result, gpointer data)
 {
-	GSList *files, *cur;
-	GtkFileChooser *fs = GTK_FILE_CHOOSER (freq->dialog);
+	struct file_req *freq = data;
+	GFile *file = gtk_file_dialog_open_finish (GTK_FILE_DIALOG (source), result, NULL);
 
-	if (freq->flags & FRF_MULTIPLE)
+	if (file)
 	{
-		files = cur = hc_file_chooser_get_filenames (fs);
-		while (cur)
+		char *path = g_file_get_path (file);
+		if (path)
 		{
-			gtkutil_check_file (cur->data, freq);
-			g_free (cur->data);
-			cur = cur->next;
+			gtkutil_check_file (path, freq);
+			g_free (path);
 		}
-		if (files)
-			g_slist_free (files);
+		g_object_unref (file);
 	}
 	else
 	{
-		if (freq->flags & FRF_CHOOSEFOLDER)
-		{
-			GFile *folder = gtk_file_chooser_get_current_folder (fs);
-			if (folder)
-			{
-				gchar *filename = g_file_get_path (folder);
-				gtkutil_check_file (filename, freq);
-				g_free (filename);
-				g_object_unref (folder);
-			}
-		}
-		else
-		{
-			GFile *file = gtk_file_chooser_get_file (fs);
-			if (file)
-			{
-				gchar *filename = g_file_get_path (file);
-				gtkutil_check_file (filename, freq);
-				g_free (filename);
-				g_object_unref (file);
-			}
-		}
+		freq->callback (freq->userdata, NULL);
 	}
-
-	/* this should call the "destroy" cb, where we free(freq) */
-	hc_window_destroy_fn (GTK_WINDOW (freq->dialog));
+	g_free (freq);
 }
 
 static void
-gtkutil_file_req_response (GtkWidget *dialog, gint res, struct file_req *freq)
+file_req_save_cb (GObject *source, GAsyncResult *result, gpointer data)
 {
-	switch (res)
-	{
-	case GTK_RESPONSE_ACCEPT:
-		gtkutil_file_req_done (dialog, freq);
-		break;
+	struct file_req *freq = data;
+	GFile *file = gtk_file_dialog_save_finish (GTK_FILE_DIALOG (source), result, NULL);
 
-	case GTK_RESPONSE_CANCEL:
-		/* this should call the "destroy" cb, where we free(freq) */
-		hc_window_destroy_fn (GTK_WINDOW (freq->dialog));
+	if (file)
+	{
+		char *path = g_file_get_path (file);
+		if (path)
+		{
+			gtkutil_check_file (path, freq);
+			g_free (path);
+		}
+		g_object_unref (file);
 	}
+	else
+	{
+		freq->callback (freq->userdata, NULL);
+	}
+	g_free (freq);
+}
+
+static void
+file_req_open_multiple_cb (GObject *source, GAsyncResult *result, gpointer data)
+{
+	struct file_req *freq = data;
+	GListModel *files = gtk_file_dialog_open_multiple_finish (GTK_FILE_DIALOG (source), result, NULL);
+
+	if (files)
+	{
+		guint n = g_list_model_get_n_items (files);
+		for (guint i = 0; i < n; i++)
+		{
+			GFile *file = g_list_model_get_item (files, i);
+			char *path = g_file_get_path (file);
+			if (path)
+			{
+				gtkutil_check_file (path, freq);
+				g_free (path);
+			}
+			g_object_unref (file);
+		}
+		g_object_unref (files);
+	}
+	freq->callback (freq->userdata, NULL);
+	g_free (freq);
+}
+
+static void
+file_req_folder_cb (GObject *source, GAsyncResult *result, gpointer data)
+{
+	struct file_req *freq = data;
+	GFile *file = gtk_file_dialog_select_folder_finish (GTK_FILE_DIALOG (source), result, NULL);
+
+	if (file)
+	{
+		char *path = g_file_get_path (file);
+		if (path)
+		{
+			freq->callback (freq->userdata, path);
+			g_free (path);
+		}
+		g_object_unref (file);
+	}
+	else
+	{
+		freq->callback (freq->userdata, NULL);
+	}
+	g_free (freq);
 }
 
 void
@@ -204,55 +228,24 @@ gtkutil_file_req (GtkWindow *parent, const char *title, void *callback, void *us
 						int flags)
 {
 	struct file_req *freq;
-	GtkWidget *dialog;
-	GtkFileFilter *filefilter;
-	extern char *get_xdir_fs (void);
+	GtkFileDialog *dialog;
 	char *token;
 	char *tokenbuffer;
 
-	if (flags & FRF_WRITE)
-	{
-		dialog = gtk_file_chooser_dialog_new (title, NULL,
-												GTK_FILE_CHOOSER_ACTION_SAVE,
-												_("_Cancel"), GTK_RESPONSE_CANCEL,
-												_("_Save"), GTK_RESPONSE_ACCEPT,
-												NULL);
+	dialog = gtk_file_dialog_new ();
+	gtk_file_dialog_set_title (dialog, title);
 
-	}
-	else
-		dialog = gtk_file_chooser_dialog_new (title, NULL,
-												GTK_FILE_CHOOSER_ACTION_OPEN,
-												_("_Cancel"), GTK_RESPONSE_CANCEL,
-												_("_Open"), GTK_RESPONSE_ACCEPT,
-												NULL);
-
-	if (filter && filter[0] && (flags & FRF_FILTERISINITIAL))
+	if (flags & FRF_MODAL)
 	{
-		if (flags & FRF_WRITE)
-		{
-			char temp[1024];
-			path_part (filter, temp, sizeof (temp));
-			hc_file_chooser_set_current_folder (GTK_FILE_CHOOSER (dialog), temp);
-			gtk_file_chooser_set_current_name (GTK_FILE_CHOOSER (dialog), file_part (filter));
-		}
-		else
-		{
-			hc_file_chooser_set_current_folder (GTK_FILE_CHOOSER (dialog), filter);
-		}
+		g_assert (parent);
+		gtk_file_dialog_set_modal (dialog, TRUE);
 	}
-	else if (!(flags & FRF_RECENTLYUSED))
-	{
-		hc_file_chooser_set_current_folder (GTK_FILE_CHOOSER (dialog), get_xdir ());
-	}
-
-	if (flags & FRF_MULTIPLE)
-		gtk_file_chooser_set_select_multiple (GTK_FILE_CHOOSER (dialog), TRUE);
-	if (flags & FRF_CHOOSEFOLDER)
-		gtk_file_chooser_set_action (GTK_FILE_CHOOSER (dialog), GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER);
 
 	if ((flags & FRF_EXTENSIONS || flags & FRF_MIMETYPES) && extensions != NULL)
 	{
-		filefilter = gtk_file_filter_new ();
+		GtkFileFilter *filefilter = gtk_file_filter_new ();
+		GListStore *filters = g_list_store_new (GTK_TYPE_FILE_FILTER);
+
 		tokenbuffer = g_strdup (extensions);
 		token = strtok (tokenbuffer, ";");
 
@@ -266,36 +259,52 @@ gtkutil_file_req (GtkWindow *parent, const char *title, void *callback, void *us
 		}
 
 		g_free (tokenbuffer);
-		gtk_file_chooser_set_filter (GTK_FILE_CHOOSER (dialog), filefilter);
+		g_list_store_append (filters, filefilter);
+		gtk_file_dialog_set_filters (dialog, G_LIST_MODEL (filters));
+		g_object_unref (filters);
+		g_object_unref (filefilter);
 	}
 
+	if (filter && filter[0] && (flags & FRF_FILTERISINITIAL))
 	{
-		GFile *shortcut = g_file_new_for_path (get_xdir ());
-		gtk_file_chooser_add_shortcut_folder (GTK_FILE_CHOOSER (dialog), shortcut, NULL);
-		g_object_unref (shortcut);
+		if (flags & FRF_WRITE)
+		{
+			char temp[1024];
+			path_part (filter, temp, sizeof (temp));
+			GFile *folder = g_file_new_for_path (temp);
+			gtk_file_dialog_set_initial_folder (dialog, folder);
+			g_object_unref (folder);
+			gtk_file_dialog_set_initial_name (dialog, file_part (filter));
+		}
+		else
+		{
+			GFile *folder = g_file_new_for_path (filter);
+			gtk_file_dialog_set_initial_folder (dialog, folder);
+			g_object_unref (folder);
+		}
+	}
+	else if (!(flags & FRF_RECENTLYUSED))
+	{
+		GFile *folder = g_file_new_for_path (get_xdir ());
+		gtk_file_dialog_set_initial_folder (dialog, folder);
+		g_object_unref (folder);
 	}
 
 	freq = g_new (struct file_req, 1);
-	freq->dialog = dialog;
 	freq->flags = flags;
 	freq->callback = callback;
 	freq->userdata = userdata;
 
-	g_signal_connect (G_OBJECT (dialog), "response",
-							G_CALLBACK (gtkutil_file_req_response), freq);
-	g_signal_connect (G_OBJECT (dialog), "destroy",
-						   G_CALLBACK (gtkutil_file_req_destroy), (gpointer) freq);
+	if (flags & FRF_WRITE)
+		gtk_file_dialog_save (dialog, parent, NULL, file_req_save_cb, freq);
+	else if (flags & FRF_MULTIPLE)
+		gtk_file_dialog_open_multiple (dialog, parent, NULL, file_req_open_multiple_cb, freq);
+	else if (flags & FRF_CHOOSEFOLDER)
+		gtk_file_dialog_select_folder (dialog, parent, NULL, file_req_folder_cb, freq);
+	else
+		gtk_file_dialog_open (dialog, parent, NULL, file_req_open_cb, freq);
 
-	if (parent)
-		gtk_window_set_transient_for (GTK_WINDOW (dialog), parent);
-
-	if (flags & FRF_MODAL)
-	{
-		g_assert (parent);
-		gtk_window_set_modal (GTK_WINDOW (dialog), TRUE);
-	}
-
-	gtk_widget_show (dialog);
+	g_object_unref (dialog);
 }
 
 static gboolean
@@ -325,39 +334,37 @@ gtkutil_destroy (GtkWidget * igad, GtkWidget * dgad)
 }
 
 static void
-gtkutil_get_str_response (GtkDialog *dialog, gint arg1, gpointer entry)
+gtkutil_str_ok (GtkWidget *button, GtkWidget *dialog)
 {
 	void (*callback) (int cancel, char *text, void *user_data);
+	GtkWidget *entry;
 	char *text;
 	void *user_data;
 
-	text = (char *) hc_entry_get_text (entry);
 	callback = g_object_get_data (G_OBJECT (dialog), "cb");
 	user_data = g_object_get_data (G_OBJECT (dialog), "ud");
+	entry = g_object_get_data (G_OBJECT (dialog), "entry");
+	text = (char *) hc_entry_get_text (entry);
 
-	switch (arg1)
-	{
-	case GTK_RESPONSE_REJECT:
-		callback (TRUE, text, user_data);
-		hc_window_destroy_fn (GTK_WINDOW (dialog));
-		break;
-	case GTK_RESPONSE_ACCEPT:
-		callback (FALSE, text, user_data);
-		hc_window_destroy_fn (GTK_WINDOW (dialog));
-		break;
-	}
-}
-
-static void
-gtkutil_str_enter (GtkWidget *entry, GtkWidget *dialog)
-{
-	gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_ACCEPT);
+	callback (FALSE, text, user_data);
+	hc_window_destroy_fn (GTK_WINDOW (dialog));
 }
 
 static void
 gtkutil_str_cancel (GtkWidget *button, GtkWidget *dialog)
 {
-	gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_REJECT);
+	void (*callback) (int cancel, char *text, void *user_data);
+	GtkWidget *entry;
+	char *text;
+	void *user_data;
+
+	callback = g_object_get_data (G_OBJECT (dialog), "cb");
+	user_data = g_object_get_data (G_OBJECT (dialog), "ud");
+	entry = g_object_get_data (G_OBJECT (dialog), "entry");
+	text = (char *) hc_entry_get_text (entry);
+
+	callback (TRUE, text, user_data);
+	hc_window_destroy_fn (GTK_WINDOW (dialog));
 }
 
 void
@@ -367,24 +374,20 @@ fe_get_str (char *msg, char *def, void *callback, void *userdata)
 	GtkWidget *entry;
 	GtkWidget *hbox;
 	GtkWidget *label;
-	GtkWidget *content_area;
+	GtkWidget *vbox;
 	GtkWidget *button_box;
 	GtkWidget *button;
 	extern GtkWidget *parent_window;
 
-	dialog = gtk_dialog_new ();
+	dialog = gtk_window_new ();
 	gtk_window_set_title (GTK_WINDOW (dialog), msg);
 	gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (parent_window));
 	gtk_window_set_modal (GTK_WINDOW (dialog), FALSE);
+	gtk_window_set_destroy_with_parent (GTK_WINDOW (dialog), TRUE);
 
-	content_area = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
-	gtk_box_set_spacing (GTK_BOX (content_area), 12);
-
-	/* Add margins to the content area */
-	gtk_widget_set_margin_start (content_area, 12);
-	gtk_widget_set_margin_end (content_area, 12);
-	gtk_widget_set_margin_top (content_area, 12);
-	gtk_widget_set_margin_bottom (content_area, 12);
+	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
+	hc_widget_set_margin_all (vbox, 12);
+	gtk_window_set_child (GTK_WINDOW (dialog), vbox);
 
 	/* Input row: label + entry */
 	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
@@ -398,11 +401,13 @@ fe_get_str (char *msg, char *def, void *callback, void *userdata)
 	entry = gtk_entry_new ();
 	gtk_widget_set_hexpand (entry, TRUE);
 	g_signal_connect (G_OBJECT (entry), "activate",
-						 	G_CALLBACK (gtkutil_str_enter), dialog);
+						 	G_CALLBACK (gtkutil_str_ok), dialog);
 	hc_entry_set_text (entry, def);
 	gtk_box_append (GTK_BOX (hbox), entry);
 
-	gtk_box_append (GTK_BOX (content_area), hbox);
+	g_object_set_data (G_OBJECT (dialog), "entry", entry);
+
+	gtk_box_append (GTK_BOX (vbox), hbox);
 
 	/* Button row */
 	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
@@ -415,58 +420,46 @@ fe_get_str (char *msg, char *def, void *callback, void *userdata)
 
 	button = gtk_button_new_with_mnemonic (_("_OK"));
 	g_signal_connect (G_OBJECT (button), "clicked",
-					  G_CALLBACK (gtkutil_str_enter), dialog);
+					  G_CALLBACK (gtkutil_str_ok), dialog);
 	gtk_box_append (GTK_BOX (button_box), button);
 
-	gtk_box_append (GTK_BOX (content_area), button_box);
-	g_signal_connect (G_OBJECT (dialog), "response",
-						   G_CALLBACK (gtkutil_get_str_response), entry);
+	gtk_box_append (GTK_BOX (vbox), button_box);
+
+	gtk_window_present (GTK_WINDOW (dialog));
 }
 
 static void
-gtkutil_get_number_response (GtkDialog *dialog, gint arg1, gpointer spin)
+gtkutil_int_ok (GtkWidget *button, GtkWidget *dialog)
 {
 	void (*callback) (int cancel, int value, void *user_data);
+	GtkWidget *spin;
 	int num;
 	void *user_data;
 
-	num = gtk_spin_button_get_value_as_int (GTK_SPIN_BUTTON (spin));
 	callback = g_object_get_data (G_OBJECT (dialog), "cb");
 	user_data = g_object_get_data (G_OBJECT (dialog), "ud");
+	spin = g_object_get_data (G_OBJECT (dialog), "spin");
+	num = gtk_spin_button_get_value_as_int (GTK_SPIN_BUTTON (spin));
 
-	switch (arg1)
-	{
-	case GTK_RESPONSE_REJECT:
-		callback (TRUE, num, user_data);
-		hc_window_destroy_fn (GTK_WINDOW (dialog));
-		break;
-	case GTK_RESPONSE_ACCEPT:
-		callback (FALSE, num, user_data);
-		hc_window_destroy_fn (GTK_WINDOW (dialog));
-		break;
-	}
+	callback (FALSE, num, user_data);
+	hc_window_destroy_fn (GTK_WINDOW (dialog));
 }
 
 static void
-gtkutil_get_bool_response (GtkDialog *dialog, gint arg1, gpointer spin)
+gtkutil_int_cancel (GtkWidget *button, GtkWidget *dialog)
 {
-	void (*callback) (int value, void *user_data);
+	void (*callback) (int cancel, int value, void *user_data);
+	GtkWidget *spin;
+	int num;
 	void *user_data;
 
 	callback = g_object_get_data (G_OBJECT (dialog), "cb");
 	user_data = g_object_get_data (G_OBJECT (dialog), "ud");
+	spin = g_object_get_data (G_OBJECT (dialog), "spin");
+	num = gtk_spin_button_get_value_as_int (GTK_SPIN_BUTTON (spin));
 
-	switch (arg1)
-	{
-	case GTK_RESPONSE_REJECT:
-		callback (0, user_data);
-		hc_window_destroy_fn (GTK_WINDOW (dialog));
-		break;
-	case GTK_RESPONSE_ACCEPT:
-		callback (1, user_data);
-		hc_window_destroy_fn (GTK_WINDOW (dialog));
-		break;
-	}
+	callback (TRUE, num, user_data);
+	hc_window_destroy_fn (GTK_WINDOW (dialog));
 }
 
 void
@@ -475,18 +468,23 @@ fe_get_int (char *msg, int def, void *callback, void *userdata)
 	GtkWidget *dialog;
 	GtkWidget *spin;
 	GtkWidget *hbox;
+	GtkWidget *vbox;
 	GtkWidget *label;
+	GtkWidget *button_box;
+	GtkWidget *button;
 	GtkAdjustment *adj;
 	extern GtkWidget *parent_window;
 
-	dialog = gtk_dialog_new_with_buttons (msg, NULL, 0,
-										_("_Cancel"), GTK_RESPONSE_REJECT,
-										_("_OK"), GTK_RESPONSE_ACCEPT,
-										NULL);
-	gtk_box_set_homogeneous (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), TRUE);
+	dialog = gtk_window_new ();
+	gtk_window_set_title (GTK_WINDOW (dialog), msg);
 	gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (parent_window));
+	gtk_window_set_destroy_with_parent (GTK_WINDOW (dialog), TRUE);
 
-	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
+	hc_widget_set_margin_all (vbox, 12);
+	gtk_window_set_child (GTK_WINDOW (dialog), vbox);
+
+	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
 
 	g_object_set_data (G_OBJECT (dialog), "cb", callback);
 	g_object_set_data (G_OBJECT (dialog), "ud", userdata);
@@ -499,39 +497,74 @@ fe_get_int (char *msg, int def, void *callback, void *userdata)
 	gtk_spin_button_set_value ((GtkSpinButton*)spin, def);
 	gtk_box_append (GTK_BOX (hbox), spin);
 
+	g_object_set_data (G_OBJECT (dialog), "spin", spin);
+
 	label = gtk_label_new (msg);
 	gtk_box_append (GTK_BOX (hbox), label);
 
-	g_signal_connect (G_OBJECT (dialog), "response",
-						   G_CALLBACK (gtkutil_get_number_response), spin);
+	gtk_box_append (GTK_BOX (vbox), hbox);
 
-	gtk_box_append (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), hbox);
+	/* Button row */
+	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	gtk_widget_set_halign (button_box, GTK_ALIGN_END);
+
+	button = gtk_button_new_with_mnemonic (_("_Cancel"));
+	g_signal_connect (G_OBJECT (button), "clicked",
+					  G_CALLBACK (gtkutil_int_cancel), dialog);
+	gtk_box_append (GTK_BOX (button_box), button);
+
+	button = gtk_button_new_with_mnemonic (_("_OK"));
+	g_signal_connect (G_OBJECT (button), "clicked",
+					  G_CALLBACK (gtkutil_int_ok), dialog);
+	gtk_box_append (GTK_BOX (button_box), button);
+
+	gtk_box_append (GTK_BOX (vbox), button_box);
+
+	gtk_window_present (GTK_WINDOW (dialog));
+}
+
+struct bool_cb_data
+{
+	void (*callback) (int value, void *user_data);
+	void *user_data;
+};
+
+static void
+gtkutil_bool_choose_cb (GObject *source, GAsyncResult *result, gpointer data)
+{
+	struct bool_cb_data *bd = data;
+	int button = gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source), result, NULL);
+
+	if (button == 1) /* Yes */
+		bd->callback (1, bd->user_data);
+	else
+		bd->callback (0, bd->user_data);
+
+	g_free (bd);
 }
 
 void
 fe_get_bool (char *title, char *prompt, void *callback, void *userdata)
 {
-	GtkWidget *dialog;
-	GtkWidget *prompt_label;
+	GtkAlertDialog *dialog;
+	struct bool_cb_data *bd;
+	const char *buttons[] = { _("_No"), _("_Yes"), NULL };
 	extern GtkWidget *parent_window;
 
-	dialog = gtk_dialog_new_with_buttons (title, NULL, 0,
-		_("_No"), GTK_RESPONSE_REJECT,
-		_("_Yes"), GTK_RESPONSE_ACCEPT,
-		NULL);
-	gtk_box_set_homogeneous (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), TRUE);
-	gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (parent_window));
+	dialog = gtk_alert_dialog_new ("%s", prompt);
+	gtk_alert_dialog_set_detail (dialog, title);
+	gtk_alert_dialog_set_buttons (dialog, buttons);
+	gtk_alert_dialog_set_cancel_button (dialog, 0);
+	gtk_alert_dialog_set_default_button (dialog, 1);
 
+	bd = g_new (struct bool_cb_data, 1);
+	bd->callback = callback;
+	bd->user_data = userdata;
 
-	g_object_set_data (G_OBJECT (dialog), "cb", callback);
-	g_object_set_data (G_OBJECT (dialog), "ud", userdata);
-
-	prompt_label = gtk_label_new (prompt);
-
-	g_signal_connect (G_OBJECT (dialog), "response",
-		G_CALLBACK (gtkutil_get_bool_response), NULL);
-
-	gtk_box_append (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), prompt_label);
+	gtk_alert_dialog_choose (dialog,
+		parent_window ? GTK_WINDOW (parent_window) : NULL,
+		NULL, gtkutil_bool_choose_cb, bd);
+	g_object_unref (dialog);
 }
 
 GtkWidget *
@@ -571,13 +604,11 @@ gtkutil_button (GtkWidget *box, char *icon, char *tip, void *callback,
 		img = hc_image_new_from_icon_name (icon, GTK_ICON_SIZE_MENU);
 		gtk_widget_set_halign (img, GTK_ALIGN_CENTER);
 		gtk_button_set_child (GTK_BUTTON (wid), img);
-		gtk_widget_show (img);
 		gtk_box_append (GTK_BOX (box), wid);
 	}
 
 	g_signal_connect (G_OBJECT (wid), "clicked",
 							G_CALLBACK (callback), userdata);
-	gtk_widget_show (wid);
 	if (tip)
 		gtk_widget_set_tooltip_text (wid, tip);
 
@@ -589,7 +620,6 @@ gtkutil_label_new (char *text, GtkWidget * box)
 {
 	GtkWidget *label = gtk_label_new (text);
 	gtk_box_append (GTK_BOX (box), label);
-	gtk_widget_show (label);
 }
 
 GtkWidget *
@@ -602,7 +632,6 @@ gtkutil_entry_new (int max, GtkWidget * box, void *callback,
 	if (callback)
 		g_signal_connect (G_OBJECT (entry), "changed",
 								G_CALLBACK (callback), userdata);
-	gtk_widget_show (entry);
 	return entry;
 }
 
@@ -610,7 +639,6 @@ void
 show_and_unfocus (GtkWidget * wid)
 {
 	gtk_widget_set_can_focus (wid, FALSE);
-	gtk_widget_show (wid);
 }
 
 void
@@ -637,21 +665,6 @@ gtkutil_close_request_focus_parent (GtkWindow *win, gpointer parent)
 	gtk_window_present (GTK_WINDOW (parent));
 	return FALSE; /* allow the close to proceed */
 }
-
-/* Response handler for message dialogs: present the transient parent
- * before destroying.  gtk_window_destroy() doesn't fire close-request,
- * so dialogs using response→gtk_window_destroy lose focus. */
-void
-gtkutil_dialog_response_destroy (GtkDialog *dialog, int response, gpointer user_data)
-{
-	GtkWindow *parent = gtk_window_get_transient_for (GTK_WINDOW (dialog));
-	(void)response;
-	(void)user_data;
-	if (parent)
-		gtk_window_present (parent);
-	gtk_window_destroy (GTK_WINDOW (dialog));
-}
-
 
 GtkWidget *
 gtkutil_window_new (char *title, char *role, int width, int height, int flags)
@@ -723,7 +736,6 @@ gtkutil_treeview_new (GtkWidget *box, GtkTreeModel *model,
 	gtk_box_append (GTK_BOX (box), win);
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (win),
 											  GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-	gtk_widget_show (win);
 
 	view = gtk_tree_view_new_with_model (model);
 	gtk_widget_set_name (view, "hexchat-list");

@@ -450,16 +450,16 @@ ignore_store_new (int cancel, char *mask, gpointer data)
 }
 
 static void
-ignore_clear_cb (GtkDialog *dialog, gint response)
+ignore_clear_cb (GObject *source, GAsyncResult *result, gpointer data)
 {
-	GListStore *store = get_store_gtk4 ();
+	GListStore *store;
 	guint i, n_items;
 	HcIgnoreItem *item;
+	int button = gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source), result, NULL);
 
-	hc_window_destroy_fn (GTK_WINDOW (dialog));
-
-	if (response == GTK_RESPONSE_OK)
+	if (button == 1) /* OK */
 	{
+		store = get_store_gtk4 ();
 		n_items = g_list_model_get_n_items (G_LIST_MODEL (store));
 
 		/* remove from ignore_list */
@@ -482,15 +482,18 @@ static void
 ignore_clear_entry_clicked (GtkWidget * wid)
 {
 	extern GtkWidget *parent_window;
-	GtkWidget *dialog;
+	GtkAlertDialog *dialog;
+	const char *buttons[] = { _("_Cancel"), _("_OK"), NULL };
 
-	dialog = gtk_message_dialog_new (
-								parent_window ? GTK_WINDOW (parent_window) : NULL, 0,
-								GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL,
-					_("Are you sure you want to remove all ignores?"));
-	g_signal_connect (G_OBJECT (dialog), "response",
-							G_CALLBACK (ignore_clear_cb), NULL);
-	gtk_widget_show (dialog);
+	dialog = gtk_alert_dialog_new ("%s", _("Are you sure you want to remove all ignores?"));
+	gtk_alert_dialog_set_buttons (dialog, buttons);
+	gtk_alert_dialog_set_cancel_button (dialog, 0);
+	gtk_alert_dialog_set_default_button (dialog, 1);
+
+	gtk_alert_dialog_choose (dialog,
+		parent_window ? GTK_WINDOW (parent_window) : NULL,
+		NULL, ignore_clear_cb, NULL);
+	g_object_unref (dialog);
 }
 
 static void
@@ -555,12 +558,10 @@ ignore_gui_open ()
 	g_object_set_data (G_OBJECT (ignorewin), "store", store);
 
 	frame = gtk_frame_new (_("Ignore Stats:"));
-	gtk_widget_show (frame);
 
 	stat_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
 	hc_widget_set_margin_all (GTK_WIDGET (stat_box), 6);
 	gtk_frame_set_child (GTK_FRAME (frame), stat_box);
-	gtk_widget_show (stat_box);
 
 	num_chan = ignore_stats_entry (stat_box, _("Channel:"), ignored_chan);
 	num_priv = ignore_stats_entry (stat_box, _("Private:"), ignored_priv);
@@ -601,7 +602,7 @@ ignore_gui_open ()
 
 		temp = temp->next;
 	}
-	gtk_widget_show (ignorewin);
+	gtk_window_present (GTK_WINDOW (ignorewin));
 }
 
 void

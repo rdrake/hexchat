@@ -23,10 +23,10 @@
 #include <string.h>
 #include <stdarg.h>
 
-#include <gtk/gtk.h>
-
 #include "../common/hexchat-plugin.h"
 #include "../common/hexchat.h"
+
+#include <gtk/gtk.h>
 #include "../common/hexchatc.h"
 #include "../common/inbound.h"
 #include "../common/server.h"
@@ -38,6 +38,7 @@
 #include "maingui.h"
 #include "menu.h"
 #include "gtkutil.h"
+#include "plugin-tray.h"
 
 #ifndef WIN32
 #include <unistd.h>

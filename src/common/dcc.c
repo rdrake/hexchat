@@ -100,20 +100,6 @@ static int new_id(void)
 	return id++;
 }
 
-static double
-timeval_diff (GTimeVal *greater,
-				 GTimeVal *less)
-{
-	long usecdiff;
-	double result;
-	
-	result = greater->tv_sec - less->tv_sec;
-	usecdiff = (long) greater->tv_usec - less->tv_usec;
-	result += (double) usecdiff / 1000000;
-	
-	return result;
-}
-
 static void
 dcc_unthrottle (struct DCC *dcc)
 {
@@ -127,7 +113,7 @@ dcc_unthrottle (struct DCC *dcc)
 static void
 dcc_calc_cps (struct DCC *dcc)
 {
-	GTimeVal now;
+	gint64 now;
 	gint64 oldcps;
 	double timediff, startdiff;
 	int glob_throttle_bit, wasthrottled;
@@ -135,7 +121,7 @@ dcc_calc_cps (struct DCC *dcc)
 	int glob_limit;
 	goffset pos, posdiff;
 
-	g_get_current_time (&now);
+	now = g_get_real_time ();
 
 	/* the pos we use for sends is an average
 		between pos and ack */
@@ -155,17 +141,17 @@ dcc_calc_cps (struct DCC *dcc)
 		glob_limit = prefs.hex_dcc_global_max_get_cps;
 	}
 
-	if (!dcc->firstcpstv.tv_sec && !dcc->firstcpstv.tv_usec)
+	if (dcc->firstcpstv == 0)
 		dcc->firstcpstv = now;
 	else
 	{
-		startdiff = timeval_diff (&now, &dcc->firstcpstv);
+		startdiff = (now - dcc->firstcpstv) / 1000000.0;
 		if (startdiff < 1)
 			startdiff = 1;
 		else if (startdiff > CPS_AVG_WINDOW)
 			startdiff = CPS_AVG_WINDOW;
 
-		timediff = timeval_diff (&now, &dcc->lastcpstv);
+		timediff = (now - dcc->lastcpstv) / 1000000.0;
 		if (timediff > startdiff)
 			timediff = startdiff = 1;
 
@@ -341,7 +327,7 @@ dcc_connect_sok (struct DCC *dcc)
 	int sok;
 	struct sockaddr_in addr;
 
-	sok = socket (AF_INET, SOCK_STREAM, 0);
+	sok = (int) socket (AF_INET, SOCK_STREAM, 0);
 	if (sok == -1)
 		return -1;
 
@@ -1567,7 +1553,7 @@ dcc_accept (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 	socklen_t len;
 
 	len = sizeof (CAddr);
-	sok = accept (dcc->sok, (struct sockaddr *) &CAddr, &len);
+	sok = (int) accept (dcc->sok, (struct sockaddr *) &CAddr, &len);
 	fe_input_remove (dcc->iotag);
 	dcc->iotag = 0;
 	closesocket (dcc->sok);
@@ -1649,7 +1635,7 @@ dcc_listen_init (struct DCC *dcc, session *sess)
 	int i, bindretval = -1;
 	socklen_t len;
 
-	dcc->sok = socket (AF_INET, SOCK_STREAM, 0);
+	dcc->sok = (int) socket (AF_INET, SOCK_STREAM, 0);
 	if (dcc->sok == -1)
 		return FALSE;
 

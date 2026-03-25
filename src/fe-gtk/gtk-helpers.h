@@ -708,36 +708,6 @@ hc_popover_menu_popup_at (GtkWidget *parent, GMenuModel *menu_model, double x, d
 	return popover;
 }
 
-/* =============================================================================
- * File Chooser Helpers
- * =============================================================================
- * GTK4 file chooser uses GFile instead of strings.
- */
-
-static inline GSList *
-hc_file_chooser_get_filenames (GtkFileChooser *chooser)
-{
-	GListModel *files = gtk_file_chooser_get_files (chooser);
-	GSList *list = NULL;
-	guint n = g_list_model_get_n_items (files);
-	for (guint i = 0; i < n; i++)
-	{
-		GFile *file = g_list_model_get_item (files, i);
-		list = g_slist_append (list, g_file_get_path (file));
-		g_object_unref (file);
-	}
-	g_object_unref (files);
-	return list;
-}
-
-static inline gboolean
-hc_file_chooser_set_current_folder (GtkFileChooser *chooser, const char *folder)
-{
-	GFile *file = g_file_new_for_path (folder);
-	gboolean result = gtk_file_chooser_set_current_folder (chooser, file, NULL);
-	g_object_unref (file);
-	return result;
-}
 
 /* =============================================================================
  * GtkStack Page Container
@@ -886,9 +856,7 @@ hc_debug_log (const char *fmt, ...)
  *   gtk_list_item_set_child (list_item, label);
  */
 
-static GtkEditableLabel *hc_editable__dummy_ = NULL;  /* suppress unused warnings */
-
-static inline void
+static G_GNUC_UNUSED void
 hc_editable_label_stop_current (GtkEditableLabel **editing_label)
 {
 	if (*editing_label && gtk_editable_label_get_editing (*editing_label))
@@ -901,7 +869,7 @@ typedef struct {
 	GtkEditableLabel **editing_label;
 } HcEditableClickData;
 
-static inline gboolean
+static G_GNUC_UNUSED gboolean
 hc_editable_label_start_idle (gpointer user_data)
 {
 	GtkEditableLabel *label = GTK_EDITABLE_LABEL (user_data);
@@ -911,7 +879,7 @@ hc_editable_label_start_idle (gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
-static inline void
+static G_GNUC_UNUSED void
 hc_editable_label_click_cb (GtkGestureClick *gesture, int n_press,
                              double x, double y, gpointer user_data)
 {
@@ -948,14 +916,14 @@ hc_editable_label_click_cb (GtkGestureClick *gesture, int n_press,
 	}
 }
 
-static inline void
+static G_GNUC_UNUSED void
 hc_editable_click_data_free (gpointer data, GClosure *closure)
 {
 	(void)closure;
 	g_free (data);
 }
 
-static inline GtkWidget *
+static G_GNUC_UNUSED GtkWidget *
 hc_editable_label_new (GtkListItem *list_item, GtkEditableLabel **editing_label)
 {
 	GtkWidget *label = gtk_editable_label_new ("");

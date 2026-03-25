@@ -27,6 +27,11 @@
 #include <ctype.h>
 #include <math.h>
 
+#include "../common/cfgfiles.h"
+#include "../common/hexchatc.h"
+#include "../common/url.h"
+#include "../common/fe.h"
+
 #include <gtk/gtk.h>
 #include <gdk/gdk.h>
 #include <pango/pango.h>
@@ -42,11 +47,6 @@
 #include <windows.h>
 #include "../common/typedef.h"
 #endif
-
-#include "../common/cfgfiles.h"
-#include "../common/hexchatc.h"
-#include "../common/url.h"
-#include "../common/fe.h"
 
 /* ── Enchant runtime loading ────────────────────────────────────────── */
 /* File-scoped copies via g_module_open — loaded at runtime. */
@@ -2062,7 +2062,7 @@ hex_input_edit_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 					double ih = PANGO_PIXELS (ext.height);
 					/* Draw a small right-arrow in the left padding area */
 					GdkRGBA dim = pal[XTEXT_FG];
-					dim.alpha *= 0.35;
+					dim.alpha *= 0.35f;
 					gdk_cairo_set_source_rgba (cr, &dim);
 					/* Simple ">" chevron, vertically centered */
 					double cx = 3.0;

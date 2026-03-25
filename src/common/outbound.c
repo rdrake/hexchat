@@ -136,7 +136,7 @@ random_line (char *file_name)
 	ran = RAND_INT (lines);
 	do
 	{
-		fgets (buf, sizeof (buf), fh);
+		HC_IGNORE_RESULT (fgets (buf, sizeof (buf), fh));
 		lines--;
 	}
 	while (lines > ran);
@@ -1646,7 +1646,7 @@ cmd_execw (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			PrintText(sess, temp);
 		}
 	}
-	write(sess->running_exec->myfd, temp, len + 1);
+	HC_IGNORE_RESULT (write(sess->running_exec->myfd, temp, len + 1));
 	g_free(temp);
 
 	return TRUE;
@@ -5175,7 +5175,7 @@ auto_insert (char *dest, gsize destlen, unsigned char *src, char *word[],
 				switch (src[0])
 				{
 				case '%':
-					if ((dest - orig) + 2u >= destlen)
+					if ((gsize)(dest - orig) + 2u >= destlen)
 						return 2;
 					dest[0] = '%';
 					dest[1] = 0;
@@ -5292,7 +5292,7 @@ check_special_chars (char *cmd, int do_ascii) /* check for %X */
 				{
 					memcpy (buf + i, utf, utf_len);
 					g_free (utf);
-					i += (utf_len - 1);
+					i += (int)(utf_len - 1);
 				}
 				j += 3;
 			} else
@@ -5388,7 +5388,7 @@ perform_nick_completion (struct session *sess, char *cmd, char *tbuf)
 	{
 		if (space[-1] == prefs.hex_completion_suffix[0] && space - 1 != cmd)
 		{
-			len = space - cmd - 1;
+			len = (int)(space - cmd - 1);
 			if (len < NICKLEN)
 			{
 				char nick[NICKLEN];

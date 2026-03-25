@@ -36,7 +36,6 @@
 #else
 #include <unistd.h>
 #include <pwd.h>
-#include <sys/time.h>
 #include <sys/utsname.h>
 #endif
 
@@ -1009,14 +1008,8 @@ util_exec (const char *cmd)
 unsigned long
 make_ping_time (void)
 {
-#ifndef WIN32
-	struct timeval timev;
-	gettimeofday (&timev, 0);
-#else
-	GTimeVal timev;
-	g_get_current_time (&timev);
-#endif
-	return (timev.tv_sec - 50000) * 1000 + timev.tv_usec/1000;
+	gint64 now_us = g_get_real_time ();
+	return (unsigned long)((now_us / 1000000 - 50000) * 1000 + (now_us % 1000000) / 1000);
 }
 
 int

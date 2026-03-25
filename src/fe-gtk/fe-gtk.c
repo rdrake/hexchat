@@ -107,31 +107,28 @@ static const GOptionEntry gopt_entries[] =
 };
 
 #ifdef WIN32
-/* GTK4: gtk_dialog_run() is removed, must use async response handling.
- * For startup dialogs, we run a mini event loop to wait for the response. */
 static void
-create_msg_dialog_response_cb (GtkDialog *dialog, gint response_id, gpointer user_data)
+create_msg_dialog_cb (GObject *source, GAsyncResult *result, gpointer user_data)
 {
 	gboolean *done = (gboolean *)user_data;
+	gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source), result, NULL);
 	*done = TRUE;
 }
 
 static void
 create_msg_dialog (gchar *title, gchar *message)
 {
-	GtkWidget *dialog;
+	GtkAlertDialog *dialog;
 	gboolean done = FALSE;
 
-	dialog = gtk_message_dialog_new (parent_window ? GTK_WINDOW (parent_window) : NULL,
-								GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE, "%s", message);
-	gtk_window_set_title (GTK_WINDOW (dialog), title);
+	dialog = gtk_alert_dialog_new ("%s", message);
+	gtk_alert_dialog_set_detail (dialog, title);
+	gtk_alert_dialog_set_modal (dialog, TRUE);
 
-	g_signal_connect (G_OBJECT (dialog), "response",
-					  G_CALLBACK (create_msg_dialog_response_cb), &done);
-	g_signal_connect (G_OBJECT (dialog), "response",
-					  G_CALLBACK (gtkutil_dialog_response_destroy), NULL);
-
-	gtk_window_present (GTK_WINDOW (dialog));
+	gtk_alert_dialog_choose (dialog,
+		parent_window ? GTK_WINDOW (parent_window) : NULL,
+		NULL, create_msg_dialog_cb, &done);
+	g_object_unref (dialog);
 
 	/* Run a mini event loop until the dialog is closed */
 	while (!done)
@@ -445,7 +442,7 @@ create_input_style (InputStyle *style)
 		css_buf[0] = '\0';
 	}
 
-	gtk_css_provider_load_from_data (input_css_provider, css_buf, -1);
+	gtk_css_provider_load_from_string (input_css_provider, css_buf);
 
 	return style;
 }
@@ -652,7 +649,7 @@ apply_tree_css (void)
 			"}", sizeof (css_buf));
 	}
 
-	gtk_css_provider_load_from_data (tree_css_provider, css_buf, -1);
+	gtk_css_provider_load_from_string (tree_css_provider, css_buf);
 }
 
 void
@@ -841,11 +838,11 @@ fe_new_server (struct server *serv)
 	serv->gui = g_new0 (struct server_gui, 1);
 }
 
-/* GTK4: gtk_dialog_run() removed, gtk_window_set_position() removed */
 static void
-fe_message_response_cb (GtkDialog *dialog, gint response_id, gpointer user_data)
+fe_message_wait_cb (GObject *source, GAsyncResult *result, gpointer user_data)
 {
 	gboolean *done = (gboolean *)user_data;
+	gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source), result, NULL);
 	if (done)
 		*done = TRUE;
 }
@@ -853,38 +850,26 @@ fe_message_response_cb (GtkDialog *dialog, gint response_id, gpointer user_data)
 void
 fe_message (char *msg, int flags)
 {
-	GtkWidget *dialog;
-	int type = GTK_MESSAGE_WARNING;
+	GtkAlertDialog *dialog;
 	gboolean done = FALSE;
 
-	if (flags & FE_MSG_ERROR)
-		type = GTK_MESSAGE_ERROR;
-	if (flags & FE_MSG_INFO)
-		type = GTK_MESSAGE_INFO;
-
-	dialog = gtk_message_dialog_new (GTK_WINDOW (parent_window), 0, type,
-												GTK_BUTTONS_OK, "%s", msg);
-	if (flags & FE_MSG_MARKUP)
-		gtk_message_dialog_set_markup (GTK_MESSAGE_DIALOG (dialog), msg);
-
-	g_signal_connect (G_OBJECT (dialog), "response",
-							G_CALLBACK (gtkutil_dialog_response_destroy), NULL);
-
-	gtk_window_set_resizable (GTK_WINDOW (dialog), FALSE);
-	/* GTK4: gtk_window_set_position removed - window manager handles placement */
+	dialog = gtk_alert_dialog_new ("%s", msg);
 
 	if (flags & FE_MSG_WAIT)
 	{
-		/* For blocking dialogs, run a mini event loop */
-		g_signal_connect (G_OBJECT (dialog), "response",
-						  G_CALLBACK (fe_message_response_cb), &done);
-		gtk_window_present (GTK_WINDOW (dialog));
+		gtk_alert_dialog_set_modal (dialog, TRUE);
+		gtk_alert_dialog_choose (dialog,
+			parent_window ? GTK_WINDOW (parent_window) : NULL,
+			NULL, fe_message_wait_cb, &done);
+		g_object_unref (dialog);
 		while (!done)
 			g_main_context_iteration (NULL, TRUE);
 	}
 	else
 	{
-		gtk_window_present (GTK_WINDOW (dialog));
+		gtk_alert_dialog_show (dialog,
+			parent_window ? GTK_WINDOW (parent_window) : NULL);
+		g_object_unref (dialog);
 	}
 }
 
@@ -1716,9 +1701,8 @@ fe_ctrl_gui (session *sess, fe_gui_action action, int arg)
 	switch (action)
 	{
 	case FE_GUI_HIDE:
-		gtk_widget_hide (sess->gui->window); break;
+		gtk_widget_set_visible (sess->gui->window, FALSE); break;
 	case FE_GUI_SHOW:
-		gtk_widget_show (sess->gui->window);
 		gtk_window_present (GTK_WINDOW (sess->gui->window));
 		break;
 	case FE_GUI_FOCUS:
