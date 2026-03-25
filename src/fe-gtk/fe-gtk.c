@@ -466,6 +466,8 @@ apply_tree_css (void)
 	char css_buf[2048];
 	char *font_family;
 	int font_size;
+	const char *font_style;
+	const char *font_weight;
 
 	if (!tree_css_provider)
 	{
@@ -481,11 +483,21 @@ apply_tree_css (void)
 	 * Size comes from input_style which already has the corrected value. */
 	{
 		PangoFontDescription *main_desc = pango_font_description_from_string (prefs.hex_text_font_main);
-		font_family = pango_font_description_get_family (main_desc);
+		font_family = g_strdup (pango_font_description_get_family (main_desc));
 		font_size = pango_font_description_get_size (input_style->font_desc) / PANGO_SCALE;
-		/* font_family points into main_desc — we need to copy it since main_desc
-		 * will be freed after building the CSS string, but we use it below */
-		font_family = g_strdup (font_family);
+
+		switch (pango_font_description_get_style (main_desc))
+		{
+		case PANGO_STYLE_ITALIC:  font_style = "italic"; break;
+		case PANGO_STYLE_OBLIQUE: font_style = "oblique"; break;
+		default:                  font_style = "normal"; break;
+		}
+
+		if (pango_font_description_get_weight (main_desc) >= PANGO_WEIGHT_BOLD)
+			font_weight = "bold";
+		else
+			font_weight = "normal";
+
 		pango_font_description_free (main_desc);
 	}
 
@@ -504,6 +516,8 @@ apply_tree_css (void)
 		"  color: rgb(%d, %d, %d); "
 		"  font-family: \"%s\"; "
 		"  font-size: %dpt; "
+		"  font-style: %s; "
+		"  font-weight: %s; "
 		"} "
 		"#hexchat-tree row:selected { "
 		"  background-color: rgb(%d, %d, %d); "
@@ -525,6 +539,8 @@ apply_tree_css (void)
 		"  color: rgb(%d, %d, %d); "
 		"  font-family: \"%s\"; "
 		"  font-size: %dpt; "
+		"  font-style: %s; "
+		"  font-weight: %s; "
 		"} "
 		"#hexchat-userlist row:selected { "
 		"  background-color: rgb(%d, %d, %d); "
@@ -580,6 +596,8 @@ apply_tree_css (void)
 		/* #hexchat-tree font */
 		font_family ? font_family : "sans",
 		font_size > 0 ? font_size : 11,
+		font_style,
+		font_weight,
 		/* #hexchat-tree row:selected bg */
 		(int)(colors[COL_MARK_BG].red * 255),
 		(int)(colors[COL_MARK_BG].green * 255),
@@ -599,6 +617,8 @@ apply_tree_css (void)
 		/* #hexchat-userlist font */
 		font_family ? font_family : "sans",
 		font_size > 0 ? font_size : 11,
+		font_style,
+		font_weight,
 		/* #hexchat-userlist row:selected bg */
 		(int)(colors[COL_MARK_BG].red * 255),
 		(int)(colors[COL_MARK_BG].green * 255),
