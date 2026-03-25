@@ -943,19 +943,9 @@ gtk_xtext_resize_cb (gpointer data)
 	xtext->resize_tag = 0;
 
 	/* Reflow lines and restore scroll position.  The anchor was saved
-	 * from the bottom of the viewport in size_allocate — restore it
-	 * there by subtracting page_size after the normal restore. */
+	 * from the top of the viewport in size_allocate. */
 	gtk_xtext_calc_lines (xtext->buffer, FALSE);
 	gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
-
-	if (!xtext->resize_anchor.anchor_to_bottom)
-	{
-		gdouble page_size = gtk_adjustment_get_page_size (xtext->adj);
-		gdouble val = gtk_adjustment_get_value (xtext->adj) - page_size;
-		if (val < 0)
-			val = 0;
-		gtk_adjustment_set_value (xtext->adj, val);
-	}
 
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 
@@ -978,32 +968,9 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 	dontscroll (xtext->buffer);	/* force scrolling off */
 	if (!height_only)
 	{
-		/* Save scroll anchor from the bottom of the viewport — that's
-		 * what the user is reading.  After reflow we restore it there. */
-		{
-			xtext_scroll_anchor *a = &xtext->resize_anchor;
-			memset (a, 0, sizeof (*a));
-			if (xtext->buffer->scrollbar_down)
-			{
-				a->anchor_to_bottom = TRUE;
-			}
-			else if (xtext->adj)
-			{
-				int bottom_line = (int)(gtk_adjustment_get_value (xtext->adj)
-				                        + gtk_adjustment_get_page_size (xtext->adj));
-				int subline = 0;
-				textentry *ent = gtk_xtext_nth (xtext, bottom_line, &subline);
-				if (ent)
-				{
-					a->anchor_entry_id = ent->entry_id;
-					a->subline_offset = subline;
-				}
-				else
-				{
-					a->anchor_to_bottom = TRUE;
-				}
-			}
-		}
+		/* Save scroll anchor from the top of the viewport (pagetop).
+		 * After reflow we restore the same entry at the top. */
+		gtk_xtext_save_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
 
 		/* Throttle expensive line recalculation during rapid resize.
 		 * Cancel any pending recalc and schedule a new one. */
