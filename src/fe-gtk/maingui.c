@@ -3890,12 +3890,13 @@ mg_create_entry (session *sess, GtkWidget *box)
 		hex_input_edit_set_palette (HEX_INPUT_EDIT (entry),
 		                            GTK_XTEXT (gui->xtext)->palette);
 
-	/* Emoji picker button */
+	/* Emoji picker button — GtkMenuButton owns the popover lifecycle */
 	{
 		GtkWidget *emoji_btn, *emoji_chooser;
 
-		emoji_btn = gtk_button_new_from_icon_name ("face-smile-symbolic");
-		gtk_button_set_has_frame (GTK_BUTTON (emoji_btn), FALSE);
+		emoji_btn = gtk_menu_button_new ();
+		gtk_menu_button_set_icon_name (GTK_MENU_BUTTON (emoji_btn), "face-smile-symbolic");
+		gtk_menu_button_set_has_frame (GTK_MENU_BUTTON (emoji_btn), FALSE);
 		gtk_widget_set_can_focus (emoji_btn, FALSE);
 		gtk_widget_set_tooltip_text (emoji_btn, _("Insert Emoji"));
 		gtk_widget_set_valign (emoji_btn, GTK_ALIGN_CENTER);
@@ -3903,22 +3904,14 @@ mg_create_entry (session *sess, GtkWidget *box)
 		gtk_box_append (GTK_BOX (hbox), emoji_btn);
 
 		emoji_chooser = hex_emoji_chooser_new ();
-		gtk_widget_set_parent (emoji_chooser, emoji_btn);
+		gtk_menu_button_set_popover (GTK_MENU_BUTTON (emoji_btn), emoji_chooser);
 
 		if (gui->xtext && GTK_XTEXT (gui->xtext)->emoji_cache)
 			hex_emoji_chooser_set_emoji_cache (HEX_EMOJI_CHOOSER (emoji_chooser),
 			                                    GTK_XTEXT (gui->xtext)->emoji_cache);
 
-		g_signal_connect_swapped (emoji_btn, "clicked",
-		                          G_CALLBACK (gtk_popover_popup),
-		                          emoji_chooser);
 		g_signal_connect (emoji_chooser, "emoji-picked",
 		                  G_CALLBACK (mg_emoji_picked), gui);
-
-		/* Unparent chooser before button is finalized */
-		g_signal_connect_swapped (emoji_btn, "destroy",
-		                          G_CALLBACK (gtk_widget_unparent),
-		                          emoji_chooser);
 	}
 
 	gtk_widget_grab_focus (entry);
