@@ -596,9 +596,10 @@ gtk_xtext_init (GtkXText * xtext)
 		                  G_CALLBACK (gtk_xtext_leave_notify), xtext);
 		gtk_widget_add_controller (GTK_WIDGET (xtext), motion_controller);
 
-		/* Scroll controller for mouse wheel */
+		/* Scroll controller for mouse wheel — DISCRETE prevents smooth/kinetic
+		 * events where dy is a tiny fraction, which makes scrolling feel slow. */
 		scroll_controller = gtk_event_controller_scroll_new (
-			GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
+			GTK_EVENT_CONTROLLER_SCROLL_VERTICAL | GTK_EVENT_CONTROLLER_SCROLL_DISCRETE);
 		g_signal_connect (scroll_controller, "scroll",
 		                  G_CALLBACK (gtk_xtext_scroll), xtext);
 		gtk_widget_add_controller (GTK_WIDGET (xtext), scroll_controller);

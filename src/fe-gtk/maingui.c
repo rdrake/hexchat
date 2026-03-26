@@ -3234,8 +3234,10 @@ mg_create_center (session *sess, session_gui *gui, GtkWidget *box)
 	gui->hpane_left = gtk_paned_new (GTK_ORIENTATION_HORIZONTAL);
 	gtk_paned_set_position (GTK_PANED (gui->hpane_left), prefs.hex_gui_pane_left_size);
 
-	/* sep between xtext and right side */
+	/* sep between xtext and right side — wide handle so the separator
+	 * gets its own allocated space instead of overlaying the scrollbar. */
 	gui->hpane_right = gtk_paned_new (GTK_ORIENTATION_HORIZONTAL);
+	gtk_paned_set_wide_handle (GTK_PANED (gui->hpane_right), TRUE);
 
 	if (prefs.hex_gui_win_swap)
 	{
