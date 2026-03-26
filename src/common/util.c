@@ -1318,15 +1318,32 @@ canonalize_key (char *key)
 	}
 }
 
+/* Return the directory containing the running executable. */
+static char *
+get_exe_dir (void)
+{
+#ifdef WIN32
+	return g_win32_get_package_installation_directory_of_module (NULL);
+#else
+	char *exe = g_file_read_link ("/proc/self/exe", NULL);
+	if (exe)
+	{
+		char *dir = g_path_get_dirname (exe);
+		g_free (exe);
+		return dir;
+	}
+	return NULL;
+#endif
+}
+
 int
 portable_mode (void)
 {
-#ifdef WIN32
 	static int is_portable = -1;
 
 	if (G_UNLIKELY(is_portable == -1))
 	{
-		char *path = g_win32_get_package_installation_directory_of_module (NULL);
+		char *path = get_exe_dir ();
 		char *filename;
 
 		if (path == NULL)
@@ -1340,9 +1357,6 @@ portable_mode (void)
 	}
 
 	return is_portable;
-#else
-	return 0;
-#endif
 }
 
 char *

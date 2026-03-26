@@ -305,7 +305,21 @@ get_xdir (void)
 	if (!xdir)
 	{
 #ifndef WIN32
-		xdir = g_build_filename (g_get_user_config_dir (), HEXCHAT_DIR, NULL);
+		if (portable_mode ())
+		{
+			char *exe = g_file_read_link ("/proc/self/exe", NULL);
+			if (exe)
+			{
+				char *dir = g_path_get_dirname (exe);
+				xdir = g_build_filename (dir, "config", NULL);
+				g_free (dir);
+				g_free (exe);
+			}
+			else
+				xdir = g_strdup ("./config");
+		}
+		else
+			xdir = g_build_filename (g_get_user_config_dir (), HEXCHAT_DIR, NULL);
 #else
 		wchar_t* roaming_path_wide;
 		gchar* roaming_path;
