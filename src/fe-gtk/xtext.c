@@ -957,9 +957,10 @@ static void
 gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline)
 {
 	GtkXText *xtext = GTK_XTEXT (widget);
+	int old_width = xtext->buffer->window_width;
 	int height_only = FALSE;
 
-	if (width == xtext->buffer->window_width)
+	if (width == old_width)
 		height_only = TRUE;
 
 	xtext->buffer->window_width = width;
@@ -968,6 +969,25 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 	dontscroll (xtext->buffer);	/* force scrolling off */
 	if (!height_only)
 	{
+		if (old_width == 0)
+		{
+			/* First real allocation — text was loaded before the widget had
+			 * a width, so line counts are wrong.  Recalculate immediately
+			 * and scroll to bottom if that's where we should be. */
+			if (xtext->resize_tag)
+			{
+				g_source_remove (xtext->resize_tag);
+				xtext->resize_tag = 0;
+			}
+			gtk_xtext_calc_lines (xtext->buffer, FALSE);
+			if (xtext->buffer->scrollbar_down)
+				gtk_adjustment_set_value (xtext->adj,
+					gtk_adjustment_get_upper (xtext->adj) -
+					gtk_adjustment_get_page_size (xtext->adj));
+			gtk_widget_queue_draw (widget);
+			return;
+		}
+
 		/* Save scroll anchor from the top of the viewport (pagetop).
 		 * After reflow we restore the same entry at the top. */
 		gtk_xtext_save_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
@@ -6364,7 +6384,10 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	buf->text_last = ent;
 
 	ent->sublines = NULL;
-	buf->num_lines += gtk_xtext_lines_taken (buf, ent);
+	if (buf->window_width > 0)
+		buf->num_lines += gtk_xtext_lines_taken (buf, ent);
+	else
+		buf->num_lines++;  /* placeholder — real count deferred to first allocation */
 
 	/* Local auto-advance: move marker to newest unread message when window is
 	 * unfocused.  Suppressed when server controls the marker (draft/read-marker). */
