@@ -1078,13 +1078,18 @@ hexchat_printf (hexchat_plugin *ph, const char *format, ...)
 void
 hexchat_toast (hexchat_plugin *ph, const char *text, int type)
 {
-	if (!is_session (ph->context))
+	session *sess = ph->context;
+
+	if (!is_session (sess))
+		sess = current_sess;
+
+	if (!is_session (sess))
 	{
 		DEBUG(PrintTextf(0, "%s\thexchat_toast called without a valid context.\n", ph->name));
 		return;
 	}
 
-	fe_toast_show (ph->context, text, 4000, type, 0);
+	fe_toast_show (sess, text, 4000, type, 0);
 }
 
 void
