@@ -2275,6 +2275,19 @@ hex_input_edit_unrealize (GtkWidget *widget)
 /* =============================== */
 
 static void
+hex_input_edit_dispose (GObject *obj)
+{
+	HexInputEdit *edit = HEX_INPUT_EDIT (obj);
+	HexInputEditPriv *priv = edit->priv;
+
+	/* Release im_context during dispose while signal disconnection is
+	 * still safe — finalize runs after the class pointer is gone. */
+	g_clear_object (&priv->im_context);
+
+	G_OBJECT_CLASS (hex_input_edit_parent_class)->dispose (obj);
+}
+
+static void
 hex_input_edit_finalize (GObject *obj)
 {
 	HexInputEdit *edit = HEX_INPUT_EDIT (obj);
@@ -2314,7 +2327,6 @@ hex_input_edit_finalize (GObject *obj)
 	if (priv->preedit_attrs)
 		pango_attr_list_unref (priv->preedit_attrs);
 	g_clear_object (&priv->layout);
-	g_clear_object (&priv->im_context);
 	if (priv->font_desc)
 		pango_font_description_free (priv->font_desc);
 	g_free (priv);
@@ -2585,6 +2597,7 @@ hex_input_edit_class_init (HexInputEditClass *klass)
 	GObjectClass *object_class = G_OBJECT_CLASS (klass);
 	GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
 
+	object_class->dispose = hex_input_edit_dispose;
 	object_class->finalize = hex_input_edit_finalize;
 
 	widget_class->snapshot = hex_input_edit_snapshot;
