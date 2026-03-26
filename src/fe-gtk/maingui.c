@@ -1120,9 +1120,9 @@ mg_populate (session *sess)
 
 	/* menu items */
 	menu_set_away (gui, sess->server->is_away);
-	gtk_widget_set_sensitive (gui->menu_item[MENU_ID_AWAY], sess->server->connected);
-	gtk_widget_set_sensitive (gui->menu_item[MENU_ID_JOIN], sess->server->end_of_motd);
-	gtk_widget_set_sensitive (gui->menu_item[MENU_ID_DISCONNECT],
+	menu_set_action_sensitive (gui, MENU_ID_AWAY, sess->server->connected);
+	menu_set_action_sensitive (gui, MENU_ID_JOIN, sess->server->end_of_motd);
+	menu_set_action_sensitive (gui, MENU_ID_DISCONNECT,
 									  sess->server->connected || sess->server->recondelay_tag);
 
 	mg_set_topic_tip (sess);

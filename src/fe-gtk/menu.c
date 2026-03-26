@@ -3897,6 +3897,42 @@ menu_create_main (void *accel_group, int bar, int away, int toplevel,
 	return menu_bar;
 }
 
+/* Map MENU_ID_* constants to GAction names */
+static const char *
+menu_id_to_action_name (int menu_id)
+{
+	switch (menu_id)
+	{
+	case MENU_ID_AWAY:        return "toggle-away";
+	case MENU_ID_DISCONNECT:  return "disconnect";
+	case MENU_ID_JOIN:        return "join";
+	default:                  return NULL;
+	}
+}
+
+void
+menu_set_action_sensitive (session_gui *gui, int menu_id, int enabled)
+{
+	GSimpleActionGroup *group;
+	GAction *action;
+	const char *name;
+
+	if (!gui || !gui->menu)
+		return;
+
+	name = menu_id_to_action_name (menu_id);
+	if (!name)
+		return;
+
+	group = g_object_get_data (G_OBJECT (gui->menu), "action-group");
+	if (!group)
+		return;
+
+	action = g_action_map_lookup_action (G_ACTION_MAP (group), name);
+	if (action)
+		g_simple_action_set_enabled (G_SIMPLE_ACTION (action), enabled != 0);
+}
+
 /* Update away state in the menu */
 void
 menu_set_away (session_gui *gui, int away)

@@ -525,6 +525,9 @@ apply_tree_css (void)
 		"#hexchat-tree row:selected label { "
 		"  color: rgb(%d, %d, %d); "
 		"} "
+		"#hexchat-tree treeexpander { "
+		"  color: rgb(%d, %d, %d); "
+		"} "
 		/* Userlist (GtkColumnView) */
 		"#hexchat-userlist { "
 		"  border-radius: 6px; "
@@ -606,6 +609,10 @@ apply_tree_css (void)
 		(int)(colors[COL_MARK_FG].red * 255),
 		(int)(colors[COL_MARK_FG].green * 255),
 		(int)(colors[COL_MARK_FG].blue * 255),
+		/* #hexchat-tree treeexpander fg */
+		(int)(colors[COL_FG].red * 255),
+		(int)(colors[COL_FG].green * 255),
+		(int)(colors[COL_FG].blue * 255),
 		/* #hexchat-userlist bg */
 		(int)(colors[COL_BG].red * 255),
 		(int)(colors[COL_BG].green * 255),
@@ -2107,17 +2114,17 @@ fe_server_event (server *serv, int type, int arg)
 			case FE_SE_CONNECTING:	/* connecting in progress */
 			case FE_SE_RECONDELAY:	/* reconnect delay begun */
 				/* enable Disconnect item */
-				gtk_widget_set_sensitive (gui->menu_item[MENU_ID_DISCONNECT], 1);
+				menu_set_action_sensitive (gui, MENU_ID_DISCONNECT, 1);
 				break;
 
 			case FE_SE_CONNECT:
 				/* enable Disconnect and Away menu items */
-				gtk_widget_set_sensitive (gui->menu_item[MENU_ID_AWAY], 1);
-				gtk_widget_set_sensitive (gui->menu_item[MENU_ID_DISCONNECT], 1);
+				menu_set_action_sensitive (gui, MENU_ID_AWAY, 1);
+				menu_set_action_sensitive (gui, MENU_ID_DISCONNECT, 1);
 				break;
 
 			case FE_SE_LOGGEDIN:	/* end of MOTD */
-				gtk_widget_set_sensitive (gui->menu_item[MENU_ID_JOIN], 1);
+				menu_set_action_sensitive (gui, MENU_ID_JOIN, 1);
 				/* if number of auto-join channels is zero, open joind */
 				if (arg == 0)
 					joind_open (serv);
@@ -2125,9 +2132,9 @@ fe_server_event (server *serv, int type, int arg)
 
 			case FE_SE_DISCONNECT:
 				/* disable Disconnect and Away menu items */
-				gtk_widget_set_sensitive (gui->menu_item[MENU_ID_AWAY], 0);
-				gtk_widget_set_sensitive (gui->menu_item[MENU_ID_DISCONNECT], 0);
-				gtk_widget_set_sensitive (gui->menu_item[MENU_ID_JOIN], 0);
+				menu_set_action_sensitive (gui, MENU_ID_AWAY, 0);
+				menu_set_action_sensitive (gui, MENU_ID_DISCONNECT, 0);
+				menu_set_action_sensitive (gui, MENU_ID_JOIN, 0);
 				/* close the join-dialog, if one exists */
 				joind_close (serv);
 			}
