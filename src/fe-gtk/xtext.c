@@ -3814,15 +3814,15 @@ gtk_xtext_render_stamp (GtkXText * xtext, textentry * ent,
 	y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
 	x = MARGIN;
 
-	/* Draw background */
+	/* Draw background (include left margin so no theme bleed at x=0..MARGIN) */
 	xtext_set_source_color (xtext, XTEXT_BG);
-	cairo_rectangle (xtext->cr, x, y - xtext->font->ascent,
-	                 text_width, xtext->fontsize);
+	cairo_rectangle (xtext->cr, 0, y - xtext->font->ascent,
+	                 text_width + x, xtext->fontsize);
 	cairo_fill (xtext->cr);
 
 	if (xtext->pixmap)
-		xtext_draw_bg (xtext, x, y - xtext->font->ascent,
-		               text_width, xtext->fontsize);
+		xtext_draw_bg (xtext, 0, y - xtext->font->ascent,
+		               text_width + x, xtext->fontsize);
 
 	/* Draw text */
 	xtext_set_source_color (xtext, xtext->col_fore);
@@ -3840,8 +3840,8 @@ gtk_xtext_render_stamp (GtkXText * xtext, textentry * ent,
 
 		/* Solid selection background */
 		gdk_cairo_set_source_rgba (xtext->cr, &mark_bg);
-		cairo_rectangle (xtext->cr, x, y - xtext->font->ascent,
-		                 text_width, xtext->fontsize);
+		cairo_rectangle (xtext->cr, 0, y - xtext->font->ascent,
+		                 text_width + x, xtext->fontsize);
 		cairo_fill (xtext->cr);
 
 		/* Re-render text with selection foreground */
