@@ -764,13 +764,11 @@ fe_init (void)
 			"  border-radius: 6px; "
 			"  padding: 0; "
 			"  background-color: @theme_base_color; "
-			"  overflow: hidden; "
 			"  transition: all 200ms ease; "
 			"} "
 			"hexinput:focus-within { "
 			"  outline: 2px solid @theme_selected_bg_color; "
 			"  outline-offset: -2px; "
-			"  -gtk-outline-border-radius: 6px; "
 			"} "
 			/* Userlist buttons - minimal padding for shrinkable panel */
 				".hexchat-userlistbutton { "

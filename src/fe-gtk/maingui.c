@@ -3914,6 +3914,11 @@ mg_create_entry (session *sess, GtkWidget *box)
 		                          emoji_chooser);
 		g_signal_connect (emoji_chooser, "emoji-picked",
 		                  G_CALLBACK (mg_emoji_picked), gui);
+
+		/* Unparent chooser before button is finalized */
+		g_signal_connect_swapped (emoji_btn, "destroy",
+		                          G_CALLBACK (gtk_widget_unparent),
+		                          emoji_chooser);
 	}
 
 	gtk_widget_grab_focus (entry);
