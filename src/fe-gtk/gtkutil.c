@@ -672,9 +672,10 @@ gtkutil_window_new (char *title, char *role, int width, int height, int flags)
 {
 	GtkWidget *win;
 
-	win = gtk_window_new ();
 	if (fe_get_application ())
-		gtk_window_set_application (GTK_WINDOW (win), fe_get_application ());
+		win = GTK_WIDGET (gtk_application_window_new (fe_get_application ()));
+	else
+		win = gtk_window_new ();
 	gtkutil_set_icon (win);
 	gtk_window_set_title (GTK_WINDOW (win), title);
 	gtk_window_set_default_size (GTK_WINDOW (win), width, height);

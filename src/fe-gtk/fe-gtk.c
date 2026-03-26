@@ -1155,7 +1155,6 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 	 */
 	if (sess->history_insert_sorted_mode)
 	{
-		textentry *old_last = gtk_xtext_buffer_get_last (sess->res->buffer);
 		PrintTextRawInsertSorted (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
 
 		/* Associate msgid with the newly inserted entry.  It may have been
