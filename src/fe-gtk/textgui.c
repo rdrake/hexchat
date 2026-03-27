@@ -874,7 +874,7 @@ pevent_hlist_columnview_new (void)
 void
 pevent_dialog_show ()
 {
-	GtkWidget *vbox, *hbox, *wid, *pane, *lists_pane, *preview_box;
+	GtkWidget *vbox, *hbox, *wid, *pane, *lists_pane;
 	GtkWidget *event_scroll, *help_scroll;
 
 	if (pevent_dialog)
@@ -914,22 +914,13 @@ pevent_dialog_show ()
 	gtk_paned_set_resize_end_child (GTK_PANED (lists_pane), FALSE);
 	gtk_paned_set_shrink_end_child (GTK_PANED (lists_pane), FALSE);
 
-	/* Preview area: xtext with its own scrollbar (resizable via outer pane) */
-	preview_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-	gtk_paned_set_end_child (GTK_PANED (pane), preview_box);
-	gtk_paned_set_resize_end_child (GTK_PANED (pane), FALSE);
-	gtk_paned_set_shrink_end_child (GTK_PANED (pane), FALSE);
-
+	/* Preview area: xtext with internal scrollbar (resizable via outer pane) */
 	pevent_dialog_twid = gtk_xtext_new (colors, 0);
 	gtk_widget_set_size_request (pevent_dialog_twid, -1, 100);
-	gtk_widget_set_hexpand (pevent_dialog_twid, TRUE);
-	gtk_box_append (GTK_BOX (preview_box), pevent_dialog_twid);
+	gtk_paned_set_end_child (GTK_PANED (pane), pevent_dialog_twid);
+	gtk_paned_set_resize_end_child (GTK_PANED (pane), FALSE);
+	gtk_paned_set_shrink_end_child (GTK_PANED (pane), FALSE);
 	gtk_xtext_set_font (GTK_XTEXT (pevent_dialog_twid), prefs.hex_text_font);
-
-	/* Scrollbar connected to xtext's internal adjustment */
-	wid = gtk_scrollbar_new (GTK_ORIENTATION_VERTICAL,
-	                         GTK_XTEXT (pevent_dialog_twid)->adj);
-	gtk_box_append (GTK_BOX (preview_box), wid);
 
 	hbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
 	hc_button_box_set_layout_impl (hbox, HC_BUTTONBOX_SPREAD);

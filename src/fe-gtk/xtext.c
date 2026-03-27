@@ -572,6 +572,9 @@ gtk_xtext_init (GtkXText * xtext)
 	xtext->emoji_cache = NULL;
 	gtk_xtext_scroll_adjustments (xtext, NULL, NULL);
 
+	xtext->scrollbar = gtk_scrollbar_new (GTK_ORIENTATION_VERTICAL, xtext->adj);
+	gtk_widget_set_parent (xtext->scrollbar, GTK_WIDGET (xtext));
+
 	/* GTK4: Set up event controllers for mouse/keyboard/scroll events */
 	/* These replace the widget class vfuncs used in GTK3 */
 	{
@@ -820,6 +823,8 @@ gtk_xtext_dispose (GObject * object)
 		xtext->font = NULL;
 	}
 
+	g_clear_pointer (&xtext->scrollbar, gtk_widget_unparent);
+
 	if (xtext->adj)
 	{
 		g_signal_handlers_disconnect_matched (G_OBJECT (xtext->adj),
@@ -914,11 +919,17 @@ gtk_xtext_measure (GtkWidget *widget,
                    int *minimum_baseline,
                    int *natural_baseline)
 {
+	GtkXText *xtext = GTK_XTEXT (widget);
+	int sb_min = 0, sb_nat = 0;
+
+	if (xtext->scrollbar)
+		gtk_widget_measure (xtext->scrollbar, orientation, -1, &sb_min, &sb_nat, NULL, NULL);
+
 	if (orientation == GTK_ORIENTATION_HORIZONTAL)
 	{
 		/* Use small minimum to allow paned to shrink the text area */
-		*minimum = 100;
-		*natural = 200;
+		*minimum = 100 + sb_min;
+		*natural = 200 + sb_nat;
 	}
 	else
 	{
@@ -958,13 +969,34 @@ static void
 gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline)
 {
 	GtkXText *xtext = GTK_XTEXT (widget);
+	int sb_width = 0;
+	int text_width;
 	int old_width = xtext->buffer->window_width;
 	int height_only = FALSE;
 
-	if (width == old_width)
+	/* Allocate internal scrollbar on the right edge */
+	if (xtext->scrollbar)
+	{
+		int sb_min, sb_nat;
+		GtkAllocation sb_alloc;
+
+		gtk_widget_measure (xtext->scrollbar, GTK_ORIENTATION_HORIZONTAL, height,
+		                    &sb_min, &sb_nat, NULL, NULL);
+		sb_width = sb_nat;
+
+		sb_alloc.x = width - sb_width;
+		sb_alloc.y = 0;
+		sb_alloc.width = sb_width;
+		sb_alloc.height = height;
+		gtk_widget_size_allocate (xtext->scrollbar, &sb_alloc, baseline);
+	}
+
+	text_width = width - sb_width;
+
+	if (text_width == old_width)
 		height_only = TRUE;
 
-	xtext->buffer->window_width = width;
+	xtext->buffer->window_width = text_width;
 	xtext->buffer->window_height = height;
 
 	dontscroll (xtext->buffer);	/* force scrolling off */
@@ -1286,7 +1318,7 @@ gtk_xtext_draw_marker (GtkXText * xtext, textentry * ent, int y)
 	else return;
 
 	x = 0;
-	width = gtk_widget_get_width (GTK_WIDGET (xtext));
+	width = xtext->buffer->window_width;
 
 	gdk_cairo_set_source_rgba (xtext->cr, &xtext->palette[XTEXT_MARKER]);
 	cairo_move_to (xtext->cr, x, render_y + 0.5);
@@ -1305,7 +1337,7 @@ gtk_xtext_paint (GtkWidget *widget, GdkRectangle *area)
 	GtkXText *xtext = GTK_XTEXT (widget);
 	textentry *ent_start, *ent_end;
 	int x, y;
-	int widget_width = gtk_widget_get_width (widget);
+	int widget_width = xtext->buffer->window_width;
 	int widget_height = gtk_widget_get_height (widget);
 
 	if (area->x == 0 && area->y == 0 &&
@@ -1379,7 +1411,8 @@ gtk_xtext_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 	cairo_t *cr;
 	graphene_rect_t bounds;
 
-	width = gtk_widget_get_width (widget);
+	/* Use buffer's window_width (excludes scrollbar) for text drawing */
+	width = xtext->buffer->window_width;
 	height = gtk_widget_get_height (widget);
 
 	/* Create bounds for the snapshot */
@@ -1400,6 +1433,10 @@ gtk_xtext_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 
 	xtext->cr = NULL;
 	cairo_destroy (cr);
+
+	/* Snapshot the internal scrollbar child */
+	if (xtext->scrollbar)
+		gtk_widget_snapshot_child (widget, xtext->scrollbar, snapshot);
 }
 
 /* render a selection that has extended or contracted upward */
@@ -2092,7 +2129,7 @@ gtk_xtext_motion_notify (GtkEventControllerMotion *controller, double event_x, d
 
 	if (xtext->moving_separator)
 	{
-		int widget_width = gtk_widget_get_width (widget);
+		int widget_width = xtext->buffer->window_width;
 		if (x < (3 * widget_width) / 5 && x > 15)
 		{
 			tmp = xtext->buffer->indent;
@@ -2317,7 +2354,7 @@ gtk_xtext_button_release (GtkGestureClick *gesture, int n_press, double x, doubl
 
 	if (xtext->moving_separator)
 	{
-		int widget_width = gtk_widget_get_width (widget);
+		int widget_width = xtext->buffer->window_width;
 		xtext->moving_separator = FALSE;
 		old = xtext->buffer->indent;
 		if (x < (4 * widget_width) / 5 && x > 15)
@@ -2584,7 +2621,7 @@ gtk_xtext_click_reaction_badge (GtkXText *xtext, textentry *ent, int click_x)
 
 	/* Right-align: compute starting x from total badge width */
 	{
-		int win_width = gtk_widget_get_width (GTK_WIDGET (xtext)) - MARGIN;
+		int win_width = xtext->buffer->window_width - MARGIN;
 		int total_width = gtk_xtext_measure_reaction_badges (xtext, ri, win_width);
 		badge_x = win_width - total_width;
 	}
@@ -4668,7 +4705,7 @@ gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal)
 	int lines;
 
 	height = gtk_widget_get_height (GTK_WIDGET (buf->xtext));
-	width = gtk_widget_get_width (GTK_WIDGET (buf->xtext));
+	width = buf->window_width;
 	width -= MARGIN;
 
 	if (width < 30 || height < buf->xtext->fontsize || width < buf->indent + 30)
@@ -4769,7 +4806,7 @@ gtk_xtext_render_ents (GtkXText * xtext, textentry * enta, textentry * entb)
 	if (xtext->cr == NULL)
 		return 0;
 	height = gtk_widget_get_height (GTK_WIDGET (xtext));
-	width = gtk_widget_get_width (GTK_WIDGET (xtext));
+	width = xtext->buffer->window_width;
 	width -= MARGIN;
 
 	if (width < 32 || height < xtext->fontsize || width < xtext->buffer->indent + 30)
@@ -4879,7 +4916,7 @@ gtk_xtext_render_page (GtkXText * xtext)
 	/* GTK4: Can't render outside snapshot - if no cr, just return and rely on queue_draw */
 	if (xtext->cr == NULL)
 		return;
-	width = gtk_widget_get_width (GTK_WIDGET (xtext));
+	width = xtext->buffer->window_width;
 	height = gtk_widget_get_height (GTK_WIDGET (xtext));
 
 	if (xtext->buffer->indent < MARGIN)
@@ -7454,6 +7491,13 @@ gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 
 	h = gtk_widget_get_height (GTK_WIDGET (xtext));
 	w = gtk_widget_get_width (GTK_WIDGET (xtext));
+	if (xtext->scrollbar)
+	{
+		int sb_min, sb_nat;
+		gtk_widget_measure (xtext->scrollbar, GTK_ORIENTATION_HORIZONTAL, -1,
+		                    &sb_min, &sb_nat, NULL, NULL);
+		w -= sb_nat;
+	}
 
 	/* after a font change */
 	if (buf->needs_recalc)
@@ -8231,4 +8275,10 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 
 	/* Store pixel offset for smooth scrolling (used by render_page) */
 	buf->xtext->pixel_offset = anchor->pixel_offset;
+}
+
+GtkWidget *
+gtk_xtext_get_scrollbar (GtkXText *xtext)
+{
+	return xtext->scrollbar;
 }

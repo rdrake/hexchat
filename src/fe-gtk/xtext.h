@@ -186,6 +186,7 @@ struct _GtkXText
 	xtext_buffer *selection_buffer;
 
 	GtkAdjustment *adj;
+	GtkWidget *scrollbar;			/* internal vertical scrollbar */
 	cairo_surface_t *pixmap;		/* background image surface, NULL = use palette[XTEXT_BG] */
 	cairo_surface_t *draw_buf;		/* backing surface for drawing */
 	GdkCursor *hand_cursor;
@@ -359,6 +360,7 @@ struct _GtkXTextClass
 };
 
 GtkWidget *gtk_xtext_new (GdkRGBA palette[], int separator);
+GtkWidget *gtk_xtext_get_scrollbar (GtkXText *xtext);
 void gtk_xtext_append (xtext_buffer *buf, unsigned char *text, int len, time_t stamp);
 void gtk_xtext_append_indent (xtext_buffer *buf,
 										unsigned char *left_text, int left_len,

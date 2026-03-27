@@ -102,7 +102,7 @@ rawlog_key_cb (GtkEventControllerKey *controller, guint keyval, guint keycode,
 void
 open_rawlog (struct server *serv)
 {
-	GtkWidget *bbox, *scrolledwindow, *vbox;
+	GtkWidget *bbox, *vbox;
 	char tbuf[256];
 
 	if (serv->gui->rawlog_window)
@@ -117,13 +117,9 @@ open_rawlog (struct server *serv)
 							 640, 320, &vbox, serv);
 	gtkutil_destroy_on_esc (serv->gui->rawlog_window);
 
-	scrolledwindow = gtk_scrolled_window_new ();
-	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolledwindow), GTK_POLICY_NEVER, GTK_POLICY_ALWAYS);
-	gtk_widget_set_vexpand (scrolledwindow, TRUE);
-	gtk_box_append (GTK_BOX (vbox), scrolledwindow);
-
 	serv->gui->rawlog_textlist = gtk_xtext_new (colors, 0);
-	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow), serv->gui->rawlog_textlist);
+	gtk_widget_set_vexpand (serv->gui->rawlog_textlist, TRUE);
+	gtk_box_append (GTK_BOX (vbox), serv->gui->rawlog_textlist);
 	gtk_xtext_set_font (GTK_XTEXT (serv->gui->rawlog_textlist), prefs.hex_text_font);
 	GTK_XTEXT (serv->gui->rawlog_textlist)->ignore_hidden = 1;
 

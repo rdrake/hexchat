@@ -132,7 +132,6 @@ typedef struct session_gui
 {
 	GtkWidget
 		*xtext,
-		*vscrollbar,
 		*window,	/* toplevel */
 		*topic_entry,
 		*note_book,

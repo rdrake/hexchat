@@ -2847,26 +2847,22 @@ mg_update_xtext (GtkWidget *wid)
 static void
 mg_create_textarea (session *sess, GtkWidget *box)
 {
-	GtkWidget *inbox, *vbox, *frame;
+	GtkWidget *vbox, *frame;
 	GtkXText *xtext;
 	session_gui *gui = sess->gui;
 
 	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_set_vexpand (vbox, TRUE);
 	gtk_box_append (GTK_BOX (box), vbox);
-	inbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
-	gtk_widget_set_vexpand (inbox, TRUE);
-	gtk_box_append (GTK_BOX (vbox), inbox);
 
 	frame = gtk_frame_new (NULL);
-	/* GTK3: Ensure frame fills and is anchored at origin */
 	gtk_widget_set_halign (frame, GTK_ALIGN_FILL);
 	gtk_widget_set_valign (frame, GTK_ALIGN_FILL);
 	gtk_widget_set_hexpand (frame, TRUE);
-	gtk_box_append (GTK_BOX (inbox), frame);
+	gtk_widget_set_vexpand (frame, TRUE);
+	gtk_box_append (GTK_BOX (vbox), frame);
 
 	gui->xtext = gtk_xtext_new (colors, TRUE);
-	/* GTK3: Ensure xtext fills its container and is anchored at origin */
 	gtk_widget_set_halign (gui->xtext, GTK_ALIGN_FILL);
 	gtk_widget_set_valign (gui->xtext, GTK_ALIGN_FILL);
 	xtext = GTK_XTEXT (gui->xtext);
@@ -2886,11 +2882,8 @@ mg_create_textarea (session *sess, GtkWidget *box)
 	g_signal_connect (G_OBJECT (xtext), "word_click",
 							G_CALLBACK (mg_word_clicked), NULL);
 
-	gui->vscrollbar = gtk_scrollbar_new (GTK_ORIENTATION_VERTICAL, GTK_XTEXT (xtext)->adj);
-	gtk_box_append (GTK_BOX (inbox), gui->vscrollbar);
-
 	/* GTK4: DND for scrollbar (layout swapping) and xtext (file drops for DCC) */
-	mg_setup_scrollbar_dnd (gui->vscrollbar);
+	mg_setup_scrollbar_dnd (gtk_xtext_get_scrollbar (xtext));
 	mg_setup_xtext_dnd (gui->xtext);
 }
 
@@ -3237,7 +3230,6 @@ mg_create_center (session *sess, session_gui *gui, GtkWidget *box)
 	/* sep between xtext and right side — wide handle so the separator
 	 * gets its own allocated space instead of overlaying the scrollbar. */
 	gui->hpane_right = gtk_paned_new (GTK_ORIENTATION_HORIZONTAL);
-	gtk_paned_set_wide_handle (GTK_PANED (gui->hpane_right), TRUE);
 
 	if (prefs.hex_gui_win_swap)
 	{
@@ -4743,13 +4735,13 @@ mg_scrollbar_drop_cb (GtkDropTarget *target, const GValue *value,
 	if (g_strcmp0 (drop_type, DND_TARGET_USERLIST) == 0)
 	{
 		/* from userlist */
-		mg_handle_drop_gtk4 (current_sess->gui->vscrollbar, y,
+		mg_handle_drop_gtk4 (gtk_xtext_get_scrollbar (GTK_XTEXT (current_sess->gui->xtext)), y,
 		                     &prefs.hex_gui_ulist_pos, &prefs.hex_gui_tab_pos);
 	}
 	else if (g_strcmp0 (drop_type, DND_TARGET_CHANVIEW) == 0)
 	{
 		/* from chanview/tree */
-		mg_handle_drop_gtk4 (current_sess->gui->vscrollbar, y,
+		mg_handle_drop_gtk4 (gtk_xtext_get_scrollbar (GTK_XTEXT (current_sess->gui->xtext)), y,
 		                     &prefs.hex_gui_tab_pos, &prefs.hex_gui_ulist_pos);
 	}
 	else

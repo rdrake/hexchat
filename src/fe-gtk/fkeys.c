@@ -32,6 +32,7 @@
 
 #include "fe-gtk.h"
 #include "hex-input-edit.h"
+#include "xtext.h"
 
 #include "../common/hexchat.h"
 #include "../common/hexchatc.h"
@@ -1537,7 +1538,7 @@ key_action_scroll_page (GtkWidget * wid, KEY_EVENT_PARAM, char *d1,
 	if (!sess)
 		return 0;
 
-	adj = gtk_range_get_adjustment (GTK_RANGE (sess->gui->vscrollbar));
+	adj = GTK_XTEXT (sess->gui->xtext)->adj;
 	end = gtk_adjustment_get_upper (adj) - gtk_adjustment_get_lower (adj) - gtk_adjustment_get_page_size (adj);
 
 	switch (type)
