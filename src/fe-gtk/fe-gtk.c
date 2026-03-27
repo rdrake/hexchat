@@ -2027,6 +2027,22 @@ maybe_escape_uri (const char *uri)
 }
 
 static void
+uri_launch_done (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+	GtkUriLauncher *launcher = GTK_URI_LAUNCHER (source);
+	GError *error = NULL;
+
+	if (!gtk_uri_launcher_launch_finish (launcher, result, &error))
+	{
+		g_printerr ("Failed to open URL \"%s\": %s\n",
+		            gtk_uri_launcher_get_uri (launcher),
+		            error ? error->message : "unknown error");
+		g_clear_error (&error);
+	}
+	g_object_unref (launcher);
+}
+
+static void
 fe_open_url_inner (const char *url)
 {
 #ifdef WIN32
@@ -2044,10 +2060,12 @@ fe_open_url_inner (const char *url)
     osx_show_uri (url);
 #else
 	char *escaped_url = maybe_escape_uri (url);
+	GtkWindow *parent = NULL;
 	g_debug ("Opening URL \"%s\" (%s)", escaped_url, url);
+	if (current_sess && current_sess->gui && current_sess->gui->window)
+		parent = GTK_WINDOW (current_sess->gui->window);
 	GtkUriLauncher *launcher = gtk_uri_launcher_new (escaped_url);
-	gtk_uri_launcher_launch (launcher, NULL, NULL, NULL, NULL);
-	g_object_unref (launcher);
+	gtk_uri_launcher_launch (launcher, parent, NULL, uri_launch_done, launcher);
 	g_free (escaped_url);
 #endif
 }
