@@ -743,8 +743,11 @@ chanlist_button_cb (GtkGestureClick *gesture, int n_press, double x, double y, s
 static void
 chanlist_destroy_widget (GtkWidget *wid, server *serv)
 {
-	g_list_store_remove_all (chanlist_get_store (serv));
-	g_clear_object (&serv->gui->chanlist_store);
+	if (serv->gui->chanlist_store)
+	{
+		g_list_store_remove_all (chanlist_get_store (serv));
+		g_clear_object (&serv->gui->chanlist_store);
+	}
 	chanlist_data_free (serv);
 
 	if (serv->gui->chanlist_flash_tag)
@@ -992,9 +995,9 @@ chanlist_create_columnview (server *serv)
 
 	/* Create the base store */
 	store = g_list_store_new (HC_TYPE_CHANNEL_ITEM);
-	serv->gui->chanlist_store = G_OBJECT (store);
+	serv->gui->chanlist_store = G_OBJECT (g_object_ref (store));
 
-	/* Wrap with filter model */
+	/* Wrap with filter model (takes ownership of store's floating ref) */
 	custom_filter = gtk_custom_filter_new (chanlist_filter_func, serv, NULL);
 	filter_model = gtk_filter_list_model_new (G_LIST_MODEL (store),
 	                                          GTK_FILTER (custom_filter));
