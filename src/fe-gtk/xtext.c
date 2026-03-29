@@ -3914,6 +3914,7 @@ gtk_xtext_render_stamp (GtkXText * xtext, textentry * ent,
 
 		pango_layout_set_attributes (xtext->layout, sel_attrs);
 		gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+		pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
 		xtext_draw_layout_line (xtext, x, y, pango_line);
 		pango_attr_list_unref (sel_attrs);
 	}
