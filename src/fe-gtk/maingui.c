@@ -2533,6 +2533,8 @@ mg_create_topicbar (session *sess, GtkWidget *box)
 	session_gui *gui = sess->gui;
 
 	gui->topic_bar = hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_set_margin_start (hbox, 4);
+	gtk_widget_set_margin_end (hbox, 4);
 	gtk_box_append (GTK_BOX (box), hbox);
 
 	if (!gui->is_tab)
@@ -2860,6 +2862,8 @@ mg_create_textarea (session *sess, GtkWidget *box)
 	gtk_widget_set_valign (frame, GTK_ALIGN_FILL);
 	gtk_widget_set_hexpand (frame, TRUE);
 	gtk_widget_set_vexpand (frame, TRUE);
+	gtk_widget_set_margin_start (frame, 4);
+	gtk_widget_set_margin_end (frame, 4);
 	gtk_box_append (GTK_BOX (vbox), frame);
 
 	gui->xtext = gtk_xtext_new (colors, TRUE);
@@ -3827,6 +3831,7 @@ mg_create_entry (session *sess, GtkWidget *box)
 	}
 
 	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_set_margin_start (hbox, 4);
 	gtk_box_append (GTK_BOX (box), hbox);
 
 	gui->nick_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
