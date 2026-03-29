@@ -2215,8 +2215,8 @@ hex_input_edit_measure (GtkWidget *widget, GtkOrientation orientation,
 		int one_line = priv->line_height + 2 * VPAD;
 		int nat_lines = MIN (line_count, max_lines);
 
-		*minimum = one_line;
-		*natural = priv->line_height * nat_lines + 2 * VPAD;
+		*minimum = MAX (one_line, 23);
+		*natural = MAX (priv->line_height * nat_lines + 2 * VPAD, 23);
 	}
 
 	if (minimum_baseline) *minimum_baseline = -1;
