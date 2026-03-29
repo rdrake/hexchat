@@ -747,6 +747,7 @@ fe_init (void)
 				/* Nick button — let input box drive the row height */
 				"#hexchat-nickbutton { min-height: 0; padding-top: 0; padding-bottom: 0; } "
 				"#hexchat-emojibtn { min-height: 0; min-width: 0; padding: 0 2px; margin-left: 4px; } "
+				"#hexchat-emojibtn > button { min-height: 0; min-width: 0; padding: 0 2px; } "
 				/* GtkStack (used as page container) styling */
 				"stack { padding: 0; margin: 0; } "
 				/* Mode buttons in topic bar - compact padding */
