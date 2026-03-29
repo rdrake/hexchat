@@ -6757,11 +6757,13 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 
 	/* Don't update marker_pos for historical entries */
 
-	/* For sorted insert, we don't have a clear pruning strategy.
-	 * The caller should manage buffer size appropriately.
-	 * If max_lines is exceeded, we could prune oldest, but that might
-	 * remove the entry we just inserted if it's oldest.
-	 */
+	/* Keep scroll anchored to bottom if appropriate */
+	if (buf->scrollbar_down)
+	{
+		buf->old_value = buf->num_lines - gtk_adjustment_get_page_size (buf->xtext->adj);
+		if (buf->old_value < 0)
+			buf->old_value = 0;
+	}
 
 	/* Schedule render if this buffer is active */
 	if (buf->xtext->buffer == buf)
