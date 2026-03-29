@@ -3898,7 +3898,7 @@ mg_create_entry (session *sess, GtkWidget *box)
 		gtk_menu_button_set_has_frame (GTK_MENU_BUTTON (emoji_btn), FALSE);
 		gtk_widget_set_can_focus (emoji_btn, FALSE);
 		gtk_widget_set_tooltip_text (emoji_btn, _("Insert Emoji"));
-		gtk_widget_set_valign (emoji_btn, GTK_ALIGN_CENTER);
+		gtk_widget_set_valign (emoji_btn, GTK_ALIGN_FILL);
 		gtk_widget_set_name (emoji_btn, "hexchat-emojibtn");
 		gtk_box_append (GTK_BOX (hbox), emoji_btn);
 
