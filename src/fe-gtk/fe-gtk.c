@@ -746,15 +746,12 @@ fe_init (void)
 				"paned > separator { min-width: 1px; min-height: 1px; background: none; } "
 				/* Nick button — let input box drive the row height */
 				"#hexchat-nickbutton { min-height: 0; padding-top: 0; padding-bottom: 0; } "
-				"#hexchat-emojibtn { min-height: 0; min-width: 0; padding: 0 2px; margin-left: 4px; } "
-				"#hexchat-emojibtn > button { min-height: 0; min-width: 0; padding: 0 2px; } "
+				"#hexchat-emojibtn { min-height: 0; padding-top: 0; padding-bottom: 0; margin-left: 4px; } "
+				"#hexchat-emojibtn > button { min-height: 0; padding-top: 0; padding-bottom: 0; } "
 				/* GtkStack (used as page container) styling */
 				"stack { padding: 0; margin: 0; } "
 				/* Mode buttons in topic bar - compact padding */
-				".hexchat-modebutton { "
-				"  padding: 0 4px; "
-				"  min-height: 0; "
-				"} "
+				".hexchat-modebutton { min-height: 0; padding: 0 0; padding-top: 0; padding-bottom: 0; } "
 				/* Channel tabs - reduce horizontal padding for compact appearance */
 				"#hexchat-tab { "
 				"  padding: 2px 4px; "
@@ -2479,4 +2476,3 @@ fe_scrollback_extras_done (session *sess)
 	 * This corrects num_lines and scroll position after bulk attachment. */
 	gtk_xtext_calc_lines (xtext->buffer, FALSE);
 }
-
