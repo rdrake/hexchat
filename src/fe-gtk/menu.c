@@ -2772,10 +2772,11 @@ menu_apply_metres_cb (session *sess)
 	mg_update_meters (sess->gui);
 }
 
-static void
-about_dialog_close (GtkWindow *dialog, int response, gpointer data)
+static gboolean
+about_dialog_close (GtkWindow *dialog, gpointer data)
 {
 	hc_window_destroy_fn (dialog);
+	return TRUE;
 }
 
 static gboolean
@@ -2829,9 +2830,9 @@ menu_about (GtkWidget *wid, gpointer sess)
 	gtk_about_dialog_set_comments (dialog, comment);
 
 	gtk_window_set_transient_for (GTK_WINDOW(dialog), GTK_WINDOW(parent_window));
-	g_signal_connect (G_OBJECT(dialog), "response", G_CALLBACK(about_dialog_close), NULL);
+	g_signal_connect (G_OBJECT(dialog), "close-request", G_CALLBACK(about_dialog_close), NULL);
 	g_signal_connect (G_OBJECT(dialog), "activate-link", G_CALLBACK(about_dialog_openurl), NULL);
-	
+	gtk_window_present (GTK_WINDOW (dialog));
 }
 
 /* === STUFF FOR /MENU === */
