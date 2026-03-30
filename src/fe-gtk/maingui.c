@@ -4254,14 +4254,18 @@ mg_apply_setup (void)
 		gtk_xtext_recalc_day_boundaries ((xtext_buffer *)sess->res->buffer);
 		((xtext_buffer *)sess->res->buffer)->needs_recalc = TRUE;
 		if (!sess->gui->is_tab || !done_main)
-		{
-			mg_update_xtext (sess->gui->xtext);
-			gtk_widget_queue_draw (sess->gui->xtext);
 			mg_place_userlist_and_chanview (sess->gui);
-		}
 		if (sess->gui->is_tab)
 			done_main = TRUE;
 		list = list->next;
+	}
+
+	/* Re-apply xtext settings AFTER all buffers are updated, so the
+	 * active buffer's recalc sees the correct time_stamp/indent state. */
+	if (mg_gui)
+	{
+		mg_update_xtext (mg_gui->xtext);
+		gtk_widget_queue_draw (mg_gui->xtext);
 	}
 }
 
