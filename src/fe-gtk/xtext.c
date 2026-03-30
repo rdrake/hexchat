@@ -5264,17 +5264,11 @@ gtk_xtext_status_set (GtkXText *xtext, const char *key, const char *text,
 
 		if (was_visible != xtext->status_strip_visible)
 		{
-			/* Preserve scroll position when status strip visibility changes.
-			 * The adjustment recalc shrinks page_size which can falsely clamp
-			 * the value and set scrollbar_down — save and restore it. */
-			gboolean was_down = xtext->buffer->scrollbar_down;
 			gtk_xtext_adjustment_set (xtext->buffer, TRUE);
-			if (was_down)
+			if (xtext->buffer->scrollbar_down)
 				gtk_adjustment_set_value (xtext->adj,
 					gtk_adjustment_get_upper (xtext->adj) -
 					gtk_adjustment_get_page_size (xtext->adj));
-			else
-				xtext->buffer->scrollbar_down = FALSE;
 		}
 		gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	}
@@ -5314,14 +5308,11 @@ gtk_xtext_status_remove (GtkXText *xtext, const char *key)
 		xtext->status_strip_visible = (xtext->status_item_count > 0);
 		if (was_visible != xtext->status_strip_visible)
 		{
-			gboolean was_down = xtext->buffer->scrollbar_down;
 			gtk_xtext_adjustment_set (xtext->buffer, TRUE);
-			if (was_down)
+			if (xtext->buffer->scrollbar_down)
 				gtk_adjustment_set_value (xtext->adj,
 					gtk_adjustment_get_upper (xtext->adj) -
 					gtk_adjustment_get_page_size (xtext->adj));
-			else
-				xtext->buffer->scrollbar_down = FALSE;
 		}
 	}
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
