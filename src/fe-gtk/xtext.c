@@ -4515,8 +4515,8 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 			/* Shift text right to make room for wider/new stamp */
 			if (swap_relative)
 			{
-				if (show_hover_stamp)
-					indent = stamp_used;  /* no stamp area normally, start text after stamp */
+				if (show_hover_stamp && !xtext->auto_indent)
+					indent = stamp_used;  /* flat layout, text starts after stamp */
 				else if (stamp_used > xtext->stamp_width)
 					indent = ent->indent + (stamp_used - xtext->stamp_width);
 			}
