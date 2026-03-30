@@ -3727,12 +3727,12 @@ find_next_wrap (GtkXText * xtext, textentry * ent, unsigned char *str,
 			if (avail < 1)
 				avail = 1;
 
-			/* For the first subline, exclude the nick (left) text from the
-			 * Pango layout.  The nick is rendered separately in the left
-			 * margin; including it causes PANGO_WRAP_WORD_CHAR to word-break
-			 * between nick and message, pushing a long first word entirely
-			 * to the next line and leaving the nick line blank on the right. */
-			if (raw_offset == 0 && ent->left_len > 0)
+			/* For the first subline in indent mode, exclude the nick (left)
+			 * text from the Pango layout.  The nick is rendered separately
+			 * in the left margin; including it causes PANGO_WRAP_WORD_CHAR
+			 * to word-break between nick and message.  In non-indent mode,
+			 * the nick is part of the text flow and must be included. */
+			if (raw_offset == 0 && ent->left_len > 0 && xtext->auto_indent)
 			{
 				int right_start = xtext_raw_to_stripped (ent->raw_to_stripped_map,
 				                      ent->str_len, ent->left_len + 1);
