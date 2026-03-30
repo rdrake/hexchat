@@ -1802,10 +1802,7 @@ format_event (session *sess, int index, char **args, char *o, gsize sizeofo, uns
 			done_all = TRUE;
 			continue;
 		case 3:
-			if (prefs.hex_text_indent)
-				o[oi++] = '\t';
-			else
-				o[oi++] = ' ';
+			o[oi++] = '\t';
 			break;
 		}
 	}
