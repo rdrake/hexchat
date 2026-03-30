@@ -148,21 +148,6 @@ xtext_get_stamp_str (time_t tim, char **ret)
 	return get_stamp_str (prefs.hex_stamp_text_format, tim, ret);
 }
 
-/* Replace the first \t with a space for non-indented rendering.
- * Returns a newly allocated copy if a tab was found, or NULL if none. */
-static unsigned char *
-flatten_tab (const unsigned char *text, int len)
-{
-	unsigned char *tab = memchr (text, '\t', len);
-	if (tab)
-	{
-		unsigned char *copy = g_memdup2 (text, len);
-		copy[tab - text] = ' ';
-		return copy;
-	}
-	return NULL;
-}
-
 static void
 PrintTextLine (xtext_buffer *xtbuf, unsigned char *text, int len, int indent, time_t timet)
 {
@@ -172,11 +157,20 @@ PrintTextLine (xtext_buffer *xtbuf, unsigned char *text, int len, int indent, ti
 	if (len == 0)
 		len = 1;
 
+	/* Always split on \t so entries get left_len > 0 and can be
+	 * toggled between indent/non-indent modes via recalc_widths. */
+	tab = memchr (text, '\t', len);
+	if (tab)
+	{
+		leftlen = tab - text;
+		gtk_xtext_append_indent (xtbuf,
+										 text, leftlen, tab + 1, len - (leftlen + 1), timet);
+		return;
+	}
+
+	/* No tab — system message. Use flat append. */
 	if (!indent)
 	{
-		unsigned char *flat = flatten_tab (text, len);
-		unsigned char *render_text = flat ? flat : text;
-
 		if (prefs.hex_stamp_text)
 		{
 			int stamp_size;
@@ -189,22 +183,13 @@ PrintTextLine (xtext_buffer *xtbuf, unsigned char *text, int len, int indent, ti
 			new_text = g_malloc (len + stamp_size + 1);
 			memcpy (new_text, stamp, stamp_size);
 			g_free (stamp);
-			memcpy (new_text + stamp_size, render_text, len);
+			memcpy (new_text + stamp_size, text, len);
 			gtk_xtext_append (xtbuf, new_text, len + stamp_size, timet);
 			g_free (new_text);
 		} else
-			gtk_xtext_append (xtbuf, render_text, len, timet);
-		g_free (flat);
-		return;
+			gtk_xtext_append (xtbuf, text, len, timet);
 	}
-
-	tab = strchr (text, '\t');
-	if (tab && tab < (text + len))
-	{
-		leftlen = tab - text;
-		gtk_xtext_append_indent (xtbuf,
-										 text, leftlen, tab + 1, len - (leftlen + 1), timet);
-	} else
+	else
 		gtk_xtext_append_indent (xtbuf, 0, 0, text, len, timet);
 }
 
@@ -293,11 +278,17 @@ PrintTextLinePrepend (xtext_buffer *xtbuf, unsigned char *text, int len, int ind
 	if (len == 0)
 		len = 1;
 
+	tab = memchr (text, '\t', len);
+	if (tab)
+	{
+		leftlen = tab - text;
+		gtk_xtext_prepend_indent (xtbuf,
+										 text, leftlen, tab + 1, len - (leftlen + 1), timet);
+		return;
+	}
+
 	if (!indent)
 	{
-		unsigned char *flat = flatten_tab (text, len);
-		unsigned char *render_text = flat ? flat : text;
-
 		if (prefs.hex_stamp_text)
 		{
 			int stamp_size;
@@ -310,22 +301,13 @@ PrintTextLinePrepend (xtext_buffer *xtbuf, unsigned char *text, int len, int ind
 			new_text = g_malloc (len + stamp_size + 1);
 			memcpy (new_text, stamp, stamp_size);
 			g_free (stamp);
-			memcpy (new_text + stamp_size, render_text, len);
+			memcpy (new_text + stamp_size, text, len);
 			gtk_xtext_prepend (xtbuf, new_text, len + stamp_size, timet);
 			g_free (new_text);
 		} else
-			gtk_xtext_prepend (xtbuf, render_text, len, timet);
-		g_free (flat);
-		return;
+			gtk_xtext_prepend (xtbuf, text, len, timet);
 	}
-
-	tab = strchr (text, '\t');
-	if (tab && tab < (text + len))
-	{
-		leftlen = tab - text;
-		gtk_xtext_prepend_indent (xtbuf,
-										 text, leftlen, tab + 1, len - (leftlen + 1), timet);
-	} else
+	else
 		gtk_xtext_prepend_indent (xtbuf, 0, 0, text, len, timet);
 }
 
@@ -425,11 +407,17 @@ PrintTextLineInsertSorted (xtext_buffer *xtbuf, unsigned char *text, int len, in
 	if (len == 0)
 		len = 1;
 
+	tab = memchr (text, '\t', len);
+	if (tab)
+	{
+		leftlen = tab - text;
+		gtk_xtext_insert_sorted_indent (xtbuf,
+										 text, leftlen, tab + 1, len - (leftlen + 1), timet);
+		return;
+	}
+
 	if (!indent)
 	{
-		unsigned char *flat = flatten_tab (text, len);
-		unsigned char *render_text = flat ? flat : text;
-
 		if (prefs.hex_stamp_text)
 		{
 			int stamp_size;
@@ -442,22 +430,13 @@ PrintTextLineInsertSorted (xtext_buffer *xtbuf, unsigned char *text, int len, in
 			new_text = g_malloc (len + stamp_size + 1);
 			memcpy (new_text, stamp, stamp_size);
 			g_free (stamp);
-			memcpy (new_text + stamp_size, render_text, len);
+			memcpy (new_text + stamp_size, text, len);
 			gtk_xtext_insert_sorted (xtbuf, new_text, len + stamp_size, timet);
 			g_free (new_text);
 		} else
-			gtk_xtext_insert_sorted (xtbuf, render_text, len, timet);
-		g_free (flat);
-		return;
+			gtk_xtext_insert_sorted (xtbuf, text, len, timet);
 	}
-
-	tab = strchr (text, '\t');
-	if (tab && tab < (text + len))
-	{
-		leftlen = tab - text;
-		gtk_xtext_insert_sorted_indent (xtbuf,
-										 text, leftlen, tab + 1, len - (leftlen + 1), timet);
-	} else
+	else
 		gtk_xtext_insert_sorted_indent (xtbuf, 0, 0, text, len, timet);
 }
 

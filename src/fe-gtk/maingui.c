@@ -4253,7 +4253,10 @@ mg_apply_setup (void)
 		gtk_xtext_set_time_stamp (sess->res->buffer, prefs.hex_stamp_text);
 		((xtext_buffer *)sess->res->buffer)->needs_recalc = TRUE;
 		if (!sess->gui->is_tab || !done_main)
+		{
+			mg_update_xtext (sess->gui->xtext);
 			mg_place_userlist_and_chanview (sess->gui);
+		}
 		if (sess->gui->is_tab)
 			done_main = TRUE;
 		list = list->next;

@@ -287,7 +287,6 @@ xtext_parse_formats (const unsigned char *raw, int raw_len,
 		/* --- Regular character (or newline) --- */
 		if (!(cur_flags & FMT_FLAG_HIDDEN))
 		{
-			/* Map raw byte(s) to stripped position */
 			for (int b = 0; b < mbl; b++)
 			{
 				r2s[ri + b] = (guint16) stripped_pos;
@@ -296,7 +295,6 @@ xtext_parse_formats (const unsigned char *raw, int raw_len,
 		}
 		else
 		{
-			/* Hidden text: map to current stripped pos but don't output */
 			for (int b = 0; b < mbl; b++)
 				r2s[ri + b] = (guint16) stripped_pos;
 		}
@@ -373,7 +371,8 @@ xtext_build_attrlist (const xtext_format_data *fdata, int sub_start, int sub_len
 			continue;  /* span doesn't overlap this subline */
 
 		if (span->flags & FMT_FLAG_HIDDEN)
-			continue;  /* hidden text isn't in stripped_str */
+			continue;  /* hidden text not in stripped_str */
+
 
 		/* Foreground color */
 		if (span->fg != XTEXT_FG)

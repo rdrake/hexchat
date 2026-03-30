@@ -4310,9 +4310,9 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 	/* draw the timestamp (only on the first text subline) */
 	if (text_subline == 0)
 	{
-		if (xtext->auto_indent && xtext->buffer->time_stamp &&
+		if (xtext->buffer->time_stamp &&
 			 (!xtext->skip_stamp || xtext->mark_stamp || xtext->force_stamp) &&
-			 ent->left_len != 0)
+			 ent->left_len > 0)
 		{
 			char *time_str;
 			int ts_len;
@@ -4321,8 +4321,7 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 			gtk_xtext_render_stamp (xtext, ent, time_str, ts_len, line, win_width);
 			g_free (time_str);
 		}
-		else if (xtext->auto_indent && xtext->buffer->time_stamp &&
-					ent->left_len == 0)
+		else if (xtext->buffer->time_stamp && ent->left_len <= 0)
 		{
 			int bg_y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
 			xtext_draw_bg (xtext, 0, bg_y - xtext->font->ascent,
@@ -4559,12 +4558,19 @@ gtk_xtext_recalc_widths (xtext_buffer *buf, int do_str_width)
 		}
 		if (ent->left_len != -1)
 		{
-			ent->indent =
-				(buf->indent -
-				 gtk_xtext_text_width (buf->xtext, ent->str,
-										ent->left_len)) - buf->xtext->space_width;
-			if (ent->indent < MARGIN)
-				ent->indent = MARGIN;
+			if (buf->xtext->auto_indent)
+			{
+				ent->indent =
+					(buf->indent -
+					 gtk_xtext_text_width (buf->xtext, ent->str,
+											ent->left_len)) - buf->xtext->space_width;
+				if (ent->indent < MARGIN)
+					ent->indent = MARGIN;
+			}
+			else
+			{
+				ent->indent = buf->time_stamp ? buf->xtext->stamp_width : MARGIN;
+			}
 		}
 		ent = ent->next;
 	}
@@ -6824,34 +6830,40 @@ gtk_xtext_append_indent (xtext_buffer *buf,
 	ent->left_len = left_len;
 	ent->str = str;
 	ent->str_len = left_len + 1 + right_len;
-	ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
-
 	/* This is copied into the scratch buffer later, double check math */
 	g_assert (ent->str_len < sizeof (buf->xtext->scratch_buffer));
 
-	if (buf->time_stamp)
-		space = buf->xtext->stamp_width;
-	else
-		space = 0;
-
-	/* do we need to auto adjust the separator position? */
-	if (buf->xtext->auto_indent &&
-		 buf->indent < buf->xtext->max_auto_indent &&
-		 ent->indent < MARGIN + space)
+	if (buf->xtext->auto_indent)
 	{
-		tempindent = MARGIN + space + buf->xtext->space_width + left_width;
-
-		if (tempindent > buf->indent)
-			buf->indent = tempindent;
-
-		if (buf->indent > buf->xtext->max_auto_indent)
-			buf->indent = buf->xtext->max_auto_indent;
-
-		gtk_xtext_fix_indent (buf);
-		gtk_xtext_recalc_widths (buf, FALSE);
-
 		ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
-		buf->xtext->force_render = TRUE;
+
+		if (buf->time_stamp)
+			space = buf->xtext->stamp_width;
+		else
+			space = 0;
+
+		/* do we need to auto adjust the separator position? */
+		if (buf->indent < buf->xtext->max_auto_indent &&
+			 ent->indent < MARGIN + space)
+		{
+			tempindent = MARGIN + space + buf->xtext->space_width + left_width;
+
+			if (tempindent > buf->indent)
+				buf->indent = tempindent;
+
+			if (buf->indent > buf->xtext->max_auto_indent)
+				buf->indent = buf->xtext->max_auto_indent;
+
+			gtk_xtext_fix_indent (buf);
+			gtk_xtext_recalc_widths (buf, FALSE);
+
+			ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
+			buf->xtext->force_render = TRUE;
+		}
+	}
+	else
+	{
+		ent->indent = buf->time_stamp ? buf->xtext->stamp_width : MARGIN;
 	}
 
 	gtk_xtext_append_entry (buf, ent, stamp);
@@ -6940,34 +6952,39 @@ gtk_xtext_prepend_indent (xtext_buffer *buf,
 	ent->left_len = left_len;
 	ent->str = str;
 	ent->str_len = left_len + 1 + right_len;
-	ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
-
 	/* This is copied into the scratch buffer later, double check math */
 	g_assert (ent->str_len < sizeof (buf->xtext->scratch_buffer));
 
-	if (buf->time_stamp)
-		space = buf->xtext->stamp_width;
-	else
-		space = 0;
-
-	/* do we need to auto adjust the separator position? */
-	if (buf->xtext->auto_indent &&
-		 buf->indent < buf->xtext->max_auto_indent &&
-		 ent->indent < MARGIN + space)
+	if (buf->xtext->auto_indent)
 	{
-		tempindent = MARGIN + space + buf->xtext->space_width + left_width;
-
-		if (tempindent > buf->indent)
-			buf->indent = tempindent;
-
-		if (buf->indent > buf->xtext->max_auto_indent)
-			buf->indent = buf->xtext->max_auto_indent;
-
-		gtk_xtext_fix_indent (buf);
-		gtk_xtext_recalc_widths (buf, FALSE);
-
 		ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
-		buf->xtext->force_render = TRUE;
+
+		if (buf->time_stamp)
+			space = buf->xtext->stamp_width;
+		else
+			space = 0;
+
+		if (buf->indent < buf->xtext->max_auto_indent &&
+			 ent->indent < MARGIN + space)
+		{
+			tempindent = MARGIN + space + buf->xtext->space_width + left_width;
+
+			if (tempindent > buf->indent)
+				buf->indent = tempindent;
+
+			if (buf->indent > buf->xtext->max_auto_indent)
+				buf->indent = buf->xtext->max_auto_indent;
+
+			gtk_xtext_fix_indent (buf);
+			gtk_xtext_recalc_widths (buf, FALSE);
+
+			ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
+			buf->xtext->force_render = TRUE;
+		}
+	}
+	else
+	{
+		ent->indent = buf->time_stamp ? buf->xtext->stamp_width : MARGIN;
 	}
 
 	gtk_xtext_prepend_entry (buf, ent, stamp);
@@ -7056,32 +7073,38 @@ gtk_xtext_insert_sorted_indent (xtext_buffer *buf,
 	ent->left_len = left_len;
 	ent->str = str;
 	ent->str_len = left_len + 1 + right_len;
-	ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
-
 	g_assert (ent->str_len < sizeof (buf->xtext->scratch_buffer));
 
-	if (buf->time_stamp)
-		space = buf->xtext->stamp_width;
-	else
-		space = 0;
-
-	if (buf->xtext->auto_indent &&
-		 buf->indent < buf->xtext->max_auto_indent &&
-		 ent->indent < MARGIN + space)
+	if (buf->xtext->auto_indent)
 	{
-		tempindent = MARGIN + space + buf->xtext->space_width + left_width;
-
-		if (tempindent > buf->indent)
-			buf->indent = tempindent;
-
-		if (buf->indent > buf->xtext->max_auto_indent)
-			buf->indent = buf->xtext->max_auto_indent;
-
-		gtk_xtext_fix_indent (buf);
-		gtk_xtext_recalc_widths (buf, FALSE);
-
 		ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
-		buf->xtext->force_render = TRUE;
+
+		if (buf->time_stamp)
+			space = buf->xtext->stamp_width;
+		else
+			space = 0;
+
+		if (buf->indent < buf->xtext->max_auto_indent &&
+			 ent->indent < MARGIN + space)
+		{
+			tempindent = MARGIN + space + buf->xtext->space_width + left_width;
+
+			if (tempindent > buf->indent)
+				buf->indent = tempindent;
+
+			if (buf->indent > buf->xtext->max_auto_indent)
+				buf->indent = buf->xtext->max_auto_indent;
+
+			gtk_xtext_fix_indent (buf);
+			gtk_xtext_recalc_widths (buf, FALSE);
+
+			ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
+			buf->xtext->force_render = TRUE;
+		}
+	}
+	else
+	{
+		ent->indent = buf->time_stamp ? buf->xtext->stamp_width : MARGIN;
 	}
 
 	gtk_xtext_insert_sorted_entry (buf, ent, stamp);
@@ -7192,7 +7215,53 @@ gtk_xtext_foreach (xtext_buffer *buf, GtkXTextForeach func, void *data)
 void
 gtk_xtext_set_indent (GtkXText *xtext, gboolean indent)
 {
+	if (xtext->auto_indent == indent)
+		return;
+
 	xtext->auto_indent = indent;
+
+	if (xtext->stamp_width == 0)
+	{
+		char *time_str;
+		int stamp_size = xtext_get_stamp_str (time (0), &time_str);
+		xtext->stamp_width =
+			gtk_xtext_text_width (xtext, (unsigned char *)time_str, stamp_size) + MARGIN;
+		g_free (time_str);
+	}
+
+	/* When turning indent OFF, reset buf->indent so continuation lines
+	 * don't render at the old separator position. */
+	if (!indent && xtext->buffer)
+	{
+		xtext->buffer->indent = MARGIN;
+	}
+
+	/* When turning indent ON, recalculate buf->indent from existing entries
+	 * since the auto-adjust in append_indent was skipped while indent was off. */
+	if (indent && xtext->buffer)
+	{
+		xtext_buffer *buf = xtext->buffer;
+		textentry *ent;
+		int space = buf->time_stamp ? xtext->stamp_width : 0;
+		int left_width, tempindent;
+
+		buf->indent = MARGIN;
+
+		for (ent = buf->text_first; ent; ent = ent->next)
+		{
+			if (ent->left_len <= 0)
+				continue;
+			left_width = gtk_xtext_text_width (xtext, ent->str, ent->left_len);
+			tempindent = MARGIN + space + xtext->space_width + left_width;
+			if (tempindent > buf->indent)
+				buf->indent = tempindent;
+		}
+
+		if (buf->indent > xtext->max_auto_indent)
+			buf->indent = xtext->max_auto_indent;
+
+		gtk_xtext_fix_indent (buf);
+	}
 }
 
 void
