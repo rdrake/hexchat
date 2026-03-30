@@ -907,6 +907,7 @@ hc_editable_label_click_cb (GtkGestureClick *gesture, int n_press,
 		gtk_selection_model_select_item (sel, pos, TRUE);
 	}
 
+	gtk_widget_grab_focus (label);
 	gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 
 	if (n_press == 2)

@@ -45,6 +45,7 @@
 
 static GtkWidget *editlist_win = NULL;
 static GSList *editlist_list = NULL;
+static GtkEditableLabel *editlist_editing_label = NULL;
 
 /*
  * GTK4 Implementation using GListStore + GtkColumnView
@@ -243,6 +244,7 @@ editlist_add (GtkWidget *wid, gpointer userdata)
 static void
 editlist_close (GtkWidget *wid, gpointer userdata)
 {
+	editlist_editing_label = NULL;
 	hc_window_destroy_fn (GTK_WINDOW (editlist_win));
 	editlist_win = NULL;
 }
@@ -359,16 +361,14 @@ editlist_cmd_changed_cb (GtkEditableLabel *label, GParamSpec *pspec, gpointer us
 static void
 editlist_setup_name_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer user_data)
 {
-	GtkWidget *label = gtk_editable_label_new ("");
-	gtk_widget_set_hexpand (label, TRUE);
+	GtkWidget *label = hc_editable_label_new (item, &editlist_editing_label);
 	gtk_list_item_set_child (item, label);
 }
 
 static void
 editlist_setup_cmd_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer user_data)
 {
-	GtkWidget *label = gtk_editable_label_new ("");
-	gtk_widget_set_hexpand (label, TRUE);
+	GtkWidget *label = hc_editable_label_new (item, &editlist_editing_label);
 	gtk_list_item_set_child (item, label);
 }
 

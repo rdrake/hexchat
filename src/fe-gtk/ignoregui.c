@@ -33,6 +33,7 @@
 
 
 static GtkWidget *ignorewin = 0;
+static GtkEditableLabel *ignore_editing_label = NULL;
 
 /*
  * GTK4 Implementation using GListStore + GtkColumnView
@@ -216,8 +217,7 @@ ignore_toggle_cb (GtkCheckButton *button, gpointer user_data)
 static void
 ignore_setup_mask_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer user_data)
 {
-	GtkWidget *label = gtk_editable_label_new ("");
-	gtk_widget_set_hexpand (label, TRUE);
+	GtkWidget *label = hc_editable_label_new (item, &ignore_editing_label);
 	gtk_list_item_set_child (item, label);
 }
 
@@ -507,6 +507,7 @@ ignore_new_entry_clicked (GtkWidget * wid, struct session *sess)
 static void
 close_ignore_gui_callback (void)
 {
+	ignore_editing_label = NULL;
 	ignore_save ();
 	ignorewin = 0;
 }

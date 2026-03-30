@@ -44,6 +44,7 @@ extern char *pntevts[];
 
 static GtkWidget *pevent_dialog = NULL, *pevent_dialog_twid,
 	*pevent_dialog_list, *pevent_dialog_hlist;
+static GtkEditableLabel *pevent_editing_label = NULL;
 
 /*
  * GTK4 Implementation using GListStore + GtkColumnView
@@ -497,6 +498,7 @@ PrintTextRawInsertSorted (void *xtbuf, unsigned char *text, int indent, time_t s
 static void
 pevent_dialog_close (GtkWidget *wid, gpointer arg)
 {
+	pevent_editing_label = NULL;
 	pevent_dialog = NULL;
 	pevent_save (NULL);
 }
@@ -704,8 +706,7 @@ pevent_bind_event_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer u
 static void
 pevent_setup_text_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer user_data)
 {
-	GtkWidget *label = gtk_editable_label_new ("");
-	gtk_widget_set_hexpand (label, TRUE);
+	GtkWidget *label = hc_editable_label_new (item, &pevent_editing_label);
 	gtk_list_item_set_child (item, label);
 }
 
@@ -716,11 +717,26 @@ pevent_text_changed_cb (GtkEditableLabel *label, GParamSpec *pspec, gpointer use
 	HcEventItem *event = gtk_list_item_get_item (list_item);
 	const char *new_text;
 
-	if (!event)
+	if (!event || !gtk_editable_label_get_editing (label))
 		return;
 
+	/* Save text to model during editing; preview fires when editing stops */
 	new_text = gtk_editable_get_text (GTK_EDITABLE (label));
-	pevent_text_edited (event, new_text);
+	g_free (event->text);
+	event->text = g_strdup (new_text);
+}
+
+static void
+pevent_editing_done_cb (GtkEditableLabel *label, GParamSpec *pspec, gpointer user_data)
+{
+	GtkListItem *list_item = GTK_LIST_ITEM (user_data);
+	HcEventItem *event = gtk_list_item_get_item (list_item);
+
+	if (!event || gtk_editable_label_get_editing (label))
+		return;
+
+	/* Editing stopped (Enter or focus loss) — run the test preview */
+	pevent_text_edited (event, gtk_editable_get_text (GTK_EDITABLE (label)));
 }
 
 static void
@@ -731,6 +747,7 @@ pevent_bind_text_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer us
 
 	gtk_editable_set_text (GTK_EDITABLE (label), event->text ? event->text : "");
 	g_signal_connect (label, "notify::text", G_CALLBACK (pevent_text_changed_cb), item);
+	g_signal_connect (label, "notify::editing", G_CALLBACK (pevent_editing_done_cb), item);
 }
 
 static void
@@ -738,6 +755,7 @@ pevent_unbind_text_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer 
 {
 	GtkWidget *label = gtk_list_item_get_child (item);
 	g_signal_handlers_disconnect_by_func (label, pevent_text_changed_cb, item);
+	g_signal_handlers_disconnect_by_func (label, pevent_editing_done_cb, item);
 }
 
 /* Help list columns */
