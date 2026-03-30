@@ -2025,6 +2025,47 @@ gtk_xtext_leave_common (GtkXText *xtext)
 
 }
 
+/* Format a relative time string for hover stamp display */
+static void
+xtext_format_relative_time (time_t stamp, char *buf, int bufsize)
+{
+	time_t now = time (NULL);
+	time_t diff = now - stamp;
+
+	if (diff < 60)
+		g_snprintf (buf, bufsize, _("now"));
+	else if (diff < 3600)
+		g_snprintf (buf, bufsize, _("%dm ago"), (int)(diff / 60));
+	else if (diff < 86400)
+		g_snprintf (buf, bufsize, _("%dh ago"), (int)(diff / 3600));
+	else
+	{
+		struct tm tm_info;
+#ifdef WIN32
+		localtime_s (&tm_info, &stamp);
+#else
+		localtime_r (&stamp, &tm_info);
+#endif
+		if (diff < 172800)
+			strftime (buf, bufsize, _("Yesterday"), &tm_info);
+		else if (diff < 604800)
+			strftime (buf, bufsize, "%a %H:%M", &tm_info);
+		else
+			strftime (buf, bufsize, "%b %d", &tm_info);
+	}
+}
+
+/* Timer callback: show hover stamp after delay (when timestamps are disabled) */
+static gboolean
+xtext_hover_stamp_timeout (gpointer data)
+{
+	GtkXText *xtext = data;
+	xtext->hover_stamp_tag = 0;
+	xtext->hover_stamp_visible = TRUE;
+	gtk_widget_queue_draw (GTK_WIDGET (xtext));
+	return G_SOURCE_REMOVE;
+}
+
 /* Clear hover state — only called on actual widget leave, not on URL check fallthrough */
 static void
 gtk_xtext_leave_hover (GtkXText *xtext)
@@ -2034,7 +2075,12 @@ gtk_xtext_leave_hover (GtkXText *xtext)
 		xtext->hover_ent = NULL;
 		xtext->hover_reply_target = NULL;
 		xtext->hover_btn_size = 0;
-		gtk_widget_set_tooltip_text (GTK_WIDGET (xtext), NULL);
+		if (xtext->hover_stamp_tag)
+		{
+			g_source_remove (xtext->hover_stamp_tag);
+			xtext->hover_stamp_tag = 0;
+		}
+		xtext->hover_stamp_visible = FALSE;
 		gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	}
 }
@@ -2231,44 +2277,21 @@ gtk_xtext_motion_notify (GtkEventControllerMotion *controller, double event_x, d
 		{
 			xtext->hover_ent = new_hover;
 			xtext->hover_reply_target = new_reply_target;
-			gtk_widget_queue_draw (widget);
 
-			/* Update hover timestamp tooltip */
-			if (new_hover && new_hover->stamp)
+			/* Cancel pending hover stamp timer */
+			if (xtext->hover_stamp_tag)
 			{
-				char tip[256];
-				time_t now = time (NULL);
-				time_t diff = now - new_hover->stamp;
-
-				if (diff < 60)
-					g_snprintf (tip, sizeof (tip), _("Just now"));
-				else if (diff < 3600)
-					g_snprintf (tip, sizeof (tip),
-						ngettext ("%d minute ago", "%d minutes ago", (int)(diff / 60)),
-						(int)(diff / 60));
-				else if (diff < 86400)
-					g_snprintf (tip, sizeof (tip),
-						ngettext ("%d hour ago", "%d hours ago", (int)(diff / 3600)),
-						(int)(diff / 3600));
-				else
-				{
-					struct tm tm_info;
-#ifdef WIN32
-					localtime_s (&tm_info, &new_hover->stamp);
-#else
-					localtime_r (&new_hover->stamp, &tm_info);
-#endif
-					if (diff < 172800)
-						strftime (tip, sizeof (tip), _("Yesterday at %H:%M"), &tm_info);
-					else if (diff < 604800)
-						strftime (tip, sizeof (tip), "%A at %H:%M", &tm_info);
-					else
-						strftime (tip, sizeof (tip), "%B %d, %Y at %H:%M", &tm_info);
-				}
-				gtk_widget_set_tooltip_text (widget, tip);
+				g_source_remove (xtext->hover_stamp_tag);
+				xtext->hover_stamp_tag = 0;
 			}
-			else
-				gtk_widget_set_tooltip_text (widget, NULL);
+			xtext->hover_stamp_visible = FALSE;
+
+			/* Show relative timestamps after a short delay */
+			if (new_hover && new_hover->stamp)
+				xtext->hover_stamp_tag = g_timeout_add (750,
+					xtext_hover_stamp_timeout, xtext);
+
+			gtk_widget_queue_draw (widget);
 		}
 	}
 
@@ -3440,12 +3463,16 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 	/* --- Background fills (left margin) --- */
 	if (!xtext->skip_border_fills)
 	{
-		if (raw_offset == 0 && indent > MARGIN && xtext->buffer->time_stamp)
+		gboolean has_stamp = xtext->buffer->time_stamp ||
+			(xtext->hover_stamp_visible && xtext->hover_ent != NULL);
+
+		if (raw_offset == 0 && indent > MARGIN && has_stamp)
 		{
-			/* Don't overwrite the timestamp */
-			if (indent > xtext->stamp_width)
-				xtext_draw_bg (xtext, xtext->stamp_width, y - xtext->font->ascent,
-				               indent - xtext->stamp_width, xtext->fontsize);
+			/* Don't overwrite the timestamp / hover stamp */
+			int stamp_end = xtext->stamp_width;
+			if (indent > stamp_end)
+				xtext_draw_bg (xtext, stamp_end, y - xtext->font->ascent,
+				               indent - stamp_end, xtext->fontsize);
 		}
 		else
 		{
@@ -3882,9 +3909,10 @@ gtk_xtext_find_subline (GtkXText *xtext, textentry *ent, int line)
 	return rlen;
 }
 
-/* horrible hack for drawing time stamps */
+/* horrible hack for drawing time stamps
+ * returns the pixel width used (text_width + MARGIN), for hover stamp indent adjustment */
 
-static void
+static int
 gtk_xtext_render_stamp (GtkXText * xtext, textentry * ent,
 								char *text, int len, int line, int win_width)
 {
@@ -3899,7 +3927,7 @@ gtk_xtext_render_stamp (GtkXText * xtext, textentry * ent,
 	gboolean is_marked;
 
 	if (xtext->cr == NULL)
-		return;
+		return xtext->stamp_width;
 
 	/* Parse format codes in timestamp text (supports mIRC colors etc.) */
 	xtext_parse_formats ((unsigned char *) text, len,
@@ -3994,6 +4022,8 @@ gtk_xtext_render_stamp (GtkXText * xtext, textentry * ent,
 	g_free (stripped);
 	g_free (spans);
 	g_free (r2s);
+
+	return text_width > xtext->stamp_width ? text_width : xtext->stamp_width;
 }
 
 /* Render a reply context line above a message: "\xe2\x86\xa9 nick: preview text..."
@@ -4456,16 +4486,40 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 	/* draw the timestamp (only on the first text subline) */
 	if (text_subline == 0)
 	{
-		if (xtext->buffer->time_stamp &&
-			 (!xtext->skip_stamp || xtext->mark_stamp || xtext->force_stamp) &&
-			 ent->left_len > 0)
-		{
-			char *time_str;
-			int ts_len;
+		gboolean show_stamp = xtext->buffer->time_stamp &&
+			(!xtext->skip_stamp || xtext->mark_stamp || xtext->force_stamp);
+		gboolean swap_relative = xtext->hover_stamp_visible && xtext->hover_ent != NULL;
+		gboolean show_hover_stamp = swap_relative && !xtext->buffer->time_stamp
+			&& ent->left_len > 0;
 
-			ts_len = xtext_get_stamp_str (ent->stamp, &time_str);
-			gtk_xtext_render_stamp (xtext, ent, time_str, ts_len, line, win_width);
-			g_free (time_str);
+		if ((show_stamp || show_hover_stamp) && ent->left_len > 0)
+		{
+			int stamp_used;
+
+			if (swap_relative && ent->stamp)
+			{
+				char rel[128];
+				xtext_format_relative_time (ent->stamp, rel, sizeof (rel));
+				stamp_used = gtk_xtext_render_stamp (xtext, ent, rel, strlen (rel), line, win_width);
+			}
+			else
+			{
+				char *time_str;
+				int ts_len;
+
+				ts_len = xtext_get_stamp_str (ent->stamp, &time_str);
+				stamp_used = gtk_xtext_render_stamp (xtext, ent, time_str, ts_len, line, win_width);
+				g_free (time_str);
+			}
+
+			/* Shift text right to make room for wider/new stamp */
+			if (swap_relative)
+			{
+				if (show_hover_stamp)
+					indent = stamp_used;  /* no stamp area normally, start text after stamp */
+				else if (stamp_used > xtext->stamp_width)
+					indent = ent->indent + (stamp_used - xtext->stamp_width);
+			}
 		}
 		else if (xtext->buffer->time_stamp && ent->left_len <= 0)
 		{
