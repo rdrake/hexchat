@@ -4256,6 +4256,7 @@ mg_apply_setup (void)
 		if (!sess->gui->is_tab || !done_main)
 		{
 			mg_update_xtext (sess->gui->xtext);
+			gtk_widget_queue_draw (sess->gui->xtext);
 			mg_place_userlist_and_chanview (sess->gui);
 		}
 		if (sess->gui->is_tab)

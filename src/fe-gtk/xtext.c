@@ -2033,25 +2033,47 @@ xtext_format_relative_time (time_t stamp, char *buf, int bufsize)
 	time_t diff = now - stamp;
 
 	if (diff < 60)
-		g_snprintf (buf, bufsize, _("now"));
+		g_snprintf (buf, bufsize, _("Just now"));
 	else if (diff < 3600)
 		g_snprintf (buf, bufsize, _("%dm ago"), (int)(diff / 60));
 	else if (diff < 86400)
-		g_snprintf (buf, bufsize, _("%dh ago"), (int)(diff / 3600));
+	{
+		int hours = (int)(diff / 3600);
+		int mins = (int)((diff % 3600) / 60);
+		if (mins > 0)
+			g_snprintf (buf, bufsize, "%dh%dm", hours, mins);
+		else
+			g_snprintf (buf, bufsize, "%dh", hours);
+	}
 	else
 	{
-		struct tm tm_info;
-#ifdef WIN32
-		localtime_s (&tm_info, &stamp);
-#else
-		localtime_r (&stamp, &tm_info);
-#endif
-		if (diff < 172800)
-			strftime (buf, bufsize, _("Yesterday"), &tm_info);
-		else if (diff < 604800)
-			strftime (buf, bufsize, "%a %H:%M", &tm_info);
+		int days = (int)(diff / 86400);
+		if (days < 30)
+		{
+			int hours = (int)((diff % 86400) / 3600);
+			if (hours > 0 && days < 7)
+				g_snprintf (buf, bufsize, "%dd%dh", days, hours);
+			else
+				g_snprintf (buf, bufsize, "%dd", days);
+		}
+		else if (days < 365)
+		{
+			int months = days / 30;
+			int rem = days % 30;
+			if (rem > 0)
+				g_snprintf (buf, bufsize, "%dmo%dd", months, rem);
+			else
+				g_snprintf (buf, bufsize, "%dmo", months);
+		}
 		else
-			strftime (buf, bufsize, "%b %d", &tm_info);
+		{
+			int years = days / 365;
+			int months = (days % 365) / 30;
+			if (months > 0)
+				g_snprintf (buf, bufsize, "%dy%dmo", years, months);
+			else
+				g_snprintf (buf, bufsize, "%dy", years);
+		}
 	}
 }
 
@@ -7590,7 +7612,37 @@ gtk_xtext_set_thin_separator (GtkXText *xtext, gboolean thin_separator)
 void
 gtk_xtext_set_time_stamp (xtext_buffer *buf, gboolean time_stamp)
 {
+	if (buf->time_stamp == time_stamp)
+		return;
+
 	buf->time_stamp = time_stamp;
+
+	if (!buf->xtext || !buf->xtext->auto_indent)
+		return;
+
+	/* Recalculate buf->indent from existing entries since stamp space changed */
+	{
+		textentry *ent;
+		int space = time_stamp ? buf->xtext->stamp_width : 0;
+		int left_width, tempindent;
+
+		buf->indent = MARGIN;
+
+		for (ent = buf->text_first; ent; ent = ent->next)
+		{
+			if (ent->left_len <= 0)
+				continue;
+			left_width = gtk_xtext_text_width (buf->xtext, ent->str, ent->left_len);
+			tempindent = MARGIN + space + buf->xtext->space_width + left_width;
+			if (tempindent > buf->indent)
+				buf->indent = tempindent;
+		}
+
+		if (buf->indent > buf->xtext->max_auto_indent)
+			buf->indent = buf->xtext->max_auto_indent;
+
+		gtk_xtext_fix_indent (buf);
+	}
 }
 
 void
