@@ -2077,13 +2077,25 @@ xtext_format_relative_time (time_t stamp, char *buf, int bufsize)
 	}
 }
 
-/* Timer callback: show hover stamp after delay (when timestamps are disabled) */
+/* Timer callback: show hover stamp after delay */
 static gboolean
 xtext_hover_stamp_timeout (gpointer data)
 {
 	GtkXText *xtext = data;
 	xtext->hover_stamp_tag = 0;
 	xtext->hover_stamp_visible = TRUE;
+	gtk_widget_queue_draw (GTK_WIDGET (xtext));
+	return G_SOURCE_REMOVE;
+}
+
+/* Timer callback: hide hover stamp after linger period */
+static gboolean
+xtext_hover_stamp_linger_timeout (gpointer data)
+{
+	GtkXText *xtext = data;
+	xtext->hover_stamp_tag = 0;
+	xtext->hover_stamp_visible = FALSE;
+	xtext->hover_stamp_alt = FALSE;
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	return G_SOURCE_REMOVE;
 }
@@ -2299,21 +2311,54 @@ gtk_xtext_motion_notify (GtkEventControllerMotion *controller, double event_x, d
 		{
 			xtext->hover_ent = new_hover;
 			xtext->hover_reply_target = new_reply_target;
+			gtk_widget_queue_draw (widget);
+		}
 
-			/* Cancel pending hover stamp timer */
-			if (xtext->hover_stamp_tag)
-			{
-				g_source_remove (xtext->hover_stamp_tag);
-				xtext->hover_stamp_tag = 0;
-			}
-			xtext->hover_stamp_visible = FALSE;
+		/* Hover stamp: check on every motion for area/modifier changes */
+		{
+			gboolean want_stamp = FALSE;
+			gboolean via_alt = FALSE;
 
-			/* Show relative timestamps after a short delay */
 			if (new_hover && new_hover->stamp)
+			{
+				if (xtext->buffer->time_stamp && x < xtext->stamp_width)
+					want_stamp = TRUE;
+				else if (!xtext->buffer->time_stamp && (mask & GDK_ALT_MASK))
+				{
+					want_stamp = TRUE;
+					via_alt = TRUE;
+				}
+			}
+
+			if (want_stamp && !xtext->hover_stamp_visible && !xtext->hover_stamp_tag)
+			{
+				xtext->hover_stamp_alt = via_alt;
 				xtext->hover_stamp_tag = g_timeout_add (750,
 					xtext_hover_stamp_timeout, xtext);
-
-			gtk_widget_queue_draw (widget);
+			}
+			else if (!want_stamp && (xtext->hover_stamp_visible || xtext->hover_stamp_tag))
+			{
+				if (xtext->hover_stamp_tag)
+				{
+					g_source_remove (xtext->hover_stamp_tag);
+					xtext->hover_stamp_tag = 0;
+				}
+				if (xtext->hover_stamp_visible)
+				{
+					if (xtext->hover_stamp_alt)
+					{
+						/* Alt path: linger for 2 seconds before hiding */
+						xtext->hover_stamp_tag = g_timeout_add (2000,
+							xtext_hover_stamp_linger_timeout, xtext);
+					}
+					else
+					{
+						xtext->hover_stamp_visible = FALSE;
+						gtk_widget_queue_draw (widget);
+					}
+				}
+				xtext->hover_stamp_alt = FALSE;
+			}
 		}
 	}
 

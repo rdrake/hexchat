@@ -316,8 +316,9 @@ struct _GtkXText
 	textentry *hover_reply_target;	/* entry referenced by hovered reply context (NULL = none) */
 	int hover_btn_y;				/* top edge of hover button row */
 	int hover_btn_size;				/* individual button width/height */
-	guint hover_stamp_tag;			/* timer for delayed hover stamp (timestamps off) */
+	guint hover_stamp_tag;			/* timer for delayed hover stamp */
 	unsigned int hover_stamp_visible:1;	/* TRUE after delay fires */
+	unsigned int hover_stamp_alt:1;		/* TRUE if triggered via Alt key */
 	int reply_btn_x;				/* left edge of reply button */
 	int react_text_btn_x;			/* left edge of react-text button */
 	int react_emoji_btn_x;			/* left edge of react-emoji button */
