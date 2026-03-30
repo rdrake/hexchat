@@ -80,6 +80,7 @@ static GtkWidgetClass *parent_class = NULL;
 
 /* Phase 4: entry modification support */
 #define TEXTENTRY_FLAG_SEPARATE_STR  0x01
+#define TEXTENTRY_FLAG_DAY_BOUNDARY  0x02
 
 typedef struct xtext_redaction_info {
 	char *original_content;		/* preserved text for audit/reveal */
@@ -238,9 +239,25 @@ static char * gtk_xtext_get_word (GtkXText * xtext, int x, int y, textentry ** r
 typedef enum {
 	XTEXT_ZONE_REPLY   = 0,
 	XTEXT_ZONE_TEXT    = 1,
-	XTEXT_ZONE_REACT   = 2
+	XTEXT_ZONE_REACT   = 2,
+	XTEXT_ZONE_DAY_SEP = 3
 } xtext_click_zone;
 static xtext_click_zone gtk_xtext_get_click_zone (GtkXText *xtext, int y, textentry **ent_out);
+
+/* Day boundary detection: are two timestamps on different calendar days? */
+static gboolean
+xtext_is_different_day (time_t a, time_t b)
+{
+	struct tm ta, tb;
+#ifdef WIN32
+	localtime_s (&ta, &a);
+	localtime_s (&tb, &b);
+#else
+	localtime_r (&a, &ta);
+	localtime_r (&b, &tb);
+#endif
+	return (ta.tm_year != tb.tm_year || ta.tm_yday != tb.tm_yday);
+}
 
 /* GTK4 event controller callbacks - forward declarations */
 static void gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double x, double y, gpointer user_data);
@@ -2488,9 +2505,15 @@ gtk_xtext_get_click_zone (GtkXText *xtext, int y, textentry **ent_out)
 	if (!ent)
 		return XTEXT_ZONE_TEXT;
 
-	/* subline is now an offset into total lines: [extra_above | text_sublines | extra_below] */
+	/* subline is now an offset into total lines: [day_sep | reply | text_sublines | extra_below] */
 	if (subline < ent->extra_lines_above)
+	{
+		gboolean has_day_sep = (ent->flags & TEXTENTRY_FLAG_DAY_BOUNDARY)
+		                       && prefs.hex_gui_day_separator;
+		if (has_day_sep && subline == 0)
+			return XTEXT_ZONE_DAY_SEP;
 		return XTEXT_ZONE_REPLY;
+	}
 
 	text_sublines = g_slist_length (ent->sublines);
 	if (subline >= ent->extra_lines_above + text_sublines)
@@ -4305,6 +4328,74 @@ gtk_xtext_render_reaction_badges (GtkXText *xtext, textentry *ent, int line, int
 	}
 }
 
+/* render a day separator line: ──── March 29, 2026 ──── */
+
+static void
+gtk_xtext_render_day_separator (GtkXText *xtext, textentry *ent, int line, int win_width)
+{
+	int y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
+	int mid_y = y - xtext->font->ascent + xtext->fontsize / 2;
+	char date_buf[128];
+	struct tm entry_tm, now_tm;
+	time_t now = time (NULL);
+	PangoRectangle logical;
+	int text_w, text_x, pad;
+	GdkRGBA color;
+
+#ifdef WIN32
+	localtime_s (&entry_tm, &ent->stamp);
+	localtime_s (&now_tm, &now);
+#else
+	localtime_r (&ent->stamp, &entry_tm);
+	localtime_r (&now, &now_tm);
+#endif
+
+	if (entry_tm.tm_year == now_tm.tm_year && entry_tm.tm_yday == now_tm.tm_yday)
+		g_strlcpy (date_buf, _("Today"), sizeof (date_buf));
+	else if ((entry_tm.tm_year == now_tm.tm_year && entry_tm.tm_yday == now_tm.tm_yday - 1) ||
+	         (now_tm.tm_yday == 0 && entry_tm.tm_year == now_tm.tm_year - 1 &&
+	          entry_tm.tm_mon == 11 && entry_tm.tm_mday == 31))
+		g_strlcpy (date_buf, _("Yesterday"), sizeof (date_buf));
+	else
+		strftime (date_buf, sizeof (date_buf), "%B %d, %Y", &entry_tm);
+
+	/* Clear background */
+	xtext_draw_bg (xtext, 0, y - xtext->font->ascent, win_width + MARGIN, xtext->fontsize);
+
+	/* Measure text */
+	pango_layout_set_text (xtext->layout, date_buf, -1);
+	pango_layout_set_attributes (xtext->layout, NULL);
+	pango_layout_get_pixel_extents (xtext->layout, NULL, &logical);
+	text_w = logical.width;
+	pad = 12;
+	text_x = (win_width - text_w) / 2;
+
+	/* Draw horizontal lines */
+	color = xtext->palette[XTEXT_FG];
+	color.alpha = 0.15;
+	gdk_cairo_set_source_rgba (xtext->cr, &color);
+
+	cairo_set_line_width (xtext->cr, 1.0);
+	cairo_move_to (xtext->cr, MARGIN + 8, mid_y + 0.5);
+	cairo_line_to (xtext->cr, text_x - pad, mid_y + 0.5);
+	cairo_stroke (xtext->cr);
+
+	cairo_move_to (xtext->cr, text_x + text_w + pad, mid_y + 0.5);
+	cairo_line_to (xtext->cr, win_width - 8, mid_y + 0.5);
+	cairo_stroke (xtext->cr);
+
+	/* Draw centered date text */
+	color = xtext->palette[XTEXT_FG];
+	color.alpha = 0.5;
+	gdk_cairo_set_source_rgba (xtext->cr, &color);
+	{
+		PangoLayoutLine *pl = pango_layout_get_lines_readonly (xtext->layout)->data;
+		xtext_draw_layout_line (xtext, text_x, y, pl);
+	}
+
+	pango_layout_set_attributes (xtext->layout, NULL);
+}
+
 /* render a single line, which may wrap to more lines */
 
 static int
@@ -4323,8 +4414,25 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 	indent = ent->indent;
 	start_subline = subline;
 
+	/* --- Day separator line above the message --- */
+	if ((ent->flags & TEXTENTRY_FLAG_DAY_BOUNDARY) && prefs.hex_gui_day_separator)
+	{
+		if (subline == 0)
+		{
+			gtk_xtext_render_day_separator (xtext, ent, line, win_width);
+			line++;
+			taken++;
+			if (line >= lines_max)
+				return taken;
+		}
+		else
+		{
+			subline--;
+		}
+	}
+
 	/* --- Reply context line above the message --- */
-	if (ent->extra_lines_above > 0)
+	if (ent->reply && ent->extra_lines_above > 0)
 	{
 		if (subline == 0)
 		{
@@ -4736,6 +4844,36 @@ gtk_xtext_lines_taken (xtext_buffer *buf, textentry * ent)
 	while (str < ent->str + ent->str_len);
 
 	return g_slist_length (ent->sublines);
+}
+
+/* Recompute day boundary flags for all entries in a buffer.
+ * Called when the hex_gui_day_separator preference changes. */
+
+void
+gtk_xtext_recalc_day_boundaries (xtext_buffer *buf)
+{
+	textentry *ent;
+
+	for (ent = buf->text_first; ent; ent = ent->next)
+	{
+		gboolean was = (ent->flags & TEXTENTRY_FLAG_DAY_BOUNDARY) != 0;
+		gboolean should = prefs.hex_gui_day_separator && ent->prev &&
+		                   ent->stamp > 0 && ent->prev->stamp > 0 &&
+		                   xtext_is_different_day (ent->prev->stamp, ent->stamp);
+
+		if (should && !was)
+		{
+			ent->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
+			ent->extra_lines_above++;
+		}
+		else if (!should && was)
+		{
+			ent->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
+			ent->extra_lines_above--;
+		}
+	}
+
+	gtk_xtext_calc_lines (buf, TRUE);
 }
 
 /* Calculate number of actual lines (with wraps), to set adj->lower. *
@@ -5772,7 +5910,16 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 		buffer->last_pixel_pos -= (ent_lines * buffer->xtext->fontsize);
 		buffer->text_first = ent->next;
 		if (buffer->text_first)
+		{
 			buffer->text_first->prev = NULL;
+			/* Remove stale day boundary - first entry has no predecessor */
+			if (buffer->text_first->flags & TEXTENTRY_FLAG_DAY_BOUNDARY)
+			{
+				buffer->text_first->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
+				buffer->text_first->extra_lines_above--;
+				ent_lines++;  /* account for the removed boundary line */
+			}
+		}
 		else
 			buffer->text_last = NULL;
 
@@ -6457,11 +6604,19 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	ent->prev = buf->text_last;
 	buf->text_last = ent;
 
+	/* Day boundary detection */
+	if (prefs.hex_gui_day_separator && ent->prev && ent->stamp > 0 &&
+	    ent->prev->stamp > 0 && xtext_is_different_day (ent->prev->stamp, ent->stamp))
+	{
+		ent->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
+		ent->extra_lines_above++;
+	}
+
 	ent->sublines = NULL;
 	if (buf->window_width > 0)
-		buf->num_lines += gtk_xtext_lines_taken (buf, ent);
+		buf->num_lines += gtk_xtext_lines_taken (buf, ent) + ent->extra_lines_above;
 	else
-		buf->num_lines++;  /* placeholder — real count deferred to first allocation */
+		buf->num_lines += 1 + ent->extra_lines_above;  /* placeholder — real count deferred to first allocation */
 
 	/* Local auto-advance: move marker to newest unread message when window is
 	 * unfocused.  Suppressed when server controls the marker (draft/read-marker). */
@@ -6593,6 +6748,25 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		buf->text_last = ent;
 	ent->next = buf->text_first;
 	buf->text_first = ent;
+
+	/* Day boundary: update next entry's boundary based on new predecessor */
+	if (prefs.hex_gui_day_separator && ent->next && ent->next->stamp > 0 && ent->stamp > 0)
+	{
+		gboolean was_boundary = (ent->next->flags & TEXTENTRY_FLAG_DAY_BOUNDARY) != 0;
+		gboolean is_boundary = xtext_is_different_day (ent->stamp, ent->next->stamp);
+		if (is_boundary && !was_boundary)
+		{
+			ent->next->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
+			ent->next->extra_lines_above++;
+			buf->num_lines++;
+		}
+		else if (!is_boundary && was_boundary)
+		{
+			ent->next->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
+			ent->next->extra_lines_above--;
+			buf->num_lines--;
+		}
+	}
 
 	ent->sublines = NULL;
 	new_lines = gtk_xtext_lines_taken (buf, ent);
@@ -6771,8 +6945,35 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		}
 	}
 
+	/* Day boundary: check ent vs its predecessor */
+	if (prefs.hex_gui_day_separator && ent->prev && ent->stamp > 0 &&
+	    ent->prev->stamp > 0 && xtext_is_different_day (ent->prev->stamp, ent->stamp))
+	{
+		ent->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
+		ent->extra_lines_above++;
+	}
+
+	/* Day boundary: update next entry's boundary based on new predecessor */
+	if (prefs.hex_gui_day_separator && ent->next && ent->next->stamp > 0 && ent->stamp > 0)
+	{
+		gboolean was_boundary = (ent->next->flags & TEXTENTRY_FLAG_DAY_BOUNDARY) != 0;
+		gboolean is_boundary = xtext_is_different_day (ent->stamp, ent->next->stamp);
+		if (is_boundary && !was_boundary)
+		{
+			ent->next->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
+			ent->next->extra_lines_above++;
+			buf->num_lines++;
+		}
+		else if (!is_boundary && was_boundary)
+		{
+			ent->next->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
+			ent->next->extra_lines_above--;
+			buf->num_lines--;
+		}
+	}
+
 	ent->sublines = NULL;
-	new_lines = gtk_xtext_lines_taken (buf, ent);
+	new_lines = gtk_xtext_lines_taken (buf, ent) + ent->extra_lines_above;
 	buf->num_lines += new_lines;
 
 	/* Adjust scroll position if we inserted before current view */
@@ -8139,7 +8340,7 @@ gtk_xtext_entry_set_reply (xtext_buffer *buf, textentry *ent,
 	ent->reply->target_nick = target_nick ? g_strdup (target_nick) : NULL;
 	ent->reply->target_preview = target_preview ? g_strdup (target_preview) : NULL;
 
-	ent->extra_lines_above = 1;
+	ent->extra_lines_above = (ent->flags & TEXTENTRY_FLAG_DAY_BOUNDARY) ? 2 : 1;
 
 	if (buf)
 	{

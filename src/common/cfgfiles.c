@@ -421,6 +421,7 @@ const struct prefs vars[] =
 	{"gui_chanlist_maxusers", P_OFFINT (hex_gui_chanlist_maxusers), TYPE_INT},
 	{"gui_chanlist_minusers", P_OFFINT (hex_gui_chanlist_minusers), TYPE_INT},
 	{"gui_compact", P_OFFINT (hex_gui_compact), TYPE_BOOL},
+	{"gui_day_separator", P_OFFINT (hex_gui_day_separator), TYPE_BOOL},
 	{"gui_emoji_sprites", P_OFFINT (hex_gui_emoji_sprites), TYPE_BOOL},
 	{"gui_dialog_height", P_OFFINT (hex_gui_dialog_height), TYPE_INT},
 	{"gui_dialog_left", P_OFFINT (hex_gui_dialog_left), TYPE_INT},
@@ -781,6 +782,7 @@ load_default_config(void)
 	prefs.hex_gui_autoopen_dialog = 1;
 	prefs.hex_gui_autoopen_recv = 1;
 	prefs.hex_gui_autoopen_send = 1;
+	prefs.hex_gui_day_separator = 1;
 	prefs.hex_gui_emoji_sprites = 1;
 #ifdef HAVE_GTK_MAC
 	prefs.hex_gui_hide_menu = 1;

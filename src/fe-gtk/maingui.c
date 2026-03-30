@@ -4251,6 +4251,7 @@ mg_apply_setup (void)
 		if (sess->res->tab)
 			chan_set_color (sess->res->tab, plain_list);
 		gtk_xtext_set_time_stamp (sess->res->buffer, prefs.hex_stamp_text);
+		gtk_xtext_recalc_day_boundaries ((xtext_buffer *)sess->res->buffer);
 		((xtext_buffer *)sess->res->buffer)->needs_recalc = TRUE;
 		if (!sess->gui->is_tab || !done_main)
 		{
