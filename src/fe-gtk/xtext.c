@@ -2017,6 +2017,7 @@ gtk_xtext_leave_hover (GtkXText *xtext)
 		xtext->hover_ent = NULL;
 		xtext->hover_reply_target = NULL;
 		xtext->hover_btn_size = 0;
+		gtk_widget_set_tooltip_text (GTK_WIDGET (xtext), NULL);
 		gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	}
 }
@@ -2214,6 +2215,43 @@ gtk_xtext_motion_notify (GtkEventControllerMotion *controller, double event_x, d
 			xtext->hover_ent = new_hover;
 			xtext->hover_reply_target = new_reply_target;
 			gtk_widget_queue_draw (widget);
+
+			/* Update hover timestamp tooltip */
+			if (new_hover && new_hover->stamp)
+			{
+				char tip[256];
+				time_t now = time (NULL);
+				time_t diff = now - new_hover->stamp;
+
+				if (diff < 60)
+					g_snprintf (tip, sizeof (tip), _("Just now"));
+				else if (diff < 3600)
+					g_snprintf (tip, sizeof (tip),
+						ngettext ("%d minute ago", "%d minutes ago", (int)(diff / 60)),
+						(int)(diff / 60));
+				else if (diff < 86400)
+					g_snprintf (tip, sizeof (tip),
+						ngettext ("%d hour ago", "%d hours ago", (int)(diff / 3600)),
+						(int)(diff / 3600));
+				else
+				{
+					struct tm tm_info;
+#ifdef WIN32
+					localtime_s (&tm_info, &new_hover->stamp);
+#else
+					localtime_r (&new_hover->stamp, &tm_info);
+#endif
+					if (diff < 172800)
+						strftime (tip, sizeof (tip), _("Yesterday at %H:%M"), &tm_info);
+					else if (diff < 604800)
+						strftime (tip, sizeof (tip), "%A at %H:%M", &tm_info);
+					else
+						strftime (tip, sizeof (tip), "%B %d, %Y at %H:%M", &tm_info);
+				}
+				gtk_widget_set_tooltip_text (widget, tip);
+			}
+			else
+				gtk_widget_set_tooltip_text (widget, NULL);
 		}
 	}
 
