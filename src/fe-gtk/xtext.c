@@ -5165,11 +5165,16 @@ gtk_xtext_calc_lines_virtual (xtext_buffer *buf, int fire_signal)
 			buf->avg_lines_per_entry = 0.9 * buf->avg_lines_per_entry + 0.1 * new_avg;
 	}
 
-	/* Estimate lines above and below materialized window */
+	/* Estimate lines above and below materialized window.
+	 * Use exact 0 for entries_after when at the end of the buffer
+	 * to prevent the bottom from "running away" due to estimate drift. */
 	buf->lines_before_mat = (int)(buf->mat_first_index * buf->avg_lines_per_entry);
 	{
 		int entries_after = buf->total_entries - buf->mat_first_index - buf->mat_count;
-		int lines_after = (int)(entries_after * buf->avg_lines_per_entry);
+		if (entries_after < 0)
+			entries_after = 0;
+		int lines_after = (entries_after == 0) ? 0
+			: (int)(entries_after * buf->avg_lines_per_entry);
 		buf->num_lines = buf->lines_before_mat + buf->lines_mat + lines_after;
 	}
 
@@ -7428,6 +7433,17 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	new_lines = ENT_DISPLAY_LINES (ent);
 	buf->num_lines += new_lines;
 
+	/* Virtual mode bookkeeping */
+	if (buf->virtual_mode)
+	{
+		buf->total_entries++;
+		buf->mat_count++;
+		buf->lines_mat += new_lines;
+		/* If inserted at head, the materialized window shifted down */
+		if (ent == buf->text_first)
+			buf->mat_first_index = (buf->mat_first_index > 0) ? buf->mat_first_index - 1 : 0;
+	}
+
 	/* Adjust scroll position if we inserted before current view */
 	if (inserted_before_pagetop)
 	{
@@ -8445,6 +8461,9 @@ gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
 	/* Ensure entry_id counter is above max DB rowid to avoid collisions */
 	if (max_rowid > 0 && buf->next_entry_id <= (guint64)max_rowid)
 		buf->next_entry_id = (guint64)max_rowid + 1;
+
+	/* Compute initial line estimates so the scrollbar reflects total history */
+	gtk_xtext_calc_lines_virtual (buf, TRUE);
 }
 
 /* Virtual scrollback (Phase 3): create a textentry from a DB record.
