@@ -5980,6 +5980,11 @@ handle_multiline_batch (session *sess, char **lines, int n_lines)
 			g_string_append_c (combined, '\n');
 			g_string_append (combined, lines[i]);
 		}
+		/* Set pending msgid so scrollback_save captures it for later confirmation */
+		g_free (sess->current_msgid);
+		sess->current_msgid = serv->last_sent_label
+			? g_strdup_printf ("pending:%s", serv->last_sent_label) : NULL;
+
 		fe_begin_multiline_group (sess);
 		inbound_chanmsg (serv, sess, sess->channel, serv->nick,
 		                 combined->str, TRUE, FALSE, &no_tags);
