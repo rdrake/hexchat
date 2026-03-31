@@ -57,6 +57,13 @@ struct scrollback_db {
 	sqlite3_stmt *stmt_update_pending;
 	sqlite3_stmt *stmt_redact;
 
+	/* Virtual scrollback support */
+	sqlite3_stmt *stmt_count;
+	sqlite3_stmt *stmt_load_range;
+	sqlite3_stmt *stmt_max_rowid;
+	sqlite3_stmt *stmt_index_of_rowid;
+	sqlite3_stmt *stmt_search_text;
+
 	/* Channel name normalization */
 	sqlite3_stmt *stmt_channel_insert;
 	sqlite3_stmt *stmt_channel_lookup;
@@ -380,6 +387,38 @@ prepare_statements (scrollback_db *sdb)
 		-1, &sdb->stmt_redact, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
+	/* Virtual scrollback: total message count */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT COUNT(*) FROM messages WHERE channel_id = ?",
+		-1, &sdb->stmt_count, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Virtual scrollback: load a window of entries by position */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT id, timestamp, msgid, text, redacted_by, redact_reason, redact_time "
+		"FROM messages WHERE channel_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?",
+		-1, &sdb->stmt_load_range, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Virtual scrollback: maximum row ID for a channel */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT MAX(id) FROM messages WHERE channel_id = ?",
+		-1, &sdb->stmt_max_rowid, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Virtual scrollback: positional index of a specific row ID */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT COUNT(*) FROM messages WHERE channel_id = ? AND id < ?",
+		-1, &sdb->stmt_index_of_rowid, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
+	/* Virtual scrollback: search message text */
+	rc = sqlite3_prepare_v2 (sdb->db,
+		"SELECT id, text FROM messages WHERE channel_id = ? AND text LIKE ? "
+		"ORDER BY timestamp ASC",
+		-1, &sdb->stmt_search_text, NULL);
+	if (rc != SQLITE_OK) goto fail;
+
 	return TRUE;
 
 fail:
@@ -406,6 +445,11 @@ finalize_statements (scrollback_db *sdb)
 	if (sdb->stmt_load_reply) sqlite3_finalize (sdb->stmt_load_reply);
 	if (sdb->stmt_update_pending) sqlite3_finalize (sdb->stmt_update_pending);
 	if (sdb->stmt_redact) sqlite3_finalize (sdb->stmt_redact);
+	if (sdb->stmt_count) sqlite3_finalize (sdb->stmt_count);
+	if (sdb->stmt_load_range) sqlite3_finalize (sdb->stmt_load_range);
+	if (sdb->stmt_max_rowid) sqlite3_finalize (sdb->stmt_max_rowid);
+	if (sdb->stmt_index_of_rowid) sqlite3_finalize (sdb->stmt_index_of_rowid);
+	if (sdb->stmt_search_text) sqlite3_finalize (sdb->stmt_search_text);
 	if (sdb->channel_id_cache) g_hash_table_destroy (sdb->channel_id_cache);
 }
 
@@ -1107,4 +1151,156 @@ void
 scrollback_reply_list_free (GSList *list)
 {
 	g_slist_free_full (list, (GDestroyNotify)scrollback_reply_free);
+}
+
+/* --- Virtual scrollback query functions --- */
+
+int
+scrollback_count (scrollback_db *db, const char *channel)
+{
+	int count = 0;
+
+	if (!db || !channel)
+		return 0;
+
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return 0;
+
+	sqlite3_reset (db->stmt_count);
+	sqlite3_bind_int64 (db->stmt_count, 1, channel_id);
+
+	if (sqlite3_step (db->stmt_count) == SQLITE_ROW)
+		count = sqlite3_column_int (db->stmt_count, 0);
+
+	return count;
+}
+
+GSList *
+scrollback_load_range (scrollback_db *db, const char *channel, int offset, int limit)
+{
+	GSList *list = NULL;
+	int rc;
+
+	if (!db || !channel)
+		return NULL;
+
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return NULL;
+
+	if (limit <= 0)
+		limit = 500;
+
+	sqlite3_reset (db->stmt_load_range);
+	sqlite3_bind_int64 (db->stmt_load_range, 1, channel_id);
+	sqlite3_bind_int (db->stmt_load_range, 2, limit);
+	sqlite3_bind_int (db->stmt_load_range, 3, offset);
+
+	while ((rc = sqlite3_step (db->stmt_load_range)) == SQLITE_ROW)
+	{
+		scrollback_msg *msg = g_new0 (scrollback_msg, 1);
+
+		msg->id = sqlite3_column_int64 (db->stmt_load_range, 0);
+		msg->channel = g_strdup (channel);
+		msg->timestamp = (time_t)sqlite3_column_int64 (db->stmt_load_range, 1);
+
+		const char *msgid_text = (const char *)sqlite3_column_text (db->stmt_load_range, 2);
+		msg->msgid = msgid_text ? g_strdup (msgid_text) : NULL;
+
+		msg->text = g_strdup ((const char *)sqlite3_column_text (db->stmt_load_range, 3));
+
+		{
+			const char *rby = (const char *)sqlite3_column_text (db->stmt_load_range, 4);
+			const char *rreason = (const char *)sqlite3_column_text (db->stmt_load_range, 5);
+			msg->redacted_by = rby ? g_strdup (rby) : NULL;
+			msg->redact_reason = rreason ? g_strdup (rreason) : NULL;
+			msg->redact_time = (time_t)sqlite3_column_int64 (db->stmt_load_range, 6);
+		}
+
+		/* ASC order — append to maintain chronological order */
+		list = g_slist_prepend (list, msg);
+	}
+
+	if (rc != SQLITE_DONE)
+		g_warning ("Error loading scrollback range: %s", sqlite3_errmsg (db->db));
+
+	return g_slist_reverse (list);
+}
+
+gint64
+scrollback_get_max_rowid (scrollback_db *db, const char *channel)
+{
+	gint64 max_id = 0;
+
+	if (!db || !channel)
+		return 0;
+
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return 0;
+
+	sqlite3_reset (db->stmt_max_rowid);
+	sqlite3_bind_int64 (db->stmt_max_rowid, 1, channel_id);
+
+	if (sqlite3_step (db->stmt_max_rowid) == SQLITE_ROW)
+		max_id = sqlite3_column_int64 (db->stmt_max_rowid, 0);
+
+	return max_id;
+}
+
+int
+scrollback_get_index_of_rowid (scrollback_db *db, const char *channel, gint64 rowid)
+{
+	int index = 0;
+
+	if (!db || !channel)
+		return 0;
+
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return 0;
+
+	sqlite3_reset (db->stmt_index_of_rowid);
+	sqlite3_bind_int64 (db->stmt_index_of_rowid, 1, channel_id);
+	sqlite3_bind_int64 (db->stmt_index_of_rowid, 2, rowid);
+
+	if (sqlite3_step (db->stmt_index_of_rowid) == SQLITE_ROW)
+		index = sqlite3_column_int (db->stmt_index_of_rowid, 0);
+
+	return index;
+}
+
+GSList *
+scrollback_search_text (scrollback_db *db, const char *channel, const char *pattern)
+{
+	GSList *list = NULL;
+	int rc;
+
+	if (!db || !channel || !pattern)
+		return NULL;
+
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return NULL;
+
+	sqlite3_reset (db->stmt_search_text);
+	sqlite3_bind_int64 (db->stmt_search_text, 1, channel_id);
+	sqlite3_bind_text (db->stmt_search_text, 2, pattern, -1, SQLITE_TRANSIENT);
+
+	while ((rc = sqlite3_step (db->stmt_search_text)) == SQLITE_ROW)
+	{
+		scrollback_msg *msg = g_new0 (scrollback_msg, 1);
+
+		msg->id = sqlite3_column_int64 (db->stmt_search_text, 0);
+		msg->channel = g_strdup (channel);
+		msg->text = g_strdup ((const char *)sqlite3_column_text (db->stmt_search_text, 1));
+
+		list = g_slist_prepend (list, msg);
+	}
+
+	if (rc != SQLITE_DONE)
+		g_warning ("Error searching scrollback: %s", sqlite3_errmsg (db->db));
+
+	return g_slist_reverse (list);
 }

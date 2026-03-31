@@ -224,6 +224,63 @@ GSList *scrollback_load_replies (scrollback_db *db, const char *channel);
 void scrollback_reply_free (scrollback_reply *r);
 void scrollback_reply_list_free (GSList *list);
 
+/* --- Virtual scrollback query functions --- */
+
+/**
+ * Get total message count for a channel.
+ *
+ * @param db Database handle
+ * @param channel Channel/query name
+ * @return Total message count, or 0 on error
+ */
+int scrollback_count (scrollback_db *db, const char *channel);
+
+/**
+ * Load a window of messages by position (offset/limit).
+ * Returns messages in chronological order (oldest first).
+ *
+ * @param db Database handle
+ * @param channel Channel/query name
+ * @param offset 0-based starting position
+ * @param limit Maximum messages to load
+ * @return GSList of scrollback_msg* (caller must free with scrollback_msg_list_free)
+ */
+GSList *scrollback_load_range (scrollback_db *db, const char *channel,
+                               int offset, int limit);
+
+/**
+ * Get the maximum message row ID for a channel.
+ *
+ * @param db Database handle
+ * @param channel Channel/query name
+ * @return Max row ID, or 0 if no messages
+ */
+gint64 scrollback_get_max_rowid (scrollback_db *db, const char *channel);
+
+/**
+ * Get the 0-based positional index of a specific row ID in a channel.
+ *
+ * @param db Database handle
+ * @param channel Channel/query name
+ * @param rowid Row ID to look up
+ * @return 0-based index of the entry
+ */
+int scrollback_get_index_of_rowid (scrollback_db *db, const char *channel,
+                                    gint64 rowid);
+
+/**
+ * Search message text using SQL LIKE pattern.
+ * Returns matching messages in chronological order.
+ * Only id, channel, and text fields are populated in the results.
+ *
+ * @param db Database handle
+ * @param channel Channel/query name
+ * @param pattern SQL LIKE pattern (e.g., "%search term%")
+ * @return GSList of scrollback_msg* (caller must free with scrollback_msg_list_free)
+ */
+GSList *scrollback_search_text (scrollback_db *db, const char *channel,
+                                const char *pattern);
+
 /**
  * Initialize the scrollback subsystem.
  * Called once at startup.
