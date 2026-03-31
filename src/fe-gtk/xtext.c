@@ -7239,6 +7239,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	ent->msgid = NULL;
 	ent->entry_id = buf->next_entry_id++;
+	ent->group_id = buf->current_group_id;
 	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
 
 	/* Phase 4: entry modification support */
