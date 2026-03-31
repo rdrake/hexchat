@@ -336,6 +336,17 @@ scrollback_load (session *sess)
 		fe_scrollback_extras_done (sess);
 	}
 
+	/* Enable virtual scrollback paging for channels with enough history */
+	if (lines > 0)
+	{
+		int total = scrollback_count (db, sess->channel);
+		if (total > lines)
+		{
+			gint64 max_id = scrollback_get_max_rowid (db, sess->channel);
+			fe_scrollback_set_virtual (sess, db, sess->channel, total, max_id);
+		}
+	}
+
 	if (lines)
 	{
 		char *text = ctime (&newest_time);

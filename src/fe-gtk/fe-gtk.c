@@ -2476,3 +2476,16 @@ fe_scrollback_extras_done (session *sess)
 	 * This corrects num_lines and scroll position after bulk attachment. */
 	gtk_xtext_calc_lines (xtext->buffer, FALSE);
 }
+
+void
+fe_scrollback_set_virtual (session *sess, void *db, const char *channel,
+                           int total_entries, gint64 max_rowid)
+{
+	GtkXText *xtext;
+
+	if (!sess || !sess->gui || !sess->gui->xtext)
+		return;
+
+	xtext = GTK_XTEXT (sess->gui->xtext);
+	gtk_xtext_buffer_set_virtual (xtext->buffer, db, channel, total_entries, max_rowid);
+}

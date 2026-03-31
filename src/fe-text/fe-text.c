@@ -967,5 +967,7 @@ void fe_reply_context_set (struct session *sess, const char *reply_msgid) {}
 void fe_reply_state_changed (struct session *sess) {}
 void fe_scrollback_reply_attach (struct session *sess, const char *entry_msgid, const char *target_msgid, const char *target_nick, const char *target_preview) {}
 void fe_scrollback_extras_done (struct session *sess) {}
+void fe_scrollback_set_virtual (struct session *sess, void *db, const char *channel,
+                                int total_entries, gint64 max_rowid) {}
 void fe_begin_multiline_group (struct session *sess) {}
 void fe_end_multiline_group (struct session *sess) {}

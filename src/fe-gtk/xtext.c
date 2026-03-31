@@ -24,6 +24,7 @@
 #define GDK_MULTIHEAD_SAFE
 #define MARGIN 2						/* dont touch. */
 #define REFRESH_TIMEOUT 20
+#define VIRT_PAGE_SIZE 100				/* entries to keep beyond viewport as eviction buffer */
 
 /* Total line count for an entry: text sublines + extra lines for reply context / reaction badges */
 #define ENT_TOTAL_LINES(ent) \
@@ -68,6 +69,7 @@
 #include "xtext-emoji.h"
 #include "fkeys.h"
 #include "gtk-helpers.h"
+#include "../common/scrollback.h"	/* Virtual scrollback (Phase 3): scrollback_msg, scrollback_load_range */
 
 #define charlen(str) g_utf8_skip[*(guchar *)(str)]
 
@@ -212,6 +214,8 @@ static void gtk_xtext_draw_status_strip (GtkXText *xtext, int width, int height)
 static void gtk_xtext_draw_toasts (GtkXText *xtext, int width, int height);
 static gboolean gtk_xtext_toast_tick (gpointer data);
 static int gtk_xtext_measure_reaction_badges (GtkXText *xtext, struct xtext_reactions_info *ri, int win_width);
+static void gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius);
+static int gtk_xtext_lines_taken (xtext_buffer *buf, textentry *ent);
 /* static char *gtk_xtext_conv_color (unsigned char *text, int len, int *newlen); */
 /* For use by gtk_xtext_strip_color() and its callers -- */
 struct offlen_s {
@@ -748,6 +752,33 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			/* User scrolled away from top - cancel pending request */
 			g_source_remove (xtext->scroll_top_debounce_tag);
 			xtext->scroll_top_debounce_tag = 0;
+		}
+
+		/* Virtual scrollback (Phase 3): ensure entries around viewport are loaded */
+		if (xtext->buffer->virtual_mode && xtext->buffer->avg_lines_per_entry > 0)
+		{
+			int scroll_line = (int) value;
+			int idx;
+
+			if (scroll_line <= xtext->buffer->lines_before_mat)
+				idx = (int)(scroll_line / xtext->buffer->avg_lines_per_entry);
+			else
+				idx = xtext->buffer->mat_first_index +
+				      (int)((scroll_line - xtext->buffer->lines_before_mat) /
+				            xtext->buffer->avg_lines_per_entry);
+
+			if (idx < 0)
+				idx = 0;
+			if (idx >= xtext->buffer->total_entries)
+				idx = xtext->buffer->total_entries - 1;
+
+			{
+				int radius = (int)(page_size * 2 / xtext->buffer->avg_lines_per_entry);
+				if (radius < VIRT_PAGE_SIZE)
+					radius = VIRT_PAGE_SIZE;
+
+				gtk_xtext_virt_ensure_range (xtext->buffer, idx, radius);
+			}
 		}
 
 		if (value + 1 == xtext->buffer->old_value ||
@@ -5192,6 +5223,27 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 	int lines = 0;
 	textentry *ent;
 
+	/* Virtual scrollback (Phase 3): if target line is outside materialized window,
+	 * trigger materialization so the entries exist in the linked list. */
+	if (xtext->buffer->virtual_mode && xtext->buffer->avg_lines_per_entry > 0)
+	{
+		if (line < xtext->buffer->lines_before_mat ||
+		    line >= xtext->buffer->lines_before_mat + xtext->buffer->lines_mat)
+		{
+			int idx = (int)(line / xtext->buffer->avg_lines_per_entry);
+			if (idx < 0)
+				idx = 0;
+			if (idx >= xtext->buffer->total_entries)
+				idx = xtext->buffer->total_entries - 1;
+			gtk_xtext_virt_ensure_range (xtext->buffer, idx, VIRT_PAGE_SIZE);
+		}
+
+		/* Adjust line number to be relative to materialized window */
+		line -= xtext->buffer->lines_before_mat;
+		if (line < 0)
+			line = 0;
+	}
+
 	ent = xtext->buffer->text_first;
 
 	/* -- optimization -- try to make a short-cut using the pagetop ent */
@@ -6210,6 +6262,14 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 	ent = buffer->text_first;
 	if (!ent)
 		return;
+
+	/* Virtual scrollback (Phase 3): evicting from linked list, not deleting from DB */
+	if (buffer->virtual_mode)
+	{
+		buffer->mat_first_index++;
+		buffer->mat_count--;
+	}
+
 	{
 		int ent_lines = ENT_DISPLAY_LINES (ent);
 		buffer->num_lines -= ent_lines;
@@ -6952,6 +7012,13 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	else
 	{
 		buf->num_lines += 1 + ent->extra_lines_above;  /* placeholder — real count deferred to first allocation */
+	}
+
+	/* Virtual scrollback (Phase 3): new entry appended at the end */
+	if (buf->virtual_mode)
+	{
+		buf->total_entries++;
+		buf->mat_count++;
 	}
 
 	/* Local auto-advance: move marker to newest unread message when window is
@@ -8378,6 +8445,416 @@ gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
 	/* Ensure entry_id counter is above max DB rowid to avoid collisions */
 	if (max_rowid > 0 && buf->next_entry_id <= (guint64)max_rowid)
 		buf->next_entry_id = (guint64)max_rowid + 1;
+}
+
+/* Virtual scrollback (Phase 3): create a textentry from a DB record.
+ * Returns an unlinked entry — caller must link it into the list.
+ * The entry uses the DB rowid as its entry_id for stability. */
+
+static textentry *
+gtk_xtext_virt_materialize_msg (xtext_buffer *buf, scrollback_msg *msg)
+{
+	textentry *ent;
+	unsigned char *str;
+	int text_len, left_len;
+	const char *tab;
+	int left_width;
+
+	if (!msg->text || !msg->text[0] || !buf->xtext)
+		return NULL;
+
+	text_len = (int)strlen (msg->text);
+
+	/* Find the \t separator between nick and message text */
+	tab = strchr (msg->text, '\t');
+	if (tab)
+		left_len = (int)(tab - msg->text);
+	else
+		left_len = -1;
+
+	/* Allocate entry + string in one block (same layout as append_indent) */
+	if (left_len >= 0)
+	{
+		/* indent mode: left_text + ' ' + right_text */
+		int right_len = text_len - left_len - 1;	/* skip the \t */
+		if (right_len < 0) right_len = 0;
+
+		ent = g_malloc0 (left_len + right_len + 2 + sizeof (textentry));
+		str = (unsigned char *) ent + sizeof (textentry);
+
+		if (left_len > 0)
+			memcpy (str, msg->text, left_len);
+		str[left_len] = ' ';
+		if (right_len > 0)
+			memcpy (str + left_len + 1, msg->text + left_len + 1, right_len);
+		str[left_len + 1 + right_len] = 0;
+
+		ent->str = str;
+		ent->str_len = left_len + 1 + right_len;
+		ent->left_len = left_len;
+	}
+	else
+	{
+		/* no indent (no \t found) */
+		ent = g_malloc0 (text_len + 1 + sizeof (textentry));
+		str = (unsigned char *) ent + sizeof (textentry);
+		memcpy (str, msg->text, text_len);
+		str[text_len] = 0;
+
+		ent->str = str;
+		ent->str_len = text_len;
+		ent->left_len = -1;
+	}
+
+	/* Core fields */
+	ent->stamp = msg->timestamp;
+	ent->next = NULL;
+	ent->prev = NULL;
+	ent->slp = NULL;
+	ent->mark_start = -1;
+	ent->mark_end = -1;
+	ent->marks = NULL;
+	ent->state = XTEXT_STATE_NORMAL;
+	ent->flags = 0;
+	ent->redaction = NULL;
+	ent->reactions = NULL;
+	ent->reply = NULL;
+	ent->extra_lines_above = 0;
+	ent->extra_lines_below = 0;
+	ent->collapsed = 0;
+	ent->collapsible = 0;
+
+	/* We don't like tabs in the display string */
+	{
+		int i;
+		for (i = 0; i < ent->str_len; i++)
+			if (ent->str[i] == '\t')
+				ent->str[i] = ' ';
+	}
+
+	/* Compute text widths */
+	ent->str_width = gtk_xtext_text_width_ent (buf->xtext, ent);
+
+	/* Compute indent (mirror append_indent, but skip auto-adjust to avoid jitter) */
+	if (left_len >= 0 && buf->xtext->auto_indent)
+	{
+		left_width = gtk_xtext_text_width (buf->xtext, (unsigned char *)msg->text, left_len);
+		ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
+	}
+	else if (left_len >= 0)
+	{
+		ent->indent = buf->time_stamp ? buf->xtext->stamp_width : MARGIN;
+	}
+	else
+	{
+		ent->indent = 0;
+	}
+	if (ent->indent < MARGIN)
+		ent->indent = MARGIN;
+
+	/* Parse format spans, stripped text, emoji placeholders */
+	{
+		unsigned char *stripped;
+		int stripped_len, span_count, emoji_count;
+		xtext_fmt_span *spans;
+		xtext_emoji_info *emojis;
+		guint16 *r2s;
+
+		xtext_parse_formats (ent->str, ent->str_len,
+		                     &stripped, &stripped_len,
+		                     &spans, &span_count,
+		                     &emojis, &emoji_count,
+		                     &r2s,
+		                     buf->xtext->emoji_cache != NULL);
+		ent->stripped_str = stripped;
+		ent->stripped_len = (guint16) stripped_len;
+		ent->fmt_spans = spans;
+		ent->fmt_span_count = (guint16) span_count;
+		ent->emoji_list = emojis;
+		ent->emoji_count = (guint16) emoji_count;
+		ent->raw_to_stripped_map = r2s;
+	}
+
+	/* Use DB rowid as entry_id for stability across materialization cycles */
+	ent->entry_id = (guint64) msg->id;
+	ent->group_id = 0;
+	ent->msgid = NULL;
+	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
+
+	/* Register msgid if present */
+	if (msg->msgid && msg->msgid[0])
+		gtk_xtext_set_msgid (buf, ent, msg->msgid);
+
+	/* Compute sublines */
+	ent->sublines = NULL;
+	if (buf->window_width > 0)
+		gtk_xtext_lines_taken (buf, ent);
+
+	return ent;
+}
+
+/* Virtual scrollback (Phase 3): evict an entry from head or tail.
+ * Unlinks it from the list and frees it. Does NOT update mat_count/mat_first_index. */
+
+static void
+gtk_xtext_virt_evict_head (xtext_buffer *buf)
+{
+	textentry *ent = buf->text_first;
+	if (!ent)
+		return;
+
+	buf->text_first = ent->next;
+	if (buf->text_first)
+	{
+		buf->text_first->prev = NULL;
+		/* Remove stale day boundary on new head */
+		if (buf->text_first->flags & TEXTENTRY_FLAG_DAY_BOUNDARY)
+		{
+			buf->text_first->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
+			buf->text_first->extra_lines_above--;
+		}
+	}
+	else
+		buf->text_last = NULL;
+
+	gtk_xtext_kill_ent (buf, ent);
+}
+
+static void
+gtk_xtext_virt_evict_tail (xtext_buffer *buf)
+{
+	textentry *ent = buf->text_last;
+	if (!ent)
+		return;
+
+	buf->text_last = ent->prev;
+	if (buf->text_last)
+		buf->text_last->next = NULL;
+	else
+		buf->text_first = NULL;
+
+	gtk_xtext_kill_ent (buf, ent);
+}
+
+/* Virtual scrollback (Phase 3): load/evict entries to maintain a window
+ * of materialized entries around the given center_index. */
+
+static void
+gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
+{
+	int want_start, want_end;
+	int mat_start, mat_end;
+	scrollback_db *db;
+
+	if (!buf->virtual_mode || !buf->virt_db || !buf->virt_channel)
+		return;
+
+	db = (scrollback_db *) buf->virt_db;
+
+	/* Clamp desired range */
+	want_start = center_index - radius;
+	if (want_start < 0)
+		want_start = 0;
+	want_end = center_index + radius;
+	if (want_end >= buf->total_entries)
+		want_end = buf->total_entries - 1;
+
+	if (want_end < want_start)
+		return;
+
+	mat_start = buf->mat_first_index;
+	mat_end = buf->mat_first_index + buf->mat_count - 1;
+
+	/* Prepend: load entries before current materialized window.
+	 * Build a local chain (oldest→newest) then splice at head. */
+	if (want_start < mat_start)
+	{
+		int count = mat_start - want_start;
+		GSList *msgs = scrollback_load_range (db, buf->virt_channel, want_start, count);
+		GSList *iter;
+		textentry *chain_first = NULL, *chain_last = NULL;
+		int loaded = 0;
+
+		/* Build chain in chronological order (oldest first) */
+		for (iter = msgs; iter; iter = iter->next)
+		{
+			scrollback_msg *msg = iter->data;
+			textentry *ent = gtk_xtext_virt_materialize_msg (buf, msg);
+			if (!ent)
+				continue;
+
+			ent->prev = chain_last;
+			ent->next = NULL;
+			if (chain_last)
+				chain_last->next = ent;
+			else
+				chain_first = ent;
+			chain_last = ent;
+			loaded++;
+		}
+
+		/* Splice chain at head of buffer's linked list */
+		if (chain_first)
+		{
+			if (buf->text_first)
+			{
+				chain_last->next = buf->text_first;
+				buf->text_first->prev = chain_last;
+			}
+			else
+			{
+				buf->text_last = chain_last;
+			}
+			buf->text_first = chain_first;
+		}
+
+		buf->mat_first_index = want_start;
+		buf->mat_count += loaded;
+		scrollback_msg_list_free (msgs);
+
+		/* Fix day boundaries for newly prepended entries and the join point */
+		{
+			textentry *e;
+			int checked = 0;
+			for (e = buf->text_first; e && checked < loaded + 1; e = e->next, checked++)
+			{
+				gboolean was = (e->flags & TEXTENTRY_FLAG_DAY_BOUNDARY) != 0;
+				gboolean should = prefs.hex_gui_day_separator && e->prev &&
+				                   e->stamp > 0 && e->prev->stamp > 0 &&
+				                   xtext_is_different_day (e->prev->stamp, e->stamp);
+				if (should && !was)
+				{
+					e->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
+					e->extra_lines_above++;
+				}
+				else if (!should && was)
+				{
+					e->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
+					e->extra_lines_above--;
+				}
+			}
+		}
+	}
+
+	/* Append: load entries after current materialized window */
+	if (want_end > mat_end && buf->mat_count > 0)
+	{
+		int count = want_end - mat_end;
+		GSList *msgs = scrollback_load_range (db, buf->virt_channel, mat_end + 1, count);
+		GSList *iter;
+		int loaded = 0;
+
+		for (iter = msgs; iter; iter = iter->next)
+		{
+			scrollback_msg *msg = iter->data;
+			textentry *ent = gtk_xtext_virt_materialize_msg (buf, msg);
+			if (!ent)
+				continue;
+
+			/* Link at tail */
+			ent->prev = buf->text_last;
+			ent->next = NULL;
+			if (buf->text_last)
+				buf->text_last->next = ent;
+			else
+				buf->text_first = ent;
+			buf->text_last = ent;
+
+			/* Day boundary */
+			if (prefs.hex_gui_day_separator && ent->prev &&
+			    ent->stamp > 0 && ent->prev->stamp > 0 &&
+			    xtext_is_different_day (ent->prev->stamp, ent->stamp))
+			{
+				ent->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
+				ent->extra_lines_above++;
+			}
+			loaded++;
+		}
+
+		buf->mat_count += loaded;
+		scrollback_msg_list_free (msgs);
+	}
+	else if (want_end > mat_end && buf->mat_count == 0)
+	{
+		/* Nothing materialized yet — initial load */
+		int count = want_end - want_start + 1;
+		GSList *msgs = scrollback_load_range (db, buf->virt_channel, want_start, count);
+		GSList *iter;
+
+		buf->mat_first_index = want_start;
+
+		for (iter = msgs; iter; iter = iter->next)
+		{
+			scrollback_msg *msg = iter->data;
+			textentry *ent = gtk_xtext_virt_materialize_msg (buf, msg);
+			if (!ent)
+				continue;
+
+			/* Link at tail */
+			ent->prev = buf->text_last;
+			ent->next = NULL;
+			if (buf->text_last)
+				buf->text_last->next = ent;
+			else
+				buf->text_first = ent;
+			buf->text_last = ent;
+
+			/* Day boundary */
+			if (prefs.hex_gui_day_separator && ent->prev &&
+			    ent->stamp > 0 && ent->prev->stamp > 0 &&
+			    xtext_is_different_day (ent->prev->stamp, ent->stamp))
+			{
+				ent->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
+				ent->extra_lines_above++;
+			}
+
+			buf->mat_count++;
+		}
+
+		scrollback_msg_list_free (msgs);
+	}
+
+	/* Evict from head if too far behind desired window */
+	while (buf->mat_first_index < want_start - VIRT_PAGE_SIZE && buf->mat_count > 1)
+	{
+		/* Don't evict selection-pinned entries */
+		if (buf->text_first && buf->sel_pin_start_id != 0 &&
+		    buf->text_first->entry_id == buf->sel_pin_start_id)
+			break;
+
+		gtk_xtext_virt_evict_head (buf);
+		buf->mat_first_index++;
+		buf->mat_count--;
+	}
+
+	/* Evict from tail if too far ahead of desired window */
+	{
+		int cur_mat_end = buf->mat_first_index + buf->mat_count - 1;
+		while (cur_mat_end > want_end + VIRT_PAGE_SIZE && buf->mat_count > 1)
+		{
+			/* Don't evict selection-pinned entries */
+			if (buf->text_last && buf->sel_pin_end_id != 0 &&
+			    buf->text_last->entry_id == buf->sel_pin_end_id)
+				break;
+
+			gtk_xtext_virt_evict_tail (buf);
+			buf->mat_count--;
+			cur_mat_end--;
+		}
+	}
+
+	/* Recalculate line counts for the virtual buffer.
+	 * Block the value-changed handler to prevent re-entrancy from adjustment_changed. */
+	if (buf->xtext && buf->xtext->vc_signal_tag)
+	{
+		g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+		gtk_xtext_calc_lines_virtual (buf, TRUE);
+		g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+	}
+	else
+	{
+		gtk_xtext_calc_lines_virtual (buf, FALSE);
+	}
 }
 
 /* IRCv3 modernization: entry lookup functions (Phase 1) */
