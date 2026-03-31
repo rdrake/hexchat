@@ -4918,6 +4918,9 @@ gtk_xtext_recalc_widths (xtext_buffer *buf, int do_str_width)
 {
 	textentry *ent;
 
+	/* In virtual mode, only materialized entries are in the linked list,
+	 * so this naturally only processes the visible window. */
+
 	/* since we have a new font, we have to recalc the text widths */
 	ent = buf->text_first;
 	while (ent)
@@ -5103,6 +5106,49 @@ gtk_xtext_recalc_day_boundaries (xtext_buffer *buf)
 /* Calculate number of actual lines (with wraps), to set adj->lower. *
  * This should only be called when the window resizes.               */
 
+static void
+gtk_xtext_calc_lines_virtual (xtext_buffer *buf, int fire_signal)
+{
+	textentry *ent;
+	int lines = 0;
+	int count = 0;
+
+	/* Walk materialized entries using ENT_DISPLAY_LINES */
+	for (ent = buf->text_first; ent; ent = ent->next)
+	{
+		gtk_xtext_lines_taken (buf, ent);	/* recompute sublines */
+		lines += ENT_DISPLAY_LINES (ent);
+		count++;
+	}
+
+	buf->lines_mat = lines;
+	buf->mat_count = count;
+
+	/* Update running average */
+	if (count > 0)
+	{
+		double new_avg = (double)lines / count;
+		if (buf->avg_lines_per_entry <= 0)
+			buf->avg_lines_per_entry = new_avg;
+		else
+			buf->avg_lines_per_entry = 0.9 * buf->avg_lines_per_entry + 0.1 * new_avg;
+	}
+
+	/* Estimate lines above and below materialized window */
+	buf->lines_before_mat = (int)(buf->mat_first_index * buf->avg_lines_per_entry);
+	{
+		int entries_after = buf->total_entries - buf->mat_first_index - buf->mat_count;
+		int lines_after = (int)(entries_after * buf->avg_lines_per_entry);
+		buf->num_lines = buf->lines_before_mat + buf->lines_mat + lines_after;
+	}
+
+	if (buf->num_lines < 1)
+		buf->num_lines = 1;
+
+	buf->pagetop_ent = NULL;
+	gtk_xtext_adjustment_set (buf, fire_signal);
+}
+
 void
 gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal)
 {
@@ -5110,6 +5156,12 @@ gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal)
 	int width;
 	int height;
 	int lines;
+
+	if (buf->virtual_mode)
+	{
+		gtk_xtext_calc_lines_virtual (buf, fire_signal);
+		return;
+	}
 
 	height = gtk_widget_get_height (GTK_WIDGET (buf->xtext));
 	width = buf->window_width;
@@ -8288,7 +8340,43 @@ gtk_xtext_buffer_free (xtext_buffer *buf)
 	if (buf->entries_by_id)
 		g_hash_table_destroy (buf->entries_by_id);
 
+	/* Virtual scrollback (Phase 2) */
+	g_free (buf->virt_channel);
+	buf->virt_channel = NULL;
+	buf->virt_db = NULL;	/* borrowed pointer, don't free */
+
 	g_free (buf);
+}
+
+/* Virtual scrollback (Phase 2): configure buffer for virtual mode */
+
+void
+gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
+                               int total_entries, gint64 max_rowid)
+{
+	buf->virtual_mode = TRUE;
+	buf->virt_db = db;
+	buf->virt_channel = g_strdup (channel);
+	buf->total_entries = total_entries;
+	buf->avg_lines_per_entry = 1.5;		/* initial estimate */
+
+	/* Count currently loaded entries */
+	{
+		textentry *ent;
+		int count = 0;
+		for (ent = buf->text_first; ent; ent = ent->next)
+			count++;
+		buf->mat_count = count;
+	}
+
+	/* Loaded entries are the newest — they start at this index */
+	buf->mat_first_index = total_entries - buf->mat_count;
+	if (buf->mat_first_index < 0)
+		buf->mat_first_index = 0;
+
+	/* Ensure entry_id counter is above max DB rowid to avoid collisions */
+	if (max_rowid > 0 && buf->next_entry_id <= (guint64)max_rowid)
+		buf->next_entry_id = (guint64)max_rowid + 1;
 }
 
 /* IRCv3 modernization: entry lookup functions (Phase 1) */

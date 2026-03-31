@@ -173,6 +173,22 @@ typedef struct {
 	GHashTable *entries_by_id;		/* entry_id → textentry* for O(1) lookup */
 	guint64 next_entry_id;			/* monotonic counter for generating entry IDs */
 	guint64 current_group_id;		/* non-zero during multiline output; entries inherit this */
+
+	/* Virtual scrollback (Phase 2) */
+	unsigned int virtual_mode:1;	/* TRUE when paging from SQLite */
+	void *virt_db;					/* scrollback_db* (void* to avoid header dependency) */
+	char *virt_channel;				/* channel name for DB queries */
+
+	int total_entries;				/* total messages in DB for this channel */
+	int mat_first_index;			/* 0-based index of text_first in total order */
+	int mat_count;					/* entries currently in linked list */
+
+	double avg_lines_per_entry;		/* running average (uses ENT_DISPLAY_LINES) */
+	int lines_before_mat;			/* estimated lines above text_first */
+	int lines_mat;					/* actual display lines in materialized entries */
+
+	guint64 sel_pin_start_id;		/* entry_id pinned by selection (0=none) */
+	guint64 sel_pin_end_id;
 } xtext_buffer;
 
 typedef struct _xtext_emoji_cache xtext_emoji_cache;
@@ -425,6 +441,10 @@ void gtk_xtext_buffer_free (xtext_buffer *buf);
 void gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render);
 void gtk_xtext_copy_selection (GtkXText *xtext);
 GType gtk_xtext_get_type (void);
+
+/* Virtual scrollback (Phase 2) */
+void gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
+                                    int total_entries, gint64 max_rowid);
 
 /* IRCv3 modernization: entry identification (Phase 1) */
 textentry *gtk_xtext_find_by_msgid (xtext_buffer *buf, const char *msgid);
