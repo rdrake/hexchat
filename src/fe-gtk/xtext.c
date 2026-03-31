@@ -9149,11 +9149,28 @@ gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
 	buf->total_entries++;
 	buf->mat_first_index++;	/* existing indices shifted up by 1 in DB */
 
-	/* Don't inflate lines_before_mat or num_lines with estimates — that
-	 * causes phantom blank space at the bottom.  The absorptive prepend in
-	 * ensure_range will subtract actual line counts when these entries are
-	 * materialized.  Keep lbm, num_lines, and the adjustment untouched so
-	 * the viewport stays exactly where it is. */
+	/* Grow lines_before_mat and num_lines with an estimate so the scrollbar
+	 * extends upward to reflect the new entries.  Only grow adj upper (not
+	 * value) — this extends the scroll range without moving the viewport.
+	 * The ensure_range clamp corrects any residual when all entries above
+	 * are eventually materialized (mat_first_index reaches 0). */
+	{
+		int est = (int)(buf->avg_lines_per_entry + 0.5);
+		if (est < 1) est = 1;
+		buf->lines_before_mat += est;
+		buf->num_lines += est;
+
+		if (buf->xtext && buf->xtext->buffer == buf)
+		{
+			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+			gtk_adjustment_set_upper (buf->xtext->adj,
+				gtk_adjustment_get_upper (buf->xtext->adj) + est);
+			gtk_adjustment_set_value (buf->xtext->adj,
+				gtk_adjustment_get_value (buf->xtext->adj) + est);
+			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+			buf->old_value += est;
+		}
+	}
 	return TRUE;
 }
 

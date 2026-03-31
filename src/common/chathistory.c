@@ -361,6 +361,16 @@ finish_catchup (session *sess)
 {
 	sess->catchup_in_progress = FALSE;
 
+	/* Catch-up sets oldest_msgid to its oldest batch message, which may be
+	 * newer than the DB's oldest.  Reset to the DB's oldest so that
+	 * scroll-to-load BEFORE requests reference the true oldest known message
+	 * rather than fetching history the DB already has. */
+	if (sess->scrollback_oldest_msgid && sess->scrollback_oldest_msgid[0])
+	{
+		g_free (sess->oldest_msgid);
+		sess->oldest_msgid = g_strdup (sess->scrollback_oldest_msgid);
+	}
+
 	fe_reset_scroll_top_backoff (sess);
 
 	chathistory_start_background_fetch (sess);
