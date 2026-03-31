@@ -765,32 +765,64 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			int mat_bot = mat_top + xtext->buffer->lines_mat;
 			int margin = (int) page_size;  /* 1 page buffer before triggering */
 
-			/* Only load if viewport is within margin of mat boundary (or outside it) */
-			if (scroll_line < mat_top + margin ||
-			    scroll_line + (int) page_size > mat_bot - margin ||
-			    xtext->buffer->mat_count == 0)
+			/* Only load if viewport is within margin of mat boundary (or outside it).
+			 * Skip the bottom-edge check when there are no entries beyond the
+			 * materialized window — nothing to load, and the spurious trigger
+			 * causes harmful head eviction that drifts lines_before_mat. */
 			{
-				int idx;
+				int entries_after = xtext->buffer->total_entries -
+					xtext->buffer->mat_first_index - xtext->buffer->mat_count;
+				gboolean near_top = (scroll_line < mat_top + margin);
+				gboolean near_bot = (entries_after > 0 &&
+					scroll_line + (int) page_size > mat_bot - margin);
 
-				if (scroll_line <= mat_top)
-					idx = (int)(scroll_line / xtext->buffer->avg_lines_per_entry);
-				else
-					idx = xtext->buffer->mat_first_index +
-					      (int)((scroll_line - mat_top) /
-					            xtext->buffer->avg_lines_per_entry);
-
-				if (idx < 0)
-					idx = 0;
-				if (idx >= xtext->buffer->total_entries)
-					idx = xtext->buffer->total_entries - 1;
-
+				if (near_top || near_bot || xtext->buffer->mat_count == 0)
 				{
-					int radius = (int)(page_size * 2 / xtext->buffer->avg_lines_per_entry);
-					if (radius < VIRT_PAGE_SIZE)
-						radius = VIRT_PAGE_SIZE;
+					int idx;
 
-					gtk_xtext_virt_ensure_range (xtext->buffer, idx, radius);
+					if (scroll_line <= mat_top)
+						idx = (int)(scroll_line / xtext->buffer->avg_lines_per_entry);
+					else
+						idx = xtext->buffer->mat_first_index +
+							  (int)((scroll_line - mat_top) /
+									xtext->buffer->avg_lines_per_entry);
+
+					if (idx < 0)
+						idx = 0;
+					if (idx >= xtext->buffer->total_entries)
+						idx = xtext->buffer->total_entries - 1;
+
+					{
+						int radius = (int)(page_size * 2 / xtext->buffer->avg_lines_per_entry);
+						if (radius < VIRT_PAGE_SIZE)
+							radius = VIRT_PAGE_SIZE;
+
+						gtk_xtext_virt_ensure_range (xtext->buffer, idx, radius);
+					}
 				}
+			}
+
+			/* ensure_range may have corrected lines_before_mat (e.g., clamped
+			 * to 0 when mat_first_index reached 0), adjusting the adj value.
+			 * Re-read so old_value picks up the correction at the bottom. */
+			value = gtk_adjustment_get_value (xtext->adj);
+
+			/* Re-check scroll-to-top after ensure_range.  In virtual mode,
+			 * once mat_first_index reaches 0 and the user scrolls to value 0,
+			 * we're at the true top of the DB — fire the callback immediately
+			 * (no debounce needed, the DB is exhausted and only the server
+			 * can provide more history). */
+			if (value == 0 && xtext->scroll_to_top_cb &&
+			    gtk_adjustment_get_upper (xtext->adj) > page_size &&
+			    xtext->buffer->mat_first_index == 0)
+			{
+				if (xtext->scroll_top_debounce_tag)
+				{
+					g_source_remove (xtext->scroll_top_debounce_tag);
+					xtext->scroll_top_debounce_tag = 0;
+				}
+				xtext->scroll_to_top_cb (xtext, xtext->scroll_to_top_userdata);
+				xtext->scroll_top_backoff_ms = MIN (xtext->scroll_top_backoff_ms * 2, 8000);
 			}
 		}
 
@@ -1078,7 +1110,17 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 	xtext->buffer->window_width = text_width;
 	xtext->buffer->window_height = height;
 
-	dontscroll (xtext->buffer);	/* force scrolling off */
+	{
+		gboolean was_down = xtext->buffer->scrollbar_down;
+		dontscroll (xtext->buffer);	/* force scrolling off */
+		/* Virtual scrollback: preserve scrollbar_down through layout reflows.
+		 * Without this, the GTK layout phase (triggered by tab switch or
+		 * adjustment changes) clears the flag, and the view drifts from the
+		 * bottom because num_lines is an estimate.  The scroll anchor system
+		 * still handles non-bottom positions correctly during width changes. */
+		if (was_down)
+			xtext->buffer->scrollbar_down = TRUE;
+	}
 	if (!height_only)
 	{
 		if (old_width == 0)
@@ -5193,7 +5235,9 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 	/* lines_before_mat is absorptive: set once by buffer_set_virtual, then
 	 * adjusted by ensure_range eviction (+) and prepend (-).  Never recompute
 	 * from the formula here — doing so causes viewport shifts when avg changes
-	 * (from Pango remeasurement, eviction, or chathistory). */
+	 * (from Pango remeasurement, eviction, or chathistory).
+	 * The mat_first_index==0 correction is done in ensure_range before this
+	 * function is called, so the adj value is already consistent. */
 	if (buf->lines_before_mat < 0)
 		buf->lines_before_mat = 0;
 	{
@@ -5271,25 +5315,18 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 	int lines = 0;
 	textentry *ent;
 
-	/* Virtual scrollback (Phase 3): if target line is outside materialized window,
-	 * trigger materialization so the entries exist in the linked list. */
-	if (xtext->buffer->virtual_mode && xtext->buffer->avg_lines_per_entry > 0)
+	/* Virtual scrollback: adjust line to be relative to the materialized window.
+	 * Materialization is driven by the smart trigger in adjustment_changed —
+	 * do NOT trigger ensure_range here, as it causes harmful eviction during
+	 * hover/render paths (e.g., mouse entering the widget at the bottom
+	 * boundary triggers head eviction that drifts the viewport). */
+	if (xtext->buffer->virtual_mode)
 	{
-		if (line < xtext->buffer->lines_before_mat ||
-		    line >= xtext->buffer->lines_before_mat + xtext->buffer->lines_mat)
-		{
-			int idx = (int)(line / xtext->buffer->avg_lines_per_entry);
-			if (idx < 0)
-				idx = 0;
-			if (idx >= xtext->buffer->total_entries)
-				idx = xtext->buffer->total_entries - 1;
-			gtk_xtext_virt_ensure_range (xtext->buffer, idx, VIRT_PAGE_SIZE);
-		}
-
-		/* Adjust line number to be relative to materialized window */
 		line -= xtext->buffer->lines_before_mat;
 		if (line < 0)
 			line = 0;
+		if (xtext->buffer->lines_mat > 0 && line >= xtext->buffer->lines_mat)
+			line = xtext->buffer->lines_mat - 1;
 	}
 
 	ent = xtext->buffer->text_first;
@@ -8423,20 +8460,25 @@ gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 	}
 
 	/* now change to the new buffer */
-	xtext->buffer = buf;
-	dontscroll (buf);	/* force scrolling off */
-
-	/* Set upper before value to avoid clamping issues */
-	gtk_adjustment_set_upper (xtext->adj, buf->num_lines);
-
-	/* Restore scroll position - only force to bottom if scrollbar_down is true */
-	if (buf->scrollbar_down)
 	{
-		gtk_adjustment_set_value (xtext->adj, gtk_adjustment_get_upper (xtext->adj) - gtk_adjustment_get_page_size (xtext->adj));
-	}
-	else if (buf->old_value >= 0)
-	{
-		gtk_adjustment_set_value (xtext->adj, buf->old_value);
+		gboolean was_down = buf->scrollbar_down;
+		xtext->buffer = buf;
+		dontscroll (buf);	/* force scrolling off */
+
+		/* Set upper before value to avoid clamping issues */
+		gtk_adjustment_set_upper (xtext->adj, buf->num_lines);
+
+		/* Restore scroll position - force to bottom if buffer was tracking bottom.
+		 * Must use saved was_down since dontscroll cleared scrollbar_down above. */
+		if (was_down)
+		{
+			buf->scrollbar_down = TRUE;
+			gtk_adjustment_set_value (xtext->adj, gtk_adjustment_get_upper (xtext->adj) - gtk_adjustment_get_page_size (xtext->adj));
+		}
+		else if (buf->old_value >= 0)
+		{
+			gtk_adjustment_set_value (xtext->adj, buf->old_value);
+		}
 	}
 
 	if (gtk_adjustment_get_upper (xtext->adj) == 0)
@@ -8998,36 +9040,40 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 		scrollback_msg_list_free (msgs);
 	}
 
-	/* Evict from head if too far behind desired window */
-	while (buf->mat_first_index < want_start - VIRT_PAGE_SIZE && buf->mat_count > 1)
+	/* Evict from head if too far behind desired window.
+	 * Only evict when mat_count exceeds max_lines — this avoids converting
+	 * actual line counts into lossy estimates, which causes blank space. */
+	{
+		int max = buf->xtext->max_lines > 2 ? buf->xtext->max_lines : 500;
+		while (buf->mat_first_index < want_start - VIRT_PAGE_SIZE &&
+		       buf->mat_count > max)
 	{
 		/* Don't evict selection-pinned entries */
 		if (buf->text_first && buf->sel_pin_start_id != 0 &&
 		    buf->text_first->entry_id == buf->sel_pin_start_id)
 			break;
 
-		/* Absorptive: entry moves from actual to estimated */
-		buf->lines_before_mat += ENT_DISPLAY_LINES (buf->text_first);
-		gtk_xtext_virt_evict_head (buf);
+		{
+			int evicted_lines = ENT_DISPLAY_LINES (buf->text_first);
+			/* virt_evict_head removes the day boundary from the new head,
+			 * which reduces lines_mat by 1 extra.  Absorb that too. */
+			gboolean next_loses_boundary = (buf->text_first->next &&
+			    (buf->text_first->next->flags & TEXTENTRY_FLAG_DAY_BOUNDARY));
+			gtk_xtext_virt_evict_head (buf);
+			buf->lines_before_mat += evicted_lines;
+			if (next_loses_boundary)
+				buf->lines_before_mat++;
+		}
 		buf->mat_first_index++;
 		buf->mat_count--;
 	}
-
-	/* Evict from tail if too far ahead of desired window */
-	{
-		int cur_mat_end = buf->mat_first_index + buf->mat_count - 1;
-		while (cur_mat_end > want_end + VIRT_PAGE_SIZE && buf->mat_count > 1)
-		{
-			/* Don't evict selection-pinned entries */
-			if (buf->text_last && buf->sel_pin_end_id != 0 &&
-			    buf->text_last->entry_id == buf->sel_pin_end_id)
-				break;
-
-			gtk_xtext_virt_evict_tail (buf);
-			buf->mat_count--;
-			cur_mat_end--;
-		}
 	}
+
+	/* Tail eviction intentionally omitted.  Evicting from the tail
+	 * converts actual line counts into lossy estimates (lines_after),
+	 * which inflates num_lines and creates blank space at the bottom.
+	 * Only head eviction is used — memory is bounded by total_entries
+	 * which is limited by max_lines at insertion time. */
 
 	/* Phase 5: only recompute if something was actually loaded or evicted.
 	 * If ensure_range was called but the materialization window didn't change,
@@ -9036,10 +9082,42 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 	 * which triggers another adjustment_changed → ensure_range cycle. */
 	if (buf->mat_count != old_mat_count || buf->mat_first_index != old_mat_first)
 	{
+		/* When mat_first_index reaches 0, all entries from the start are
+		 * materialized — lines_before_mat must be 0.  Any residual is
+		 * estimation error from buffer_set_virtual's initial formula.
+		 * Correct it atomically with the adj value so the viewport
+		 * doesn't jump.  This runs inside the signal-blocked region
+		 * so no spurious value-changed fires. */
+		if (buf->mat_first_index == 0 && buf->lines_before_mat > 0 &&
+		    buf->xtext && buf->xtext->buffer == buf)
+		{
+			int excess = buf->lines_before_mat;
+			buf->lines_before_mat = 0;
+			/* Adjust both old_value and the actual GTK adj value so the
+			 * viewport doesn't jump.  adjustment_changed re-reads value
+			 * after ensure_range returns to pick up this correction. */
+			buf->old_value -= excess;
+			if (buf->old_value < 0)
+				buf->old_value = 0;
+			{
+				gdouble val = gtk_adjustment_get_value (buf->xtext->adj) - excess;
+				if (val < 0) val = 0;
+				gtk_adjustment_set_value (buf->xtext->adj, val);
+			}
+		}
+
 		if (buf->xtext && buf->xtext->vc_signal_tag)
 		{
 			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
 			gtk_xtext_calc_lines_virtual_ex (buf, TRUE, FALSE);
+			/* After calc_lines_virtual_ex recomputes num_lines and calls
+			 * adjustment_set, apply the corrected value. */
+			if (buf->mat_first_index == 0)
+			{
+				gdouble val = buf->old_value;
+				if (val < 0) val = 0;
+				gtk_adjustment_set_value (buf->xtext->adj, val);
+			}
 			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
 		}
 		else
@@ -9047,6 +9125,36 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 			gtk_xtext_calc_lines_virtual_ex (buf, FALSE, FALSE);
 		}
 	}
+}
+
+/* Virtual scrollback: check if a chathistory entry should skip materialization.
+ * Returns TRUE if the entry is older than the materialized window and was
+ * accounted for in the virtual bookkeeping (total_entries, mat_first_index,
+ * lines_before_mat).  The caller should NOT materialize the entry — it's
+ * already in the DB and ensure_range will load it when the user scrolls there.
+ *
+ * This handles the index-shift problem: inserting an older entry into the DB
+ * moves all existing entries' indices up by 1.  We compensate by incrementing
+ * mat_first_index to track the same physical entries. */
+gboolean
+gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
+{
+	if (!buf->virtual_mode || !buf->text_first || stamp <= 0)
+		return FALSE;
+
+	/* Only skip if entry is strictly older than everything materialized */
+	if (stamp >= buf->text_first->stamp)
+		return FALSE;
+
+	buf->total_entries++;
+	buf->mat_first_index++;	/* existing indices shifted up by 1 in DB */
+
+	/* Don't inflate lines_before_mat or num_lines with estimates — that
+	 * causes phantom blank space at the bottom.  The absorptive prepend in
+	 * ensure_range will subtract actual line counts when these entries are
+	 * materialized.  Keep lbm, num_lines, and the adjustment untouched so
+	 * the viewport stays exactly where it is. */
+	return TRUE;
 }
 
 /* IRCv3 modernization: entry lookup functions (Phase 1) */

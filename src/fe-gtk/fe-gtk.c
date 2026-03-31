@@ -1159,6 +1159,13 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 	 */
 	if (sess->history_insert_sorted_mode)
 	{
+		/* Virtual mode: entries older than the materialized window are already
+		 * saved to the DB (by PrintTextTimeStamp above).  Don't materialize
+		 * them — just update virtual bookkeeping.  ensure_range loads them
+		 * when the user scrolls there. */
+		if (gtk_xtext_virt_skip_older (sess->res->buffer, stamp))
+			return;
+
 		PrintTextRawInsertSorted (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
 
 		/* Associate msgid with the newly inserted entry.  It may have been

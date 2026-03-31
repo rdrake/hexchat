@@ -474,6 +474,9 @@ guint64 gtk_xtext_get_entry_id (textentry *ent);
 time_t gtk_xtext_entry_get_stamp (textentry *ent);
 const char *gtk_xtext_get_msgid (textentry *ent);
 
+/* Virtual scrollback: skip materialization for older-than-window entries */
+gboolean gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp);
+
 /* Entry accessors (textentry is opaque outside xtext.c) */
 textentry *gtk_xtext_buffer_get_last (xtext_buffer *buf);
 textentry *gtk_xtext_buffer_get_first (xtext_buffer *buf);
