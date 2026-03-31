@@ -514,6 +514,7 @@ typedef struct batch_info
 	int param_count;     /* Number of parameters */
 	char *outer_batch;   /* For nested batches: reference to parent batch ID */
 	char *label;         /* labeled-response: label tag from BATCH START */
+	char *msgid;         /* msgid tag from BATCH START (for echo confirmation) */
 	GSList *messages;    /* Collected messages (each element is batch_message) */
 	time_t started;      /* When the batch was opened */
 } batch_info;
