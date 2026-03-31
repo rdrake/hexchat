@@ -164,6 +164,8 @@ static const setting appearance_settings[] =
 	{ST_TOGGLR, N_("Indent nick names"), P_OFFINTNL(hex_text_indent), N_("Make nick names right-justified"),0,0},
 	{ST_TOGGLE, N_ ("Show marker line"), P_OFFINTNL (hex_text_show_marker), N_ ("Insert a red line after the last read text."), 0, 0},
 	{ST_TOGGLR, N_("Show day separators"), P_OFFINTNL(hex_gui_day_separator), N_("Show a separator line between messages from different days."), 0, 0},
+	{ST_TOGGLE, N_("Collapse long multiline messages"), P_OFFINTNL(hex_gui_collapse_multiline), N_("Auto-collapse multiline messages that exceed the threshold."), 0, 0},
+	{ST_NUMBER, N_("Collapse threshold (lines)"), P_OFFINTNL(hex_gui_collapse_threshold), 0, 0, 100},
 	{ST_EFILE, N_ ("Background image:"), P_OFFSETNL (hex_text_background), 0, 0, sizeof prefs.hex_text_background},
 
 	{ST_HEADER, N_("Transparency Settings"), 0,0,0},
