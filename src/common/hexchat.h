@@ -123,6 +123,9 @@ struct hexchatprefs
 	unsigned int hex_gui_autoopen_dialog;
 	unsigned int hex_gui_autoopen_recv;
 	unsigned int hex_gui_autoopen_send;
+	unsigned int hex_gui_collapse_multiline;
+	unsigned int hex_gui_collapse_threshold;
+	unsigned int hex_gui_collapse_page_divisor;
 	unsigned int hex_gui_compact;
 	unsigned int hex_gui_day_separator;
 	unsigned int hex_gui_emoji_sprites;

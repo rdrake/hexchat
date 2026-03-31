@@ -29,9 +29,23 @@
 #define ENT_TOTAL_LINES(ent) \
 	(g_slist_length ((ent)->sublines) + (ent)->extra_lines_above + (ent)->extra_lines_below)
 
+/* Collapsible multiline messages: preview line count when collapsed */
+#define COLLAPSE_PREVIEW_LINES 3
+
+/* Display lines: respects collapse state.
+ * Collapsed: preview lines + 1 indicator + extra above/below.
+ * Expanded collapsible: total lines + 1 indicator (for "Show less").
+ * Normal: total lines. */
+#define ENT_DISPLAY_LINES(ent) \
+	((ent)->collapsed \
+		? (MIN(COLLAPSE_PREVIEW_LINES, (int)g_slist_length((ent)->sublines)) + 1 \
+		   + (ent)->extra_lines_above + (ent)->extra_lines_below) \
+		: (ENT_TOTAL_LINES(ent) + ((ent)->collapsible ? 1 : 0)))
+
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <time.h>
 
 #include "config.h"
@@ -147,6 +161,9 @@ struct textentry
 	guint8 extra_lines_above;		/* reply context lines (0 or 1) */
 	guint8 extra_lines_below;		/* reaction badge lines (0 or 1) */
 
+	unsigned int collapsed:1;		/* multiline entry is currently collapsed */
+	unsigned int collapsible:1;		/* multiline entry can be collapsed/expanded */
+
 	/* Pre-parsed rendering data (built once at entry creation) */
 	unsigned char *stripped_str;       /* text with format codes removed, emoji → U+FFFC */
 	guint16 stripped_len;              /* byte length of stripped_str */
@@ -240,7 +257,8 @@ typedef enum {
 	XTEXT_ZONE_REPLY   = 0,
 	XTEXT_ZONE_TEXT    = 1,
 	XTEXT_ZONE_REACT   = 2,
-	XTEXT_ZONE_DAY_SEP = 3
+	XTEXT_ZONE_DAY_SEP = 3,
+	XTEXT_ZONE_COLLAPSE = 4
 } xtext_click_zone;
 static xtext_click_zone gtk_xtext_get_click_zone (GtkXText *xtext, int y, textentry **ent_out);
 
@@ -1330,7 +1348,7 @@ gtk_xtext_draw_marker (GtkXText * xtext, textentry * ent, int y)
 	else if (ent->next != NULL && xtext->buffer->marker_pos_id == ent->next->entry_id)
 	{
 		/* We're rendering the last read entry - draw marker after all lines */
-		render_y = y + xtext->fontsize * ENT_TOTAL_LINES (ent) + 4;
+		render_y = y + xtext->fontsize * ENT_DISPLAY_LINES (ent) + 4;
 	}
 	else return;
 
@@ -2595,7 +2613,8 @@ gtk_xtext_get_click_zone (GtkXText *xtext, int y, textentry **ent_out)
 	if (!ent)
 		return XTEXT_ZONE_TEXT;
 
-	/* subline is now an offset into total lines: [day_sep | reply | text_sublines | extra_below] */
+	/* subline is now an offset into display lines:
+	 * [day_sep | reply | text_sublines | collapse_indicator? | extra_below] */
 	if (subline < ent->extra_lines_above)
 	{
 		gboolean has_day_sep = (ent->flags & TEXTENTRY_FLAG_DAY_BOUNDARY)
@@ -2606,6 +2625,22 @@ gtk_xtext_get_click_zone (GtkXText *xtext, int y, textentry **ent_out)
 	}
 
 	text_sublines = g_slist_length (ent->sublines);
+
+	/* Check for collapse indicator line */
+	if (ent->collapsed)
+	{
+		int visible_text = MIN(COLLAPSE_PREVIEW_LINES, text_sublines);
+		int indicator_subline = ent->extra_lines_above + visible_text;
+		if (subline == indicator_subline)
+			return XTEXT_ZONE_COLLAPSE;
+	}
+	else if (ent->collapsible)
+	{
+		int indicator_subline = ent->extra_lines_above + text_sublines;
+		if (subline == indicator_subline)
+			return XTEXT_ZONE_COLLAPSE;
+	}
+
 	if (subline >= ent->extra_lines_above + text_sublines)
 		return XTEXT_ZONE_REACT;
 
@@ -2956,12 +2991,20 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 		}
 	}
 
-	/* Check if click lands on reply context or reaction badges */
+	/* Check if click lands on reply context, reaction badges, or collapse indicator */
 	if (n_press == 1)
 	{
 		textentry *zone_ent;
 		xtext_click_zone zone = gtk_xtext_get_click_zone (xtext, y, &zone_ent);
 
+		if (zone == XTEXT_ZONE_COLLAPSE && zone_ent)
+		{
+			zone_ent->collapsed = !zone_ent->collapsed;
+			gtk_xtext_calc_lines (xtext->buffer, TRUE);
+			gtk_widget_queue_draw (GTK_WIDGET (xtext));
+			xtext->press_handled = TRUE;
+			return;
+		}
 		if (zone == XTEXT_ZONE_REPLY && zone_ent)
 		{
 			gtk_xtext_click_reply_context (xtext, zone_ent);
@@ -4493,6 +4536,43 @@ gtk_xtext_render_day_separator (GtkXText *xtext, textentry *ent, int line, int w
 	pango_layout_set_attributes (xtext->layout, NULL);
 }
 
+/* Render the collapse/expand indicator line for collapsible multiline entries */
+static void
+gtk_xtext_render_collapse_indicator (GtkXText *xtext, textentry *ent,
+                                     int line, int win_width, gboolean collapsed)
+{
+	int y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
+	char buf[128];
+	int text_x;
+	GdkRGBA color;
+
+	int total_sublines = g_slist_length (ent->sublines);
+	int hidden = total_sublines - COLLAPSE_PREVIEW_LINES;
+
+	if (collapsed)
+		g_snprintf (buf, sizeof (buf), "\xe2\x96\xbc Show more (%d lines)", hidden);
+	else
+		g_snprintf (buf, sizeof (buf), "\xe2\x96\xb2 Show less");
+
+	/* Clear background */
+	xtext_draw_bg (xtext, 0, y - xtext->font->ascent, win_width + MARGIN, xtext->fontsize);
+
+	/* Set text for layout */
+	pango_layout_set_text (xtext->layout, buf, -1);
+	pango_layout_set_attributes (xtext->layout, NULL);
+	text_x = xtext->buffer->indent + 4;  /* align with message text start */
+
+	/* Draw text in half-alpha foreground */
+	color = xtext->palette[XTEXT_FG];
+	color.alpha = 0.5;
+	gdk_cairo_set_source_rgba (xtext->cr, &color);
+	{
+		PangoLayoutLine *pl = pango_layout_get_lines_readonly (xtext->layout)->data;
+		xtext_draw_layout_line (xtext, text_x, y, pl);
+	}
+	pango_layout_set_attributes (xtext->layout, NULL);
+}
+
 /* render a single line, which may wrap to more lines */
 
 static int
@@ -4597,48 +4677,71 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 	}
 
 	/* draw each text subline one by one */
-	do
 	{
-		if (entline > 0)
-			len = GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, entline)) - GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, entline - 1));
-		else
-			len = GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, entline));
+		int max_text_entline = ent->collapsed
+			? MIN(COLLAPSE_PREVIEW_LINES, (int)g_slist_length (ent->sublines))
+			: INT_MAX;
 
-		entline++;
-
-		y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
-		if (!text_subline)
+		do
 		{
-			if (!gtk_xtext_render_subline (xtext, y, ent, raw_offset, len,
-			                               win_width, indent, line, FALSE, NULL))
+			if (entline > 0)
+				len = GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, entline)) - GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, entline - 1));
+			else
+				len = GPOINTER_TO_INT (g_slist_nth_data (ent->sublines, entline));
+
+			entline++;
+
+			y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
+			if (!text_subline)
 			{
-				/* small optimization */
-				gtk_xtext_draw_marker (xtext, ent, y - xtext->fontsize * (taken + start_subline + 1));
-				return ENT_TOTAL_LINES (ent) - start_subline;
+				if (!gtk_xtext_render_subline (xtext, y, ent, raw_offset, len,
+				                               win_width, indent, line, FALSE, NULL))
+				{
+					/* small optimization */
+					gtk_xtext_draw_marker (xtext, ent, y - xtext->fontsize * (taken + start_subline + 1));
+					return ENT_DISPLAY_LINES (ent) - start_subline;
+				}
+
+				/* Save y of first text subline for reply button (drawn after loop) */
+				if (entline == 1)
+					first_subline_y = y;
+			} else
+			{
+				/* Skipping sublines before the visible region */
+				text_subline--;
+				line--;
+				taken--;
 			}
 
-			/* Save y of first text subline for reply button (drawn after loop) */
-			if (entline == 1)
-				first_subline_y = y;
-		} else
-		{
-			/* Skipping sublines before the visible region */
-			text_subline--;
-			line--;
-			taken--;
-		}
+			indent = xtext->buffer->indent;
+			line++;
+			taken++;
+			str += len;
+			raw_offset += len;
 
-		indent = xtext->buffer->indent;
+			if (line >= lines_max)
+				break;
+
+			if (entline >= max_text_entline)
+				break;
+
+		}
+		while (str < ent->str + ent->str_len);
+	}
+
+	/* Render collapse/expand indicator for collapsible entries */
+	if (ent->collapsed && line < lines_max)
+	{
+		gtk_xtext_render_collapse_indicator (xtext, ent, line, win_width, TRUE);
 		line++;
 		taken++;
-		str += len;
-		raw_offset += len;
-
-		if (line >= lines_max)
-			break;
-
 	}
-	while (str < ent->str + ent->str_len);
+	else if (ent->collapsible && !ent->collapsed && line < lines_max)
+	{
+		gtk_xtext_render_collapse_indicator (xtext, ent, line, win_width, FALSE);
+		line++;
+		taken++;
+	}
 
 	gtk_xtext_draw_marker (xtext, ent, y - xtext->fontsize * (taken + start_subline));
 
@@ -5019,8 +5122,8 @@ gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal)
 	ent = buf->text_first;
 	while (ent)
 	{
-		lines += gtk_xtext_lines_taken (buf, ent);
-		lines += ent->extra_lines_above + ent->extra_lines_below;
+		gtk_xtext_lines_taken (buf, ent);	/* recompute sublines */
+		lines += ENT_DISPLAY_LINES (ent);
 		ent = ent->next;
 	}
 
@@ -5068,7 +5171,7 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 				ent = ent->prev;
 				if (!ent)
 					break;
-				lines -= ENT_TOTAL_LINES (ent);
+				lines -= ENT_DISPLAY_LINES (ent);
 			}
 			return NULL;
 		}
@@ -5077,10 +5180,10 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 
 	while (ent)
 	{
-		lines += ENT_TOTAL_LINES (ent);
+		lines += ENT_DISPLAY_LINES (ent);
 		if (lines > line)
 		{
-			*subline = ENT_TOTAL_LINES (ent) - (lines - line);
+			*subline = ENT_DISPLAY_LINES (ent) - (lines - line);
 			return ent;
 		}
 		ent = ent->next;
@@ -5175,7 +5278,7 @@ gtk_xtext_render_ents (GtkXText * xtext, textentry * enta, textentry * entb)
 				line -= subline;
 				subline = 0;
 			}
-			line += ENT_TOTAL_LINES (ent);
+			line += ENT_DISPLAY_LINES (ent);
 		}
 
 		if (ent == entb)
@@ -5282,6 +5385,37 @@ gtk_xtext_render_page (GtkXText * xtext)
 			break;
 
 		ent = ent->next;
+	}
+
+	/* Auto-collapse expanded entries that scrolled off screen */
+	if (prefs.hex_gui_collapse_multiline)
+	{
+		textentry *check;
+		gboolean changed = FALSE;
+		int adj_val = (int)gtk_adjustment_get_value (xtext->adj);
+		int adj_page = (int)gtk_adjustment_get_page_size (xtext->adj);
+		int line_pos = 0;
+
+		for (check = xtext->buffer->text_first; check; check = check->next)
+		{
+			int ent_lines = ENT_DISPLAY_LINES (check);
+			if (check->collapsible && !check->collapsed)
+			{
+				/* Entry is expanded — check if entirely outside viewport */
+				if (line_pos + ent_lines <= adj_val || line_pos >= adj_val + adj_page)
+				{
+					check->collapsed = TRUE;
+					changed = TRUE;
+				}
+			}
+			line_pos += ent_lines;
+		}
+
+		if (changed)
+		{
+			gtk_xtext_calc_lines (xtext->buffer, TRUE);
+			gtk_widget_queue_draw (GTK_WIDGET (xtext));
+		}
 	}
 
 	line = (xtext->fontsize * line) - xtext->pixel_offset;
@@ -6025,7 +6159,7 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 	if (!ent)
 		return;
 	{
-		int ent_lines = ENT_TOTAL_LINES (ent);
+		int ent_lines = ENT_DISPLAY_LINES (ent);
 		buffer->num_lines -= ent_lines;
 		buffer->pagetop_line -= ent_lines;
 		buffer->last_pixel_pos -= (ent_lines * buffer->xtext->fontsize);
@@ -6082,7 +6216,7 @@ gtk_xtext_remove_bottom (xtext_buffer *buffer)
 	ent = buffer->text_last;
 	if (!ent)
 		return;
-	buffer->num_lines -= ENT_TOTAL_LINES (ent);
+	buffer->num_lines -= ENT_DISPLAY_LINES (ent);
 	buffer->text_last = ent->prev;
 	if (buffer->text_last)
 		buffer->text_last->next = NULL;
@@ -6204,7 +6338,7 @@ gtk_xtext_check_ent_visibility (GtkXText * xtext, textentry *find_ent, int add)
 	lines = ((height + xtext->pixel_offset) / xtext->fontsize) + buf->pagetop_subline + add;
 	while (ent)
 	{
-		lines -= ENT_TOTAL_LINES (ent);
+		lines -= ENT_DISPLAY_LINES (ent);
 		if (lines <= 0)
 		{
 			return FALSE;
@@ -6592,7 +6726,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 		for (value = 0, ent = buf->text_first;
 			  ent && ent != hint; ent = ent->next)
 		{
-			value += ENT_TOTAL_LINES (ent);
+			value += ENT_DISPLAY_LINES (ent);
 		}
 		if (value > gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj))
 		{
@@ -6600,7 +6734,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 		}
 		else if ((flags & backward)  && ent)
 		{
-			value -= gtk_adjustment_get_page_size (adj) - ENT_TOTAL_LINES (ent);
+			value -= gtk_adjustment_get_page_size (adj) - ENT_DISPLAY_LINES (ent);
 			if (value < 0)
 			{
 				value = 0;
@@ -6735,9 +6869,38 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 
 	ent->sublines = NULL;
 	if (buf->window_width > 0)
-		buf->num_lines += gtk_xtext_lines_taken (buf, ent) + ent->extra_lines_above;
+	{
+		gtk_xtext_lines_taken (buf, ent);
+
+		/* Auto-collapse multiline messages exceeding threshold */
+		if (prefs.hex_gui_collapse_multiline && ent->group_id != 0 && ent->sublines)
+		{
+			int sublines = g_slist_length (ent->sublines);
+			int threshold = prefs.hex_gui_collapse_threshold;
+			gboolean should_collapse = (sublines > threshold);
+
+			/* Page-adaptive threshold */
+			if (!should_collapse && prefs.hex_gui_collapse_page_divisor > 0 && buf->xtext)
+			{
+				int page_size = gtk_widget_get_height (GTK_WIDGET (buf->xtext)) / buf->xtext->fontsize;
+				int adaptive = page_size / prefs.hex_gui_collapse_page_divisor;
+				if (adaptive > 0 && sublines > adaptive)
+					should_collapse = TRUE;
+			}
+
+			if (should_collapse)
+			{
+				ent->collapsible = TRUE;
+				ent->collapsed = TRUE;
+			}
+		}
+
+		buf->num_lines += ENT_DISPLAY_LINES (ent);
+	}
 	else
+	{
 		buf->num_lines += 1 + ent->extra_lines_above;  /* placeholder — real count deferred to first allocation */
+	}
 
 	/* Local auto-advance: move marker to newest unread message when window is
 	 * unfocused.  Suppressed when server controls the marker (draft/read-marker). */
@@ -6890,7 +7053,31 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	}
 
 	ent->sublines = NULL;
-	new_lines = gtk_xtext_lines_taken (buf, ent);
+	gtk_xtext_lines_taken (buf, ent);
+
+	/* Auto-collapse multiline messages exceeding threshold */
+	if (prefs.hex_gui_collapse_multiline && ent->group_id != 0 && ent->sublines)
+	{
+		int sublines = g_slist_length (ent->sublines);
+		int threshold = prefs.hex_gui_collapse_threshold;
+		gboolean should_collapse = (sublines > threshold);
+
+		if (!should_collapse && prefs.hex_gui_collapse_page_divisor > 0 && buf->xtext)
+		{
+			int page_size = gtk_widget_get_height (GTK_WIDGET (buf->xtext)) / buf->xtext->fontsize;
+			int adaptive = page_size / prefs.hex_gui_collapse_page_divisor;
+			if (adaptive > 0 && sublines > adaptive)
+				should_collapse = TRUE;
+		}
+
+		if (should_collapse)
+		{
+			ent->collapsible = TRUE;
+			ent->collapsed = TRUE;
+		}
+	}
+
+	new_lines = ENT_DISPLAY_LINES (ent);
 	buf->num_lines += new_lines;
 
 	/* Adjust scroll position - we added lines at the top, so everything shifts down */
@@ -7094,7 +7281,31 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	}
 
 	ent->sublines = NULL;
-	new_lines = gtk_xtext_lines_taken (buf, ent) + ent->extra_lines_above;
+	gtk_xtext_lines_taken (buf, ent);
+
+	/* Auto-collapse multiline messages exceeding threshold */
+	if (prefs.hex_gui_collapse_multiline && ent->group_id != 0 && ent->sublines)
+	{
+		int sublines = g_slist_length (ent->sublines);
+		int threshold = prefs.hex_gui_collapse_threshold;
+		gboolean should_collapse = (sublines > threshold);
+
+		if (!should_collapse && prefs.hex_gui_collapse_page_divisor > 0 && buf->xtext)
+		{
+			int page_size = gtk_widget_get_height (GTK_WIDGET (buf->xtext)) / buf->xtext->fontsize;
+			int adaptive = page_size / prefs.hex_gui_collapse_page_divisor;
+			if (adaptive > 0 && sublines > adaptive)
+				should_collapse = TRUE;
+		}
+
+		if (should_collapse)
+		{
+			ent->collapsible = TRUE;
+			ent->collapsed = TRUE;
+		}
+	}
+
+	new_lines = ENT_DISPLAY_LINES (ent);
 	buf->num_lines += new_lines;
 
 	/* Adjust scroll position if we inserted before current view */
@@ -7814,7 +8025,7 @@ gtk_xtext_moveto_marker_pos (GtkXText *xtext)
 			{
 				if (ent == marker)
 					break;
-				value += ENT_TOTAL_LINES (ent);
+				value += ENT_DISPLAY_LINES (ent);
 				ent = ent->next;
 			}
 			if (value >= gtk_adjustment_get_value (adj) && value < gtk_adjustment_get_value (adj) + gtk_adjustment_get_page_size (adj))
@@ -7860,7 +8071,7 @@ gtk_xtext_scroll_to_entry (xtext_buffer *buf, textentry *target)
 	{
 		if (ent == target)
 			break;
-		value += ENT_TOTAL_LINES (ent);
+		value += ENT_DISPLAY_LINES (ent);
 	}
 	if (!ent)
 		return; /* target not in buffer */
@@ -8576,12 +8787,7 @@ gtk_xtext_entry_get_line (xtext_buffer *buf, textentry *target_ent)
 		if (ent == target_ent)
 			return lines;
 
-		/* Add sublines for this entry (need to calculate if not yet done) */
-		if (ent->sublines)
-			lines += g_slist_length (ent->sublines);
-		else
-			lines += 1;  /* Entry not yet rendered, assume 1 line */
-		lines += ent->extra_lines_above + ent->extra_lines_below;
+		lines += ENT_DISPLAY_LINES (ent);
 
 		ent = ent->next;
 	}

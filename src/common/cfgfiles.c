@@ -420,6 +420,9 @@ const struct prefs vars[] =
 	{"gui_autoopen_send", P_OFFINT (hex_gui_autoopen_send), TYPE_BOOL},
 	{"gui_chanlist_maxusers", P_OFFINT (hex_gui_chanlist_maxusers), TYPE_INT},
 	{"gui_chanlist_minusers", P_OFFINT (hex_gui_chanlist_minusers), TYPE_INT},
+	{"gui_collapse_multiline", P_OFFINT (hex_gui_collapse_multiline), TYPE_BOOL},
+	{"gui_collapse_page_divisor", P_OFFINT (hex_gui_collapse_page_divisor), TYPE_INT},
+	{"gui_collapse_threshold", P_OFFINT (hex_gui_collapse_threshold), TYPE_INT},
 	{"gui_compact", P_OFFINT (hex_gui_compact), TYPE_BOOL},
 	{"gui_day_separator", P_OFFINT (hex_gui_day_separator), TYPE_BOOL},
 	{"gui_emoji_sprites", P_OFFINT (hex_gui_emoji_sprites), TYPE_BOOL},
@@ -782,6 +785,9 @@ load_default_config(void)
 	prefs.hex_gui_autoopen_dialog = 1;
 	prefs.hex_gui_autoopen_recv = 1;
 	prefs.hex_gui_autoopen_send = 1;
+	prefs.hex_gui_collapse_multiline = 1;
+	prefs.hex_gui_collapse_threshold = 20;
+	prefs.hex_gui_collapse_page_divisor = 2;
 	prefs.hex_gui_day_separator = 1;
 	prefs.hex_gui_emoji_sprites = 1;
 #ifdef HAVE_GTK_MAC
