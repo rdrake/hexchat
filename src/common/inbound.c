@@ -1881,6 +1881,7 @@ batch_info_free (batch_info *batch)
 	g_strfreev (batch->params);
 	g_free (batch->outer_batch);
 	g_free (batch->label);
+	g_free (batch->msgid);
 	g_slist_free_full (batch->messages, (GDestroyNotify) batch_message_free);
 	g_free (batch);
 }
@@ -1904,6 +1905,10 @@ batch_info_new (const char *id, const char *type, char *word[],
 	/* Capture label tag for labeled-response correlation */
 	if (tags_data->label)
 		batch->label = g_strdup (tags_data->label);
+
+	/* Capture msgid from BATCH START for echo confirmation */
+	if (tags_data->msgid)
+		batch->msgid = g_strdup (tags_data->msgid);
 
 	/* Count and copy parameters (starting from word[5]) */
 	param_count = 0;
@@ -2054,7 +2059,8 @@ process_multiline_batch (server *serv, batch_info *batch)
 		if (first_msg)
 		{
 			tags_data.timestamp = first_msg->timestamp;
-			tags_data.msgid = first_msg->msgid;  /* For IRCv3 msgid tracking (Phase 1) */
+			/* Prefer batch-level msgid (from BATCH START) over per-message msgid */
+			tags_data.msgid = batch->msgid ? batch->msgid : first_msg->msgid;
 			if (first_msg->tags)
 				tags_data.all_tags = first_msg->tags;
 		}
@@ -2247,9 +2253,10 @@ inbound_batch_end (server *serv, const char *batch_id,
 		                                                batch->label);
 		if (info && info->entry_id && info->sess && is_session (info->sess))
 		{
-			/* Extract msgid from the first message in the batch */
-			const char *batch_msgid = NULL;
-			if (batch->messages)
+			/* Use msgid from BATCH START (where the server assigns it),
+			 * falling back to the first message's msgid if not present. */
+			const char *batch_msgid = batch->msgid;
+			if (!batch_msgid && batch->messages)
 			{
 				batch_message *first = batch->messages->data;
 				if (first)
