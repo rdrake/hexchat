@@ -64,9 +64,9 @@ void scrollback_db_close (scrollback_db *db);
  * @param timestamp Message timestamp
  * @param msgid IRCv3 message ID (may be NULL)
  * @param text Message text (formatted for display)
- * @return TRUE on success
+ * @return Inserted rowid on success, -1 on failure
  */
-gboolean scrollback_db_save (scrollback_db *db, const char *channel,
+gint64 scrollback_db_save (scrollback_db *db, const char *channel,
                           time_t timestamp, const char *msgid, const char *text);
 
 /**

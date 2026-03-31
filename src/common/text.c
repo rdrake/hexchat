@@ -99,6 +99,7 @@ static void
 scrollback_save_msg (session *sess, char *text, time_t stamp, const char *msgid)
 {
 	scrollback_db *db;
+	gint64 rowid;
 
 	if (sess->type == SESS_SERVER && prefs.hex_gui_tab_server == 1)
 		return;
@@ -124,7 +125,12 @@ scrollback_save_msg (session *sess, char *text, time_t stamp, const char *msgid)
 	if (!stamp)
 		stamp = time (0);
 
-	scrollback_db_save (db, sess->channel, stamp, msgid, text);
+	rowid = scrollback_db_save (db, sess->channel, stamp, msgid, text);
+
+	/* Phase 4: tell xtext to use this DB rowid as the entry_id so that
+	 * eviction + rematerialization preserves the same stable ID */
+	if (rowid > 0)
+		fe_set_pending_db_rowid (sess, rowid);
 }
 
 /* Update a pending scrollback entry's placeholder msgid to the real server msgid.
@@ -268,6 +274,8 @@ scrollback_load (session *sess)
 				has_nl = (strchr (display_text, '\n') != NULL);
 				if (has_nl)
 					fe_begin_multiline_group (sess);
+				/* Phase 4: set DB rowid so entry_id matches for virtual scrollback */
+				fe_set_pending_db_rowid (sess, msg->id);
 				fe_print_text (sess, (char *)display_text, msg->timestamp, TRUE);
 				if (has_nl)
 					fe_end_multiline_group (sess);

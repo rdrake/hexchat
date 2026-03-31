@@ -2489,3 +2489,10 @@ fe_scrollback_set_virtual (session *sess, void *db, const char *channel,
 	xtext = GTK_XTEXT (sess->gui->xtext);
 	gtk_xtext_buffer_set_virtual (xtext->buffer, db, channel, total_entries, max_rowid);
 }
+
+void
+fe_set_pending_db_rowid (session *sess, gint64 rowid)
+{
+	if (sess && sess->res && sess->res->buffer)
+		((xtext_buffer *) sess->res->buffer)->pending_db_rowid = rowid;
+}

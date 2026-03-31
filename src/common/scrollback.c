@@ -538,18 +538,18 @@ scrollback_db_close (scrollback_db *db)
 	g_free (db);
 }
 
-gboolean
+gint64
 scrollback_db_save (scrollback_db *db, const char *channel,
                  time_t timestamp, const char *msgid, const char *text)
 {
 	int rc;
 
 	if (!db || !channel || !text)
-		return FALSE;
+		return -1;
 
 	gint64 channel_id = scrollback_get_channel_id (db, channel);
 	if (channel_id < 0)
-		return FALSE;
+		return -1;
 
 	sqlite3_reset (db->stmt_insert);
 	sqlite3_bind_text (db->stmt_insert, 1, channel, -1, SQLITE_TRANSIENT);
@@ -570,10 +570,10 @@ scrollback_db_save (scrollback_db *db, const char *channel,
 		/* SQLITE_CONSTRAINT is expected for duplicate msgid - not an error */
 		if (rc != SQLITE_CONSTRAINT)
 			g_warning ("scrollback_db_save failed: %s", sqlite3_errmsg (db->db));
-		return FALSE;
+		return -1;
 	}
 
-	return TRUE;
+	return (gint64) sqlite3_last_insert_rowid (db->db);
 }
 
 GSList *
@@ -912,7 +912,7 @@ scrollback_migrate (scrollback_db *db, const char *network, const char *channel)
 		if (timestamp > 0 && text && text[0])
 		{
 			/* Insert without msgid (old format doesn't have them) */
-			if (scrollback_db_save (db, channel, timestamp, NULL, text))
+			if (scrollback_db_save (db, channel, timestamp, NULL, text) >= 0)
 				count++;
 		}
 

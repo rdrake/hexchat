@@ -189,6 +189,8 @@ typedef struct {
 
 	guint64 sel_pin_start_id;		/* entry_id pinned by selection (0=none) */
 	guint64 sel_pin_end_id;
+
+	gint64 pending_db_rowid;		/* DB rowid to use as entry_id for next entry (Phase 4) */
 } xtext_buffer;
 
 typedef struct _xtext_emoji_cache xtext_emoji_cache;
