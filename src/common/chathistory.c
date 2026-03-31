@@ -1079,38 +1079,18 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	 * also ensures batch_oldest_msgid is captured correctly below. */
 	batch->messages = g_slist_sort (batch->messages, compare_batch_msg_timestamp);
 
-	/* Decide insertion mode based on context:
-	 * - Catch-up: always insert_sorted (SQLite handles arbitrary positioning)
-	 * - Scroll-to-load / background fetch (BEFORE): prepend to top
-	 * - Explicit AFTER request: insert_sorted */
-	if (is_catchup)
+	/* All chathistory batches use insert_sorted — it places each message at
+	 * the correct chronological position regardless of request type.  This
+	 * keeps one well-tested code path for virtual scrollback tracking
+	 * (mat_count, total_entries, viewport adjustment) instead of maintaining
+	 * parallel logic in prepend_entry and append_entry. */
+	if (batch->messages)
 	{
-		/* Capture oldest msgid for pagination (first after sort = oldest) */
-		if (batch->messages)
-		{
-			batch_message *first_msg = batch->messages->data;
-			if (first_msg && first_msg->msgid)
-				batch_oldest_msgid = first_msg->msgid;
-		}
-		sess->history_insert_sorted_mode = TRUE;
+		batch_message *first_msg = batch->messages->data;
+		if (first_msg && first_msg->msgid)
+			batch_oldest_msgid = first_msg->msgid;
 	}
-	else if (sess->history_request_is_before)
-	{
-		/* Scroll-to-load / background fetch: prepend mode.
-		 * Reverse list so prepending each produces correct chronological order. */
-		if (batch->messages)
-		{
-			batch_message *first_msg = batch->messages->data;
-			if (first_msg && first_msg->msgid)
-				batch_oldest_msgid = first_msg->msgid;
-		}
-		batch->messages = g_slist_reverse (batch->messages);
-		sess->history_prepend_mode = TRUE;
-	}
-	else if (sess->history_request_is_after)
-	{
-		sess->history_insert_sorted_mode = TRUE;
-	}
+	sess->history_insert_sorted_mode = TRUE;
 
 	/* Process messages */
 	for (iter = batch->messages; iter; iter = iter->next)

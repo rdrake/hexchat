@@ -5190,10 +5190,12 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 			buf->avg_lines_per_entry = 0.9 * buf->avg_lines_per_entry + 0.1 * new_avg;
 	}
 
-	/* Estimate lines above and below materialized window.
-	 * Use exact 0 for entries_after when at the end of the buffer
-	 * to prevent the bottom from "running away" due to estimate drift. */
-	buf->lines_before_mat = (int)(buf->mat_first_index * buf->avg_lines_per_entry);
+	/* lines_before_mat is absorptive: set once by buffer_set_virtual, then
+	 * adjusted by ensure_range eviction (+) and prepend (-).  Never recompute
+	 * from the formula here — doing so causes viewport shifts when avg changes
+	 * (from Pango remeasurement, eviction, or chathistory). */
+	if (buf->lines_before_mat < 0)
+		buf->lines_before_mat = 0;
 	{
 		int entries_after = buf->total_entries - buf->mat_first_index - buf->mat_count;
 		if (entries_after < 0)
@@ -5226,7 +5228,17 @@ gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal)
 
 	if (buf->virtual_mode)
 	{
+		/* Block value-changed during recompute to prevent adjustment_changed
+		 * from clearing scrollbar_down (the old value < new upper after Pango
+		 * remeasurement increases num_lines). */
+		gboolean was_down = buf->scrollbar_down;
+		if (buf->xtext->vc_signal_tag)
+			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
 		gtk_xtext_calc_lines_virtual (buf, fire_signal);
+		if (buf->xtext->vc_signal_tag)
+			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+		if (was_down)
+			buf->scrollbar_down = TRUE;
 		return;
 	}
 
@@ -6372,7 +6384,10 @@ gtk_xtext_remove_bottom (xtext_buffer *buffer)
 		int ent_lines = ENT_DISPLAY_LINES (ent);
 		buffer->num_lines -= ent_lines;
 		if (buffer->virtual_mode)
+		{
 			buffer->lines_mat -= ent_lines;
+			buffer->mat_count--;
+		}
 	}
 	buffer->text_last = ent->prev;
 	if (buffer->text_last)
@@ -7278,7 +7293,14 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	new_lines = ENT_DISPLAY_LINES (ent);
 	buf->num_lines += new_lines;
 	if (buf->virtual_mode)
+	{
 		buf->lines_mat += new_lines;
+		buf->total_entries++;
+		buf->mat_count++;
+		/* Prepending at head shifts the materialized window down */
+		if (buf->mat_first_index > 0)
+			buf->mat_first_index--;
+	}
 
 	/* Adjust scroll position - we added lines at the top, so everything shifts down */
 	buf->pagetop_line += new_lines;
@@ -7296,10 +7318,13 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	/* Don't update marker_pos for historical entries - they're old */
 	/* marker_pos should stay where it was */
 
-	/* Prune from BOTTOM if exceeding max_lines (opposite of append) */
-	if (buf->xtext->max_lines > 2 && buf->xtext->max_lines < buf->num_lines)
+	/* In virtual mode, max_lines limits the materialized window (mat_count),
+	 * not the virtual total (num_lines). */
+	if (buf->xtext->max_lines > 2)
 	{
-		gtk_xtext_remove_bottom (buf);
+		int count = buf->virtual_mode ? buf->mat_count : buf->num_lines;
+		if (buf->xtext->max_lines < count)
+			gtk_xtext_remove_bottom (buf);
 	}
 
 	/* Schedule render if this buffer is active */
@@ -8553,6 +8578,10 @@ gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
 	if (max_rowid > 0 && buf->next_entry_id <= (guint64)max_rowid)
 		buf->next_entry_id = (guint64)max_rowid + 1;
 
+	/* Set initial lines_before_mat from the formula — the only place this
+	 * is computed from the formula.  After this, it's absorptive. */
+	buf->lines_before_mat = (int)(buf->mat_first_index * buf->avg_lines_per_entry);
+
 	/* Compute initial line estimates so the scrollbar reflects total history.
 	 * Block the value-changed handler during calc_lines_virtual to prevent
 	 * adjustment_changed from clearing scrollbar_down (the old scroll value
@@ -8879,6 +8908,16 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 				}
 			}
 		}
+
+		/* Absorptive: prepended entries move from estimated to actual */
+		{
+			textentry *e;
+			int checked = 0;
+			for (e = buf->text_first; e && checked < loaded; e = e->next, checked++)
+				buf->lines_before_mat -= ENT_DISPLAY_LINES (e);
+			if (buf->lines_before_mat < 0)
+				buf->lines_before_mat = 0;
+		}
 	}
 
 	/* Append: load entries after current materialized window */
@@ -8967,6 +9006,8 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 		    buf->text_first->entry_id == buf->sel_pin_start_id)
 			break;
 
+		/* Absorptive: entry moves from actual to estimated */
+		buf->lines_before_mat += ENT_DISPLAY_LINES (buf->text_first);
 		gtk_xtext_virt_evict_head (buf);
 		buf->mat_first_index++;
 		buf->mat_count--;
