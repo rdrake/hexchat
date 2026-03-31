@@ -2263,6 +2263,8 @@ inbound_batch_end (server *serv, const char *batch_id,
 					batch_msgid = first->msgid;
 			}
 			fe_confirm_entry (info->sess, info->entry_id, batch_msgid);
+			if (batch_msgid && batch->label)
+				scrollback_confirm_pending (info->sess, batch->label, batch_msgid);
 		}
 
 		g_hash_table_remove (serv->pending_labels, batch->label);
