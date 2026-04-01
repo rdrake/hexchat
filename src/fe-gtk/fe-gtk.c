@@ -2520,27 +2520,40 @@ fe_set_batch_mode (session *sess, gboolean on)
 	buf = sess->res->buffer;
 	buf->batch_mode = on ? 1 : 0;
 
-	/* When batch ends, update the adjustment and queue one draw.
-	 * num_lines is already correct (insert_sorted incremented it).
-	 * Do NOT call calc_lines — it clears pagetop_ent causing flicker.
-	 * Just configure the adjustment directly with signal blocked. */
+	/* When batch ends, recalculate line counts (corrects estimate drift
+	 * from virt_skip_older) and update the adjustment.  Save and restore
+	 * pagetop_ent across calc_lines — clearing it causes flicker. */
 	if (!on && buf->xtext && buf->xtext->buffer == buf)
 	{
-		GtkAdjustment *adj = buf->xtext->adj;
-		gdouble page = gtk_adjustment_get_page_size (adj);
-		gdouble new_upper = buf->num_lines > 0 ? buf->num_lines : 1;
-		gdouble new_value = buf->scrollbar_down
-			? new_upper - page : gtk_adjustment_get_value (adj);
+		gboolean was_down = buf->scrollbar_down;
+		textentry *saved_pagetop = buf->pagetop_ent;
+		int saved_pagetop_line = buf->pagetop_line;
+		int saved_pagetop_subline = buf->pagetop_subline;
 
-		if (new_value < 0)
-			new_value = 0;
-		if (new_value > new_upper - page)
-			new_value = new_upper - page;
+		g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+		gtk_xtext_calc_lines (buf, FALSE);
 
-		g_signal_handler_block (adj, buf->xtext->vc_signal_tag);
-		gtk_adjustment_configure (adj, new_value, 0, new_upper, 1, page, page);
-		g_signal_handler_unblock (adj, buf->xtext->vc_signal_tag);
-		buf->old_value = new_value;
+		/* Restore pagetop so render_page doesn't do a fresh walk */
+		buf->pagetop_ent = saved_pagetop;
+		buf->pagetop_line = saved_pagetop_line;
+		buf->pagetop_subline = saved_pagetop_subline;
+
+		if (was_down)
+		{
+			buf->scrollbar_down = TRUE;
+			gtk_adjustment_set_value (buf->xtext->adj,
+				gtk_adjustment_get_upper (buf->xtext->adj) -
+				gtk_adjustment_get_page_size (buf->xtext->adj));
+			buf->old_value = gtk_adjustment_get_value (buf->xtext->adj);
+		}
+		else
+		{
+			/* Scrolled up: adj_value was frozen during batch but old_value
+			 * tracked before-viewport inserts.  Sync adj to old_value so
+			 * the same entries stay visible. */
+			gtk_adjustment_set_value (buf->xtext->adj, buf->old_value);
+		}
+		g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
 
 		gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
 	}

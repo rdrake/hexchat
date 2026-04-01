@@ -8950,15 +8950,28 @@ gtk_xtext_buffer_free (xtext_buffer *buf)
 	if (buf->xtext->selection_buffer == buf)
 		buf->xtext->selection_buffer = NULL;
 
+	/* Free search state first — but skip the per-entry fini walk
+	 * (search_textentry_fini) since we're about to free all entries
+	 * anyway.  Just free the list and clear the search metadata. */
 	if (buf->search_found)
 	{
-		gtk_xtext_search_fini (buf);
+		g_list_free (buf->search_found);
+		buf->search_found = NULL;
 	}
+	g_free (buf->search_text);
+	buf->search_text = NULL;
+	g_free (buf->search_nee);
+	buf->search_nee = NULL;
+	if (buf->search_re)
+		g_regex_unref (buf->search_re);
+	if (buf->search_virt_ids)
+		g_array_free (buf->search_virt_ids, TRUE);
 
 	ent = buf->text_first;
 	while (ent)
 	{
 		next = ent->next;
+		g_list_free (ent->marks);	/* search marks */
 		g_free (ent->msgid);	/* Free msgid if set (Phase 1) */
 		/* Phase 4: free separate str and redaction info */
 		if (ent->flags & TEXTENTRY_FLAG_SEPARATE_STR)
