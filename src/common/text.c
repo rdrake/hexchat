@@ -131,6 +131,7 @@ scrollback_save_msg (session *sess, char *text, time_t stamp, const char *msgid)
 	 * eviction + rematerialization preserves the same stable ID */
 	if (rowid > 0)
 		fe_set_pending_db_rowid (sess, rowid);
+
 }
 
 /* Update a pending scrollback entry's placeholder msgid to the real server msgid.
@@ -354,12 +355,14 @@ scrollback_load (session *sess)
 	/* Always enable virtual scrollback when a DB exists — this allows
 	 * scrolling back through unlimited history stored in SQLite.
 	 * The materialization window (~500 entries) keeps memory bounded
-	 * while the DB provides the full history on demand. */
-	if (lines > 0)
+	 * while the DB provides the full history on demand.
+	 * Enable even for empty DBs (fresh channels) so entries saved
+	 * later get proper virtual tracking from the start. */
 	{
 		int total = scrollback_count (db, sess->channel);
 		gint64 max_id = scrollback_get_max_rowid (db, sess->channel);
 		fe_scrollback_set_virtual (sess, db, sess->channel, total, max_id);
+		sess->scrollback_virtual_set = TRUE;
 	}
 
 	if (lines)

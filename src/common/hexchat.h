@@ -477,6 +477,7 @@ typedef struct session
 	char *markread_timestamp;	/* server MARKREAD timestamp string (ISO 8601, for round-trip) */
 	time_t markread_time;		/* parsed MARKREAD timestamp as time_t (for local comparison) */
 	time_t scrollback_newest_time;	/* newest timestamp from loaded scrollback */
+	unsigned int scrollback_virtual_set:1;	/* virtual mode already enabled for this session */
 	char *scrollback_oldest_msgid;	/* oldest msgid from loaded scrollback (for BEFORE) */
 	char *scrollback_newest_msgid;	/* newest msgid from loaded scrollback (for AFTER) */
 	char *current_msgid;	/* temporary: msgid of message being processed (owned copy) */
