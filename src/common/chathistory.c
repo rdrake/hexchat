@@ -1101,6 +1101,7 @@ chathistory_process_batch (server *serv, batch_info *batch)
 			batch_oldest_msgid = first_msg->msgid;
 	}
 	sess->history_insert_sorted_mode = TRUE;
+	fe_set_batch_mode (sess, TRUE);
 
 	/* Process messages */
 	for (iter = batch->messages; iter; iter = iter->next)
@@ -1122,6 +1123,7 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	/* Clear processing mode flags */
 	sess->history_prepend_mode = FALSE;
 	sess->history_insert_sorted_mode = FALSE;
+	fe_set_batch_mode (sess, FALSE);
 
 	/* Update oldest_msgid for scroll-to-load pagination */
 	if (batch_oldest_msgid && msg_count > 0)

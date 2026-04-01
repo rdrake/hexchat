@@ -7891,7 +7891,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	{
 		buf->pagetop_line += new_lines;
 		buf->old_value += new_lines;
-		if (buf->xtext && buf->xtext->buffer == buf)
+		if (buf->xtext && buf->xtext->buffer == buf && !buf->batch_mode)
 		{
 			buf->xtext->select_start_adj += new_lines;
 			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
@@ -7910,7 +7910,8 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		if (buf->old_value < 0)
 			buf->old_value = 0;
 	}
-	else if (!inserted_before_pagetop && buf->xtext && buf->xtext->buffer == buf)
+	else if (!inserted_before_pagetop && buf->xtext && buf->xtext->buffer == buf
+	         && !buf->batch_mode)
 	{
 		/* Entry inserted after viewport (e.g., chathistory catch-up while
 		 * scrolled up).  Extend the scrollbar range without moving the
@@ -7922,8 +7923,9 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 
 	/* Schedule render if this buffer is active.
 	 * Skip when scrolled up and the insert is after the viewport — the user
-	 * can't see it and rendering mid-batch causes scroll jerkiness. */
-	if (buf->xtext->buffer == buf &&
+	 * can't see it and rendering mid-batch causes scroll jerkiness.
+	 * Also skip during batch_mode — caller will trigger one render when done. */
+	if (buf->xtext->buffer == buf && !buf->batch_mode &&
 	    (inserted_before_pagetop || buf->scrollbar_down))
 	{
 		if (!buf->xtext->add_io_tag)
@@ -9515,8 +9517,13 @@ gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
 	if (!buf->virtual_mode || !buf->text_first || stamp <= 0)
 		return FALSE;
 
-	/* Only skip if entry is strictly older than everything materialized */
+	/* Only skip if entry is strictly older than everything materialized
+	 * AND the materialization window is already full.  When there's room
+	 * (e.g., fresh channel during catch-up), materialize instead so
+	 * content is visible to the user as it arrives. */
 	if (stamp >= buf->text_first->stamp)
+		return FALSE;
+	if (buf->mat_count < VIRT_MAT_WINDOW)
 		return FALSE;
 
 	buf->total_entries++;
@@ -9539,7 +9546,7 @@ gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
 		if (buf->pagetop_ent)
 			buf->pagetop_line += est;
 
-		if (buf->xtext && buf->xtext->buffer == buf)
+		if (buf->xtext && buf->xtext->buffer == buf && !buf->batch_mode)
 		{
 			GtkAdjustment *adj = buf->xtext->adj;
 			gdouble new_val = gtk_adjustment_get_value (adj) + est;
