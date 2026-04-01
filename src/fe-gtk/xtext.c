@@ -6913,6 +6913,7 @@ gtk_xtext_search_virt_scan (xtext_buffer *buf)
 	buf->search_virt_pos = -1;
 
 	total = scrollback_count (buf->virt_db, buf->virt_channel);
+	buf->search_virt_db_total = buf->total_entries;
 	offset = 0;
 	batch = 500;
 
@@ -7098,6 +7099,29 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 		/* Virtual mode: navigate via rowid array */
 		if (buf->search_virt_ids && buf->search_virt_ids->len > 0)
 		{
+			/* Re-scan if DB has grown since last scan (new history arrived).
+			 * Restore current position in the rebuilt array so forward/back
+			 * from the current result works correctly. */
+			if (buf->total_entries != buf->search_virt_db_total)
+			{
+				guint64 current_id = buf->hintsearch_id;
+				gtk_xtext_search_virt_scan (buf);
+
+				buf->search_virt_pos = -1;
+				if (current_id && buf->search_virt_ids)
+				{
+					int i;
+					for (i = 0; i < (int)buf->search_virt_ids->len; i++)
+					{
+						if (g_array_index (buf->search_virt_ids, gint64, i) == (gint64)current_id)
+						{
+							buf->search_virt_pos = i;
+							break;
+						}
+					}
+				}
+			}
+
 			if (buf->search_virt_pos < 0)
 			{
 				/* Fresh search: start from first or last */
@@ -7110,24 +7134,11 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 				buf->search_virt_pos += BACKWARD ? -1 : 1;
 			}
 
-			/* Exhausted — re-scan DB in case new history arrived */
 			if (buf->search_virt_pos < 0 ||
 			    buf->search_virt_pos >= (int)buf->search_virt_ids->len)
 			{
-				int old_len = (int)buf->search_virt_ids->len;
-				gtk_xtext_search_virt_scan (buf);
-
-				if ((int)buf->search_virt_ids->len > old_len)
-				{
-					/* New results found — navigate to the new boundary */
-					buf->search_virt_pos = BACKWARD ? 0
-						: (int)buf->search_virt_ids->len - 1;
-				}
-				else
-				{
-					buf->search_virt_pos = -1;
-					ent = NULL;
-				}
+				buf->search_virt_pos = -1;
+				ent = NULL;
 			}
 			else
 			{

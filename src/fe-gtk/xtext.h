@@ -171,6 +171,7 @@ typedef struct {
 	/* Virtual mode: DB-backed search results (Phase 7a) */
 	GArray *search_virt_ids;	/* ordered array of matching DB rowids (gint64) */
 	int search_virt_pos;		/* current index in search_virt_ids (-1 = none) */
+	int search_virt_db_total;	/* total_entries at last scan (detect DB growth) */
 
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	GHashTable *entries_by_msgid;	/* msgid string → textentry* for O(1) lookup */
