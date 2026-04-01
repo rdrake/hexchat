@@ -2520,40 +2520,52 @@ fe_set_batch_mode (session *sess, gboolean on)
 	buf = sess->res->buffer;
 	buf->batch_mode = on ? 1 : 0;
 
-	/* When batch ends, recalculate line counts (corrects estimate drift
-	 * from virt_skip_older) and update the adjustment.  Save and restore
-	 * pagetop_ent across calc_lines — clearing it causes flicker. */
+	/* When batch ends, sync total_entries from DB (authoritative) and
+	 * recalculate num_lines.  In-memory total_entries can drift if
+	 * duplicate messages are rejected by INSERT OR IGNORE but
+	 * append_entry still increments the counter. */
 	if (!on && buf->xtext && buf->xtext->buffer == buf)
 	{
+		GtkAdjustment *adj = buf->xtext->adj;
 		gboolean was_down = buf->scrollbar_down;
-		textentry *saved_pagetop = buf->pagetop_ent;
-		int saved_pagetop_line = buf->pagetop_line;
-		int saved_pagetop_subline = buf->pagetop_subline;
+		gdouble page = gtk_adjustment_get_page_size (adj);
+		gdouble upper;
 
-		g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
-		gtk_xtext_calc_lines (buf, FALSE);
+		if (buf->virtual_mode && buf->virt_db && buf->virt_channel)
+		{
+			int db_total = scrollback_count (buf->virt_db, buf->virt_channel);
+			if (db_total != buf->total_entries)
+			{
+				int delta = buf->total_entries - db_total;
+				buf->total_entries = db_total;
+				/* Adjust num_lines by the same delta — the excess was
+				 * phantom entries that inflated the estimate. */
+				buf->num_lines -= (int)(delta * buf->avg_lines_per_entry);
+				if (buf->num_lines < buf->lines_before_mat + buf->lines_mat)
+					buf->num_lines = buf->lines_before_mat + buf->lines_mat;
+			}
+		}
 
-		/* Restore pagetop so render_page doesn't do a fresh walk */
-		buf->pagetop_ent = saved_pagetop;
-		buf->pagetop_line = saved_pagetop_line;
-		buf->pagetop_subline = saved_pagetop_subline;
+		upper = buf->num_lines > 0 ? buf->num_lines : 1;
+		gdouble value;
 
 		if (was_down)
 		{
+			value = upper - page;
+			if (value < 0) value = 0;
 			buf->scrollbar_down = TRUE;
-			gtk_adjustment_set_value (buf->xtext->adj,
-				gtk_adjustment_get_upper (buf->xtext->adj) -
-				gtk_adjustment_get_page_size (buf->xtext->adj));
-			buf->old_value = gtk_adjustment_get_value (buf->xtext->adj);
 		}
 		else
 		{
-			/* Scrolled up: adj_value was frozen during batch but old_value
-			 * tracked before-viewport inserts.  Sync adj to old_value so
-			 * the same entries stay visible. */
-			gtk_adjustment_set_value (buf->xtext->adj, buf->old_value);
+			value = buf->old_value;
+			if (value > upper - page) value = upper - page;
+			if (value < 0) value = 0;
 		}
-		g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+
+		g_signal_handler_block (adj, buf->xtext->vc_signal_tag);
+		gtk_adjustment_configure (adj, value, 0, upper, 1, page, page);
+		g_signal_handler_unblock (adj, buf->xtext->vc_signal_tag);
+		buf->old_value = value;
 
 		gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
 	}

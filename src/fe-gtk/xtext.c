@@ -166,6 +166,7 @@ struct textentry
 
 	unsigned int collapsed:1;		/* multiline entry is currently collapsed */
 	unsigned int collapsible:1;		/* multiline entry can be collapsed/expanded */
+	unsigned int has_db_row:1;		/* entry was saved to DB (has valid DB rowid) */
 
 	/* Pre-parsed rendering data (built once at entry creation) */
 	unsigned char *stripped_str;       /* text with format codes removed, emoji → U+FFFC */
@@ -5353,41 +5354,33 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 		count++;
 	}
 
-	/* On resize (recompute_sublines), scale lines_before_mat by the ratio
-	 * of new-to-old materialized lines.  The unmaterialized entries above
-	 * can't be re-wrapped, but their line count scales proportionally with
-	 * the same width change.  This avoids the stale-lbm drift that causes
-	 * blank space at the bottom after resize. */
-	if (recompute_sublines && buf->lines_mat > 0 && lines != buf->lines_mat)
-	{
-		double ratio = (double)lines / buf->lines_mat;
-		buf->lines_before_mat = (int)(buf->lines_before_mat * ratio + 0.5);
-	}
-
 	buf->lines_mat = lines;
 	buf->mat_count = count;
 
-	/* Update running average — on resize, use the new avg directly
-	 * (not blended) since the old avg reflects the old width. */
+	/* Update running average */
 	if (count > 0)
 	{
 		double new_avg = (double)lines / count;
-		if (buf->avg_lines_per_entry <= 0 || recompute_sublines)
+		if (buf->avg_lines_per_entry <= 0)
 			buf->avg_lines_per_entry = new_avg;
 		else
 			buf->avg_lines_per_entry = 0.9 * buf->avg_lines_per_entry + 0.1 * new_avg;
 	}
 
-	/* Clamp lbm to 0 when mat_first_index == 0 (no entries above). */
+	/* lines_before_mat is absorptive: adjusted by ensure_range prepend (-)
+	 * and eviction (+).  Never recompute from formula here — the avg is
+	 * inaccurate for mixed regions and causes huge scroll jumps.
+	 * Clamp to 0 when mat_first_index == 0 (no entries above). */
 	if (buf->mat_first_index == 0)
 		buf->lines_before_mat = 0;
 	if (buf->lines_before_mat < 0)
 		buf->lines_before_mat = 0;
 	{
 		int entries_after = buf->total_entries - buf->mat_first_index - buf->mat_count;
+		int lines_after;
 		if (entries_after < 0)
 			entries_after = 0;
-		int lines_after = (entries_after == 0) ? 0
+		lines_after = (entries_after == 0) ? 0
 			: (int)(entries_after * buf->avg_lines_per_entry);
 		buf->num_lines = buf->lines_before_mat + buf->lines_mat + lines_after;
 	}
@@ -5678,6 +5671,7 @@ gtk_xtext_render_page (GtkXText * xtext)
 
 	xtext->pixel_offset = (gtk_adjustment_get_value (xtext->adj) - startline) * xtext->fontsize;
 
+
 	subline = line = 0;
 	ent = xtext->buffer->text_first;
 
@@ -5761,6 +5755,8 @@ gtk_xtext_render_page (GtkXText * xtext)
 	}
 
 	line = (xtext->fontsize * line) - xtext->pixel_offset;
+
+
 	/* fill any space below the last line with our background GC */
 	xtext_draw_bg (xtext, 0, line, width + MARGIN, height - line);
 
@@ -7409,16 +7405,20 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	ent->msgid = NULL;	/* Will be set later via gtk_xtext_set_msgid() if available */
 	/* Phase 4 virtual scrollback: use DB rowid as entry_id when available,
 	 * so eviction + rematerialization preserves the same ID */
-	if (buf->pending_db_rowid > 0)
 	{
-		ent->entry_id = (guint64) buf->pending_db_rowid;
-		buf->pending_db_rowid = 0;
-		if (ent->entry_id >= buf->next_entry_id)
-			buf->next_entry_id = ent->entry_id + 1;
-	}
-	else
-	{
-		ent->entry_id = buf->next_entry_id++;
+		gboolean has_db_row = (buf->pending_db_rowid > 0);
+		if (has_db_row)
+		{
+			ent->entry_id = (guint64) buf->pending_db_rowid;
+			buf->pending_db_rowid = 0;
+			if (ent->entry_id >= buf->next_entry_id)
+				buf->next_entry_id = ent->entry_id + 1;
+		}
+		else
+		{
+			ent->entry_id = buf->next_entry_id++;
+		}
+		ent->has_db_row = has_db_row ? 1 : 0;
 	}
 	ent->group_id = buf->current_group_id;	/* non-zero for multiline batch entries */
 	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
@@ -7487,10 +7487,16 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 		buf->num_lines += 1 + ent->extra_lines_above;  /* placeholder — real count deferred to first allocation */
 	}
 
-	/* Virtual scrollback (Phase 3): new entry appended at the end */
+	/* Virtual scrollback (Phase 3): new entry appended at the end.
+	 * Only increment total_entries if the entry was actually saved to the
+	 * DB (has_db_row).  Entries rejected by INSERT OR IGNORE (dupes) or
+	 * system messages that skip scrollback_save have no DB row — counting
+	 * them inflates total_entries above scrollback_count, creating phantom
+	 * entries_after that cause a blank line at the bottom. */
 	if (buf->virtual_mode)
 	{
-		buf->total_entries++;
+		if (ent->has_db_row)
+			buf->total_entries++;
 		buf->mat_count++;
 	}
 
@@ -7542,6 +7548,16 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 		buf->old_value = buf->num_lines - gtk_adjustment_get_page_size (buf->xtext->adj);
 		if (buf->old_value < 0)
 			buf->old_value = 0;
+		/* Sync adjustment immediately so GTK doesn't snapshot the widget
+		 * between num_lines increment and the deferred render_page_timeout.
+		 * Without this, there's a 1-line gap at the bottom. */
+		if (buf->xtext->buffer == buf)
+		{
+			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+			gtk_adjustment_set_upper (buf->xtext->adj, buf->num_lines);
+			gtk_adjustment_set_value (buf->xtext->adj, buf->old_value);
+			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+		}
 	}
 	if (buf->search_flags & follow)
 	{
@@ -7610,16 +7626,20 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	ent->msgid = NULL;	/* Will be set later via gtk_xtext_set_msgid() if available */
-	if (buf->pending_db_rowid > 0)
 	{
-		ent->entry_id = (guint64) buf->pending_db_rowid;
-		buf->pending_db_rowid = 0;
-		if (ent->entry_id >= buf->next_entry_id)
-			buf->next_entry_id = ent->entry_id + 1;
-	}
-	else
-	{
-		ent->entry_id = buf->next_entry_id++;
+		gboolean has_db_row = (buf->pending_db_rowid > 0);
+		if (has_db_row)
+		{
+			ent->entry_id = (guint64) buf->pending_db_rowid;
+			buf->pending_db_rowid = 0;
+			if (ent->entry_id >= buf->next_entry_id)
+				buf->next_entry_id = ent->entry_id + 1;
+		}
+		else
+		{
+			ent->entry_id = buf->next_entry_id++;
+		}
+		ent->has_db_row = has_db_row ? 1 : 0;
 	}
 	ent->group_id = buf->current_group_id;
 	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
@@ -7691,7 +7711,8 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	if (buf->virtual_mode)
 	{
 		buf->lines_mat += new_lines;
-		buf->total_entries++;
+		if (ent->has_db_row)
+			buf->total_entries++;
 		buf->mat_count++;
 		/* Prepending at head shifts the materialized window down */
 		if (buf->mat_first_index > 0)
@@ -7808,14 +7829,19 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	ent->msgid = NULL;
 	if (buf->pending_db_rowid > 0)
 	{
-		ent->entry_id = (guint64) buf->pending_db_rowid;
-		buf->pending_db_rowid = 0;
-		if (ent->entry_id >= buf->next_entry_id)
-			buf->next_entry_id = ent->entry_id + 1;
-	}
-	else
-	{
-		ent->entry_id = buf->next_entry_id++;
+		gboolean has_db_row = (buf->pending_db_rowid > 0);
+		if (has_db_row)
+		{
+			ent->entry_id = (guint64) buf->pending_db_rowid;
+			buf->pending_db_rowid = 0;
+			if (ent->entry_id >= buf->next_entry_id)
+				buf->next_entry_id = ent->entry_id + 1;
+		}
+		else
+		{
+			ent->entry_id = buf->next_entry_id++;
+		}
+		ent->has_db_row = has_db_row ? 1 : 0;
 	}
 	ent->group_id = buf->current_group_id;
 	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
@@ -7948,7 +7974,8 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		 * materialized entries, including the new entry and any day boundary
 		 * changes on its neighbor (already reflected in num_lines±1 above). */
 		buf->lines_mat += new_lines;
-		buf->total_entries++;
+		if (ent->has_db_row)
+			buf->total_entries++;
 		buf->mat_count++;
 		/* If inserted at head, the materialized window shifted down */
 		if (ent == buf->text_first)
@@ -8019,6 +8046,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		gl = gtk_xtext_search_textentry (buf, ent);
 		gtk_xtext_search_textentry_add (buf, ent, gl, FALSE);
 	}
+
 }
 
 /* the main two public functions */
