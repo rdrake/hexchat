@@ -1271,6 +1271,38 @@ scrollback_get_index_of_rowid (scrollback_db *db, const char *channel, gint64 ro
 	return index;
 }
 
+gint64
+scrollback_get_rowid_by_msgid (scrollback_db *db, const char *channel, const char *msgid)
+{
+	gint64 rowid = 0;
+	int rc;
+
+	if (!db || !channel || !msgid || !msgid[0])
+		return 0;
+
+	gint64 channel_id = scrollback_get_channel_id (db, channel);
+	if (channel_id < 0)
+		return 0;
+
+	/* Use a one-off query — this is rare (reply click on evicted entry) */
+	{
+		sqlite3_stmt *stmt = NULL;
+		rc = sqlite3_prepare_v2 (db->db,
+			"SELECT id FROM messages WHERE channel_id = ? AND msgid = ? LIMIT 1",
+			-1, &stmt, NULL);
+		if (rc == SQLITE_OK)
+		{
+			sqlite3_bind_int64 (stmt, 1, channel_id);
+			sqlite3_bind_text (stmt, 2, msgid, -1, SQLITE_TRANSIENT);
+			if (sqlite3_step (stmt) == SQLITE_ROW)
+				rowid = sqlite3_column_int64 (stmt, 0);
+			sqlite3_finalize (stmt);
+		}
+	}
+
+	return rowid;
+}
+
 GSList *
 scrollback_search_text (scrollback_db *db, const char *channel, const char *pattern)
 {

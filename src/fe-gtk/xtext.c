@@ -2883,6 +2883,24 @@ gtk_xtext_click_reply_context (GtkXText *xtext, textentry *ent)
 	else
 		return;
 
+	/* Virtual scrollback: if target is evicted, try to materialize it from DB */
+	if (!target && xtext->buffer->virtual_mode &&
+	    ent->reply->target_msgid && xtext->buffer->virt_db)
+	{
+		scrollback_db *db = (scrollback_db *) xtext->buffer->virt_db;
+		gint64 rowid = scrollback_get_rowid_by_msgid (db,
+			xtext->buffer->virt_channel, ent->reply->target_msgid);
+		if (rowid > 0)
+		{
+			int idx = scrollback_get_index_of_rowid (db,
+				xtext->buffer->virt_channel, rowid);
+			gtk_xtext_virt_ensure_range (xtext->buffer, idx, VIRT_PAGE_SIZE);
+			/* Retry lookup after materialization */
+			target = gtk_xtext_find_by_msgid (xtext->buffer,
+				ent->reply->target_msgid);
+		}
+	}
+
 	if (!target)
 		return;
 

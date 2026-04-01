@@ -1412,6 +1412,11 @@ fe_confirm_entry (session *sess, guint64 entry_id, const char *msgid)
 		if (msgid)
 			gtk_xtext_set_msgid (sess->res->buffer, ent, msgid);
 	}
+	/* Virtual scrollback: if the entry was evicted (find_by_id returns NULL),
+	 * the DB-side msgid update is already handled by scrollback_confirm_pending
+	 * in inbound.c.  When the entry is rematerialized from the DB later, it
+	 * will have the correct msgid and render as NORMAL (PENDING is transient
+	 * and not persisted to the DB). */
 }
 
 void

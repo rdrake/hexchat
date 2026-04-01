@@ -269,6 +269,13 @@ int scrollback_get_index_of_rowid (scrollback_db *db, const char *channel,
                                     gint64 rowid);
 
 /**
+ * Find the DB rowid for a message by its IRCv3 msgid.
+ * Returns 0 if not found.
+ */
+gint64 scrollback_get_rowid_by_msgid (scrollback_db *db, const char *channel,
+                                       const char *msgid);
+
+/**
  * Search message text using SQL LIKE pattern.
  * Returns matching messages in chronological order.
  * Only id, channel, and text fields are populated in the results.
