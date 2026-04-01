@@ -7110,12 +7110,24 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 				buf->search_virt_pos += BACKWARD ? -1 : 1;
 			}
 
-			/* Wrap or exhaust */
+			/* Exhausted — re-scan DB in case new history arrived */
 			if (buf->search_virt_pos < 0 ||
 			    buf->search_virt_pos >= (int)buf->search_virt_ids->len)
 			{
-				buf->search_virt_pos = -1;
-				ent = NULL;
+				int old_len = (int)buf->search_virt_ids->len;
+				gtk_xtext_search_virt_scan (buf);
+
+				if ((int)buf->search_virt_ids->len > old_len)
+				{
+					/* New results found — navigate to the new boundary */
+					buf->search_virt_pos = BACKWARD ? 0
+						: (int)buf->search_virt_ids->len - 1;
+				}
+				else
+				{
+					buf->search_virt_pos = -1;
+					ent = NULL;
+				}
 			}
 			else
 			{
