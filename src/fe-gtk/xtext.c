@@ -5270,12 +5270,12 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 			buf->avg_lines_per_entry = 0.9 * buf->avg_lines_per_entry + 0.1 * new_avg;
 	}
 
-	/* lines_before_mat is absorptive: set once by buffer_set_virtual, then
-	 * adjusted by ensure_range eviction (+) and prepend (-).  Never recompute
-	 * from the formula here — doing so causes viewport shifts when avg changes
-	 * (from Pango remeasurement, eviction, or chathistory).
-	 * The mat_first_index==0 correction is done in ensure_range before this
-	 * function is called, so the adj value is already consistent. */
+	/* lines_before_mat is absorptive: adjusted by ensure_range prepend (-)
+	 * and eviction (+).  Never recompute from formula here — the avg is
+	 * inaccurate for mixed regions and causes huge scroll jumps.
+	 * Clamp to 0 when mat_first_index == 0 (no entries above). */
+	if (buf->mat_first_index == 0)
+		buf->lines_before_mat = 0;
 	if (buf->lines_before_mat < 0)
 		buf->lines_before_mat = 0;
 	{
@@ -5354,10 +5354,9 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 	textentry *ent;
 
 	/* Virtual scrollback: adjust line to be relative to the materialized window.
-	 * Materialization is driven by the smart trigger in adjustment_changed —
-	 * do NOT trigger ensure_range here, as it causes harmful eviction during
-	 * hover/render paths (e.g., mouse entering the widget at the bottom
-	 * boundary triggers head eviction that drifts the viewport). */
+	 * Use lines_before_mat directly — both virt_skip_older and ensure_range
+	 * adjust adj_value in lockstep with lbm, so (adj_value - lbm) is always
+	 * consistent.  Do NOT trigger ensure_range here. */
 	if (xtext->buffer->virtual_mode)
 	{
 		line -= xtext->buffer->lines_before_mat;
@@ -7658,9 +7657,21 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		if (buf->old_value < 0)
 			buf->old_value = 0;
 	}
+	else if (!inserted_before_pagetop && buf->xtext && buf->xtext->buffer == buf)
+	{
+		/* Entry inserted after viewport (e.g., chathistory catch-up while
+		 * scrolled up).  Extend the scrollbar range without moving the
+		 * viewport to prevent flicker from stale adj upper. */
+		g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+		gtk_adjustment_set_upper (buf->xtext->adj, buf->num_lines);
+		g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+	}
 
-	/* Schedule render if this buffer is active */
-	if (buf->xtext->buffer == buf)
+	/* Schedule render if this buffer is active.
+	 * Skip when scrolled up and the insert is after the viewport — the user
+	 * can't see it and rendering mid-batch causes scroll jerkiness. */
+	if (buf->xtext->buffer == buf &&
+	    (inserted_before_pagetop || buf->scrollbar_down))
 	{
 		if (!buf->xtext->add_io_tag)
 		{
@@ -9099,8 +9110,6 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 
 		{
 			int evicted_lines = ENT_DISPLAY_LINES (buf->text_first);
-			/* virt_evict_head removes the day boundary from the new head,
-			 * which reduces lines_mat by 1 extra.  Absorb that too. */
 			gboolean next_loses_boundary = (buf->text_first->next &&
 			    (buf->text_first->next->flags & TEXTENTRY_FLAG_DAY_BOUNDARY));
 			gtk_xtext_virt_evict_head (buf);
@@ -9126,42 +9135,10 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 	 * which triggers another adjustment_changed → ensure_range cycle. */
 	if (buf->mat_count != old_mat_count || buf->mat_first_index != old_mat_first)
 	{
-		/* When mat_first_index reaches 0, all entries from the start are
-		 * materialized — lines_before_mat must be 0.  Any residual is
-		 * estimation error from buffer_set_virtual's initial formula.
-		 * Correct it atomically with the adj value so the viewport
-		 * doesn't jump.  This runs inside the signal-blocked region
-		 * so no spurious value-changed fires. */
-		if (buf->mat_first_index == 0 && buf->lines_before_mat > 0 &&
-		    buf->xtext && buf->xtext->buffer == buf)
-		{
-			int excess = buf->lines_before_mat;
-			buf->lines_before_mat = 0;
-			/* Adjust both old_value and the actual GTK adj value so the
-			 * viewport doesn't jump.  adjustment_changed re-reads value
-			 * after ensure_range returns to pick up this correction. */
-			buf->old_value -= excess;
-			if (buf->old_value < 0)
-				buf->old_value = 0;
-			{
-				gdouble val = gtk_adjustment_get_value (buf->xtext->adj) - excess;
-				if (val < 0) val = 0;
-				gtk_adjustment_set_value (buf->xtext->adj, val);
-			}
-		}
-
 		if (buf->xtext && buf->xtext->vc_signal_tag)
 		{
 			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
 			gtk_xtext_calc_lines_virtual_ex (buf, TRUE, FALSE);
-			/* After calc_lines_virtual_ex recomputes num_lines and calls
-			 * adjustment_set, apply the corrected value. */
-			if (buf->mat_first_index == 0)
-			{
-				gdouble val = buf->old_value;
-				if (val < 0) val = 0;
-				gtk_adjustment_set_value (buf->xtext->adj, val);
-			}
 			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
 		}
 		else
@@ -9193,11 +9170,9 @@ gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
 	buf->total_entries++;
 	buf->mat_first_index++;	/* existing indices shifted up by 1 in DB */
 
-	/* Grow lines_before_mat and num_lines with an estimate so the scrollbar
-	 * extends upward to reflect the new entries.  Only grow adj upper (not
-	 * value) — this extends the scroll range without moving the viewport.
-	 * The ensure_range clamp corrects any residual when all entries above
-	 * are eventually materialized (mat_first_index reaches 0). */
+	/* Grow lines_before_mat, num_lines, adj upper+value in lockstep.
+	 * Use gtk_adjustment_configure to set upper and value atomically —
+	 * this avoids intermediate states where GTK clamps value. */
 	{
 		int est = (int)(buf->avg_lines_per_entry + 0.5);
 		if (est < 1) est = 1;
@@ -9206,13 +9181,15 @@ gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
 
 		if (buf->xtext && buf->xtext->buffer == buf)
 		{
-			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
-			gtk_adjustment_set_upper (buf->xtext->adj,
-				gtk_adjustment_get_upper (buf->xtext->adj) + est);
-			gtk_adjustment_set_value (buf->xtext->adj,
-				gtk_adjustment_get_value (buf->xtext->adj) + est);
-			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
-			buf->old_value += est;
+			GtkAdjustment *adj = buf->xtext->adj;
+			gdouble new_val = gtk_adjustment_get_value (adj) + est;
+			gdouble new_upper = buf->num_lines;
+			gdouble page = gtk_adjustment_get_page_size (adj);
+
+			g_signal_handler_block (adj, buf->xtext->vc_signal_tag);
+			gtk_adjustment_configure (adj, new_val, 0, new_upper, 1, page, page);
+			g_signal_handler_unblock (adj, buf->xtext->vc_signal_tag);
+			buf->old_value = (gfloat) new_val;
 		}
 	}
 	return TRUE;
