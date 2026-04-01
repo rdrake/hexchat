@@ -1332,6 +1332,17 @@ gtk_xtext_find_char (GtkXText * xtext, int x, int y, int *off, int *out_of_bound
 		y -= xtext->fontsize;
 
 	line = (y + xtext->pixel_offset) / xtext->fontsize;
+
+	/* Don't return an entry for hover/click in empty space below content */
+	{
+		int abs_line = line + (int)gtk_adjustment_get_value (xtext->adj);
+		int content_lines = xtext->buffer->virtual_mode
+			? xtext->buffer->lines_before_mat + xtext->buffer->lines_mat
+			: xtext->buffer->num_lines;
+		if (abs_line >= content_lines)
+			return NULL;
+	}
+
 	ent = gtk_xtext_nth (xtext, line + (int)gtk_adjustment_get_value (xtext->adj), &subline);
 	if (!ent)
 		return NULL;
