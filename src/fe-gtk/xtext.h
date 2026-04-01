@@ -168,6 +168,10 @@ typedef struct {
 	GRegex *search_re;		/* Compiled regular expression */
 	guint64 hintsearch_id;	/* entry_id found for last search (0 = not set) */
 
+	/* Virtual mode: DB-backed search results (Phase 7a) */
+	GArray *search_virt_ids;	/* ordered array of matching DB rowids (gint64) */
+	int search_virt_pos;		/* current index in search_virt_ids (-1 = none) */
+
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	GHashTable *entries_by_msgid;	/* msgid string → textentry* for O(1) lookup */
 	GHashTable *entries_by_id;		/* entry_id → textentry* for O(1) lookup */

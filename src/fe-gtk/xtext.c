@@ -6826,6 +6826,8 @@ gtk_xtext_search_textentry_fini (gpointer entp, gpointer dummy)
 	ent->marks = NULL;
 }
 
+static GList *gtk_xtext_search_raw_text (xtext_buffer *out, const char *text, int len);
+
 /* Free all search information for all textentrys and the xtext_buffer */
 static void
 gtk_xtext_search_fini (xtext_buffer *buf)
@@ -6846,6 +6848,12 @@ gtk_xtext_search_fini (xtext_buffer *buf)
 		g_regex_unref (buf->search_re);
 		buf->search_re = NULL;
 	}
+	if (buf->search_virt_ids)
+	{
+		g_array_free (buf->search_virt_ids, TRUE);
+		buf->search_virt_ids = NULL;
+	}
+	buf->search_virt_pos = -1;
 }
 
 /* Returns TRUE if the base search information exists and is still okay to use */
@@ -6891,6 +6899,123 @@ gtk_xtext_search_init (xtext_buffer *buf, const gchar *text, gtk_xtext_search_fl
 	return FALSE;
 }
 
+/* Virtual mode: build ordered array of DB rowids matching the search.
+ * Also marks any currently-materialized matches for highlight_all. */
+static void
+gtk_xtext_search_virt_scan (xtext_buffer *buf)
+{
+	int total, offset, batch;
+	textentry *ent;
+
+	if (buf->search_virt_ids)
+		g_array_free (buf->search_virt_ids, TRUE);
+	buf->search_virt_ids = g_array_new (FALSE, FALSE, sizeof (gint64));
+	buf->search_virt_pos = -1;
+
+	total = scrollback_count (buf->virt_db, buf->virt_channel);
+	offset = 0;
+	batch = 500;
+
+	while (offset < total)
+	{
+		GSList *msgs = scrollback_load_range (buf->virt_db, buf->virt_channel,
+		                                      offset, batch);
+		GSList *iter;
+
+		for (iter = msgs; iter; iter = iter->next)
+		{
+			scrollback_msg *msg = iter->data;
+			GList *gl;
+
+			if (!msg->text)
+				continue;
+
+			gl = gtk_xtext_search_raw_text (buf, msg->text, strlen (msg->text));
+			if (gl)
+			{
+				g_array_append_val (buf->search_virt_ids, msg->id);
+				g_list_free (gl);  /* marks stored per-rowid, not per-textentry */
+			}
+		}
+		offset += batch;
+		scrollback_msg_list_free (msgs);
+	}
+
+	/* Also mark materialized entries for highlight_all rendering */
+	for (ent = buf->text_first; ent; ent = ent->next)
+	{
+		GList *gl = gtk_xtext_search_textentry (buf, ent);
+		gtk_xtext_search_textentry_add (buf, ent, gl, TRUE);
+	}
+	buf->search_found = g_list_reverse (buf->search_found);
+}
+
+/* Virtual mode: navigate to the entry at search_virt_pos.
+ * Materializes the region around the target and scrolls to it. */
+static textentry *
+gtk_xtext_search_virt_navigate (GtkXText *xtext, gtk_xtext_search_flags flags)
+{
+	xtext_buffer *buf = xtext->buffer;
+	gint64 rowid;
+	int idx, radius;
+	textentry *ent;
+	GList *gl;
+
+	if (!buf->search_virt_ids || buf->search_virt_ids->len == 0)
+		return NULL;
+
+	if (buf->search_virt_pos < 0 ||
+	    buf->search_virt_pos >= (int)buf->search_virt_ids->len)
+		return NULL;
+
+	rowid = g_array_index (buf->search_virt_ids, gint64, buf->search_virt_pos);
+
+	/* Ensure the target entry is materialized */
+	idx = scrollback_get_index_of_rowid (buf->virt_db, buf->virt_channel, rowid);
+	radius = VIRT_PAGE_SIZE;
+	if (radius < 100)
+		radius = 100;
+	gtk_xtext_virt_ensure_range (buf, idx, radius);
+
+	/* Find the now-materialized entry */
+	ent = gtk_xtext_find_by_id (buf, (guint64)rowid);
+	if (!ent)
+		return NULL;
+
+	/* Apply search marks to this entry if not already present */
+	if (!ent->marks)
+	{
+		gl = gtk_xtext_search_textentry (buf, ent);
+		if (gl)
+			gtk_xtext_search_textentry_add (buf, ent, gl, FALSE);
+	}
+
+	/* Scroll to the entry: compute its absolute line position */
+	{
+		GtkAdjustment *adj = xtext->adj;
+		float value;
+		textentry *walk;
+
+		buf->pagetop_ent = NULL;
+		value = buf->lines_before_mat;
+		for (walk = buf->text_first; walk && walk != ent; walk = walk->next)
+			value += ENT_DISPLAY_LINES (walk);
+
+		if (value > gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj))
+			value = gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj);
+		else if ((flags & backward) && walk)
+		{
+			value -= gtk_adjustment_get_page_size (adj) - ENT_DISPLAY_LINES (walk);
+			if (value < 0)
+				value = 0;
+		}
+		gtk_adjustment_set_value (adj, value);
+	}
+
+	buf->hintsearch_id = ent->entry_id;
+	return ent;
+}
+
 #define BACKWARD (flags & backward)
 #define FIRSTLAST(lp)  (BACKWARD? g_list_last(lp): g_list_first(lp))
 #define NEXTPREVIOUS(lp) (BACKWARD? g_list_previous(lp): g_list_next(lp))
@@ -6901,7 +7026,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 	xtext_buffer *buf = xtext->buffer;
 	GList *gl;
 
-	if (buf->text_first == NULL)
+	if (buf->text_first == NULL && !(buf->virtual_mode && buf->virt_db))
 	{
 		return NULL;
 	}
@@ -6944,18 +7069,57 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 			{
 				return NULL;
 			}
-			for (ent = buf->text_first; ent; ent = ent->next)
-			{
-				GList *gl;
 
-				gl = gtk_xtext_search_textentry (buf, ent);
-				gtk_xtext_search_textentry_add (buf, ent, gl, TRUE);
+			/* Virtual mode: search entire DB */
+			if (buf->virtual_mode && buf->virt_db && buf->virt_channel)
+			{
+				gtk_xtext_search_virt_scan (buf);
 			}
-			buf->search_found = g_list_reverse (buf->search_found);
+			else
+			{
+				for (ent = buf->text_first; ent; ent = ent->next)
+				{
+					GList *gl;
+
+					gl = gtk_xtext_search_textentry (buf, ent);
+					gtk_xtext_search_textentry_add (buf, ent, gl, TRUE);
+				}
+				buf->search_found = g_list_reverse (buf->search_found);
+			}
 		}
 
-		/* Now base search results are in place. */
+		/* Virtual mode: navigate via rowid array */
+		if (buf->search_virt_ids && buf->search_virt_ids->len > 0)
+		{
+			if (buf->search_virt_pos < 0)
+			{
+				/* Fresh search: start from first or last */
+				buf->search_virt_pos = BACKWARD
+					? (int)buf->search_virt_ids->len - 1 : 0;
+			}
+			else
+			{
+				/* Advance to next/prev result */
+				buf->search_virt_pos += BACKWARD ? -1 : 1;
+			}
 
+			/* Wrap or exhaust */
+			if (buf->search_virt_pos < 0 ||
+			    buf->search_virt_pos >= (int)buf->search_virt_ids->len)
+			{
+				buf->search_virt_pos = -1;
+				ent = NULL;
+			}
+			else
+			{
+				ent = gtk_xtext_search_virt_navigate (xtext, flags);
+			}
+
+			gtk_widget_queue_draw (GTK_WIDGET (xtext));
+			return ent;
+		}
+
+		/* Non-virtual navigation (existing code) */
 		if (buf->search_found)
 		{
 			/* If we're in the midst of moving among found items */
@@ -7027,7 +7191,8 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 		textentry *hint = ent;
 
 		buf->pagetop_ent = NULL;
-		for (value = 0, ent = buf->text_first;
+		value = buf->virtual_mode ? buf->lines_before_mat : 0;
+		for (ent = buf->text_first;
 			  ent && ent != hint; ent = ent->next)
 		{
 			value += ENT_DISPLAY_LINES (ent);
