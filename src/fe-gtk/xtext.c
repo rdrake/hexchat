@@ -9190,6 +9190,14 @@ gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
 		buf->lines_before_mat += est;
 		buf->num_lines += est;
 
+		/* Keep pagetop_line in sync — it's stored as absolute (adj_value)
+		 * and adj_value is about to grow by est.  Without this, the
+		 * pagetop cache in gtk_xtext_nth converts a stale pagetop_line
+		 * to the wrong relative position and walks off the end of the
+		 * materialized window, returning NULL → blank view. */
+		if (buf->pagetop_ent)
+			buf->pagetop_line += est;
+
 		if (buf->xtext && buf->xtext->buffer == buf)
 		{
 			GtkAdjustment *adj = buf->xtext->adj;
