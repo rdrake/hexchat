@@ -238,8 +238,15 @@ scrollback_load (session *sess)
 	/* Try migration from old text file format first */
 	scrollback_migrate (db, network, sess->channel);
 
-	/* Load messages from SQLite (returns in chronological order, oldest first) */
-	messages = scrollback_db_load (db, sess->channel, prefs.hex_text_max_lines);
+	/* Load the newest messages from SQLite.  Virtual mode will page in older
+	 * entries on demand via ensure_range.  Cap the initial load at 500 entries
+	 * to keep startup fast — this fills the viewport plus scroll buffer. */
+	{
+		int initial_load = prefs.hex_text_max_lines;
+		if (initial_load > 500)
+			initial_load = 500;
+		messages = scrollback_db_load (db, sess->channel, initial_load);
+	}
 
 	for (iter = messages; iter; iter = iter->next)
 	{
@@ -344,15 +351,15 @@ scrollback_load (session *sess)
 		fe_scrollback_extras_done (sess);
 	}
 
-	/* Enable virtual scrollback paging for channels with enough history */
+	/* Always enable virtual scrollback when a DB exists — this allows
+	 * scrolling back through unlimited history stored in SQLite.
+	 * The materialization window (~500 entries) keeps memory bounded
+	 * while the DB provides the full history on demand. */
 	if (lines > 0)
 	{
 		int total = scrollback_count (db, sess->channel);
-		if (total > lines)
-		{
-			gint64 max_id = scrollback_get_max_rowid (db, sess->channel);
-			fe_scrollback_set_virtual (sess, db, sess->channel, total, max_id);
-		}
+		gint64 max_id = scrollback_get_max_rowid (db, sess->channel);
+		fe_scrollback_set_virtual (sess, db, sess->channel, total, max_id);
 	}
 
 	if (lines)

@@ -25,6 +25,7 @@
 #define MARGIN 2						/* dont touch. */
 #define REFRESH_TIMEOUT 20
 #define VIRT_PAGE_SIZE 100				/* entries to keep beyond viewport as eviction buffer */
+#define VIRT_MAT_WINDOW 500				/* normal materialization window size (entries) */
 
 /* Total line count for an entry: text sublines + extra lines for reply context / reaction badges */
 #define ENT_TOTAL_LINES(ent) \
@@ -7148,13 +7149,13 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 		buf->marker_seen = FALSE;
 	}
 
-	/* In virtual mode, max_lines limits the materialized window (mat_count),
-	 * not the virtual total (num_lines).  ensure_range handles eviction
-	 * separately when scrolling through virtual history. */
+	/* In virtual mode, use the materialization window size for pruning.
+	 * max_lines is the hard ceiling (for large selections); VIRT_MAT_WINDOW
+	 * is the normal working set.  ensure_range handles scrolling eviction. */
 	if (buf->xtext->max_lines > 2)
 	{
-		int count = buf->virtual_mode ? buf->mat_count : buf->num_lines;
-		if (buf->xtext->max_lines < count)
+		int limit = buf->virtual_mode ? VIRT_MAT_WINDOW : buf->xtext->max_lines;
+		if (buf->mat_count > limit || (!buf->virtual_mode && buf->num_lines > limit))
 			gtk_xtext_remove_top (buf);
 	}
 
@@ -7355,12 +7356,11 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	/* Don't update marker_pos for historical entries - they're old */
 	/* marker_pos should stay where it was */
 
-	/* In virtual mode, max_lines limits the materialized window (mat_count),
-	 * not the virtual total (num_lines). */
+	/* In virtual mode, use the materialization window size for pruning. */
 	if (buf->xtext->max_lines > 2)
 	{
-		int count = buf->virtual_mode ? buf->mat_count : buf->num_lines;
-		if (buf->xtext->max_lines < count)
+		int limit = buf->virtual_mode ? VIRT_MAT_WINDOW : buf->xtext->max_lines;
+		if (buf->mat_count > limit || (!buf->virtual_mode && buf->num_lines > limit))
 			gtk_xtext_remove_bottom (buf);
 	}
 
@@ -8600,15 +8600,21 @@ gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
 	buf->virt_db = db;
 	buf->virt_channel = g_strdup (channel);
 	buf->total_entries = total_entries;
-	buf->avg_lines_per_entry = 1.5;		/* initial estimate */
 
-	/* Count currently loaded entries */
+	/* Count loaded entries and compute avg_lines_per_entry from real data.
+	 * This avoids the hardcoded 1.5 estimate which causes flicker on channels
+	 * where the actual average differs significantly. */
 	{
 		textentry *ent;
 		int count = 0;
+		int total_lines = 0;
 		for (ent = buf->text_first; ent; ent = ent->next)
+		{
+			total_lines += ENT_DISPLAY_LINES (ent);
 			count++;
+		}
 		buf->mat_count = count;
+		buf->avg_lines_per_entry = (count > 0) ? (double)total_lines / count : 1.5;
 	}
 
 	/* Loaded entries are the newest — they start at this index */
@@ -9041,10 +9047,11 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 	}
 
 	/* Evict from head if too far behind desired window.
-	 * Only evict when mat_count exceeds max_lines — this avoids converting
-	 * actual line counts into lossy estimates, which causes blank space. */
+	 * Only evict when mat_count exceeds the materialization window size.
+	 * During active selection, pins prevent eviction of selected entries,
+	 * allowing mat_count to grow up to max_lines. */
 	{
-		int max = buf->xtext->max_lines > 2 ? buf->xtext->max_lines : 500;
+		int max = VIRT_MAT_WINDOW;
 		while (buf->mat_first_index < want_start - VIRT_PAGE_SIZE &&
 		       buf->mat_count > max)
 	{
