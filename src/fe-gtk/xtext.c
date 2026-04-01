@@ -3930,23 +3930,72 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 				            ? x + text_width
 				            : x + PANGO_PIXELS (r2.x);
 
-				/* Draw highlight background */
-				GdkRGBA hl_bg = xtext->palette[XTEXT_MARK_BG];
-				if (!is_current)
-					hl_bg.alpha = 0.4f;  /* translucent for non-current matches */
-				gdk_cairo_set_source_rgba (xtext->cr, &hl_bg);
+				cairo_save (xtext->cr);
 				cairo_rectangle (xtext->cr, hl_x1, y - xtext->font->ascent,
 				                 hl_x2 - hl_x1, xtext->fontsize);
-				cairo_fill (xtext->cr);
+				cairo_clip (xtext->cr);
 
-				/* Current match: draw underline */
 				if (is_current)
 				{
-					xtext_set_source_color (xtext, XTEXT_FG);
-					cairo_move_to (xtext->cr, hl_x1, y + 1 + 0.5);
-					cairo_line_to (xtext->cr, hl_x2 - 1, y + 1 + 0.5);
-					cairo_stroke (xtext->cr);
+					/* Current match: solid MARK_BG + text in MARK_FG */
+					GdkRGBA mark_bg = xtext->palette[XTEXT_MARK_BG];
+					GdkRGBA mark_fg = xtext->palette[XTEXT_MARK_FG];
+					PangoAttrList *hl_attrs;
+					PangoAttribute *fg_override;
+
+					gdk_cairo_set_source_rgba (xtext->cr, &mark_bg);
+					cairo_paint (xtext->cr);
+
+					hl_attrs = pango_attr_list_copy (attrs);
+					fg_override = pango_attr_foreground_new (
+						(guint16)(mark_fg.red * 65535),
+						(guint16)(mark_fg.green * 65535),
+						(guint16)(mark_fg.blue * 65535));
+					fg_override->start_index = 0;
+					fg_override->end_index = (guint) sub_len;
+					pango_attr_list_change (hl_attrs, fg_override);
+					pango_layout_set_attributes (xtext->layout, hl_attrs);
+
+					gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+					pango_line = pango_layout_get_lines (xtext->layout)->data;
+					xtext_draw_layout_line (xtext, x, y, pango_line);
+
+					pango_attr_list_unref (hl_attrs);
+					pango_layout_set_attributes (xtext->layout, attrs);
 				}
+				else
+				{
+					/* Other matches: solid BG + translucent tint + MARK_FG text */
+					GdkRGBA mark_fg = xtext->palette[XTEXT_MARK_FG];
+					GdkRGBA tint = xtext->palette[XTEXT_MARK_BG];
+					PangoAttrList *hl_attrs;
+					PangoAttribute *fg_override;
+					tint.alpha = 0.35f;
+
+					xtext_draw_bg (xtext, hl_x1, y - xtext->font->ascent,
+					               hl_x2 - hl_x1, xtext->fontsize);
+					gdk_cairo_set_source_rgba (xtext->cr, &tint);
+					cairo_paint (xtext->cr);
+
+					hl_attrs = pango_attr_list_copy (attrs);
+					fg_override = pango_attr_foreground_new (
+						(guint16)(mark_fg.red * 65535),
+						(guint16)(mark_fg.green * 65535),
+						(guint16)(mark_fg.blue * 65535));
+					fg_override->start_index = 0;
+					fg_override->end_index = (guint) sub_len;
+					pango_attr_list_change (hl_attrs, fg_override);
+					pango_layout_set_attributes (xtext->layout, hl_attrs);
+
+					gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+					pango_line = pango_layout_get_lines (xtext->layout)->data;
+					xtext_draw_layout_line (xtext, x, y, pango_line);
+
+					pango_attr_list_unref (hl_attrs);
+					pango_layout_set_attributes (xtext->layout, attrs);
+				}
+
+				cairo_restore (xtext->cr);
 			}
 		}
 
