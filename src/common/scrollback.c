@@ -393,10 +393,11 @@ prepare_statements (scrollback_db *sdb)
 		-1, &sdb->stmt_count, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
-	/* Virtual scrollback: load a window of entries by position */
+	/* Virtual scrollback: load a window of entries by position.
+	 * ORDER BY (timestamp, id) for deterministic, chronological ordering. */
 	rc = sqlite3_prepare_v2 (sdb->db,
 		"SELECT id, timestamp, msgid, text, redacted_by, redact_reason, redact_time "
-		"FROM messages WHERE channel_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?",
+		"FROM messages WHERE channel_id = ? ORDER BY timestamp ASC, id ASC LIMIT ? OFFSET ?",
 		-1, &sdb->stmt_load_range, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
@@ -406,9 +407,13 @@ prepare_statements (scrollback_db *sdb)
 		-1, &sdb->stmt_max_rowid, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
-	/* Virtual scrollback: positional index of a specific row ID */
+	/* Virtual scrollback: positional index of a specific row ID.
+	 * Must match load_range ordering: (timestamp, id) ASC.
+	 * Counts entries strictly before the target in chronological order. */
 	rc = sqlite3_prepare_v2 (sdb->db,
-		"SELECT COUNT(*) FROM messages WHERE channel_id = ? AND id < ?",
+		"SELECT COUNT(*) FROM messages WHERE channel_id = ?1 AND "
+		"(timestamp < (SELECT timestamp FROM messages WHERE id = ?2) OR "
+		" (timestamp = (SELECT timestamp FROM messages WHERE id = ?2) AND id < ?2))",
 		-1, &sdb->stmt_index_of_rowid, NULL);
 	if (rc != SQLITE_OK) goto fail;
 
