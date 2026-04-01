@@ -6982,13 +6982,20 @@ gtk_xtext_search_virt_navigate (GtkXText *xtext, gtk_xtext_search_flags flags)
 	if (!ent)
 		return NULL;
 
-	/* Apply search marks to this entry if not already present */
+	/* Apply search marks to this entry */
 	if (!ent->marks)
 	{
 		gl = gtk_xtext_search_textentry (buf, ent);
 		if (gl)
 			gtk_xtext_search_textentry_add (buf, ent, gl, FALSE);
 	}
+
+	/* Set curmark so the renderer can identify the focused result.
+	 * This drives both the non-highlight-all single-match display
+	 * and the visual distinction (underline + full opacity) in
+	 * highlight-all mode. */
+	buf->curmark = ent->marks ? g_list_first (ent->marks) : NULL;
+	buf->curdata.u = buf->curmark ? GPOINTER_TO_UINT (buf->curmark->data) : 0;
 
 	/* Scroll to the entry: compute its absolute line position */
 	{
