@@ -5371,22 +5371,33 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 	/* -- optimization -- try to make a short-cut using the pagetop ent */
 	if (xtext->buffer->pagetop_ent)
 	{
-		if (line == xtext->buffer->pagetop_line)
+		int pt_line = xtext->buffer->pagetop_line;
+
+		/* In virtual mode, line has already been converted to relative
+		 * (line -= lbm above) but pagetop_line is stored as absolute
+		 * (adj_value, set by render_page).  Convert to relative for
+		 * consistent comparison.  Safe because lbm is stable between
+		 * when pagetop was set and now — ensure_range clears pagetop_ent
+		 * via calc_lines_virtual_ex whenever lbm changes. */
+		if (xtext->buffer->virtual_mode)
+			pt_line -= xtext->buffer->lines_before_mat;
+
+		if (line == pt_line)
 		{
 			*subline = xtext->buffer->pagetop_subline;
 			return xtext->buffer->pagetop_ent;
 		}
-		if (line > xtext->buffer->pagetop_line)
+		if (line > pt_line)
 		{
 			/* lets start from the pagetop instead of the absolute beginning */
 			ent = xtext->buffer->pagetop_ent;
-			lines = xtext->buffer->pagetop_line - xtext->buffer->pagetop_subline;
+			lines = pt_line - xtext->buffer->pagetop_subline;
 		}
-		else if (line > xtext->buffer->pagetop_line - line)
+		else if (line > pt_line - line)
 		{
 			/* move backwards from pagetop */
 			ent = xtext->buffer->pagetop_ent;
-			lines = xtext->buffer->pagetop_line - xtext->buffer->pagetop_subline;
+			lines = pt_line - xtext->buffer->pagetop_subline;
 			while (1)
 			{
 				if (lines <= line)
