@@ -5353,23 +5353,32 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 		count++;
 	}
 
+	/* On resize (recompute_sublines), scale lines_before_mat by the ratio
+	 * of new-to-old materialized lines.  The unmaterialized entries above
+	 * can't be re-wrapped, but their line count scales proportionally with
+	 * the same width change.  This avoids the stale-lbm drift that causes
+	 * blank space at the bottom after resize. */
+	if (recompute_sublines && buf->lines_mat > 0 && lines != buf->lines_mat)
+	{
+		double ratio = (double)lines / buf->lines_mat;
+		buf->lines_before_mat = (int)(buf->lines_before_mat * ratio + 0.5);
+	}
+
 	buf->lines_mat = lines;
 	buf->mat_count = count;
 
-	/* Update running average */
+	/* Update running average — on resize, use the new avg directly
+	 * (not blended) since the old avg reflects the old width. */
 	if (count > 0)
 	{
 		double new_avg = (double)lines / count;
-		if (buf->avg_lines_per_entry <= 0)
+		if (buf->avg_lines_per_entry <= 0 || recompute_sublines)
 			buf->avg_lines_per_entry = new_avg;
 		else
 			buf->avg_lines_per_entry = 0.9 * buf->avg_lines_per_entry + 0.1 * new_avg;
 	}
 
-	/* lines_before_mat is absorptive: adjusted by ensure_range prepend (-)
-	 * and eviction (+).  Never recompute from formula here — the avg is
-	 * inaccurate for mixed regions and causes huge scroll jumps.
-	 * Clamp to 0 when mat_first_index == 0 (no entries above). */
+	/* Clamp lbm to 0 when mat_first_index == 0 (no entries above). */
 	if (buf->mat_first_index == 0)
 		buf->lines_before_mat = 0;
 	if (buf->lines_before_mat < 0)
