@@ -1973,7 +1973,8 @@ gtk_xtext_scrollup_timeout (GtkXText * xtext)
 	xtext->select_start_y += delta_y;
 	xtext->select_start_adj = adj_value;
 	gtk_xtext_selection_draw (xtext, NULL, TRUE);
-	gtk_xtext_render_ents (xtext, buf->pagetop_ent->prev, gtk_xtext_find_by_id (buf, buf->last_ent_end_id));
+	if (buf->pagetop_ent)
+		gtk_xtext_render_ents (xtext, buf->pagetop_ent->prev, gtk_xtext_find_by_id (buf, buf->last_ent_end_id));
 	/* GTK3: Queue redraw after scroll selection update */
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	xtext->scroll_tag = g_timeout_add (gtk_xtext_timeout_ms (xtext, p_y),
@@ -5157,6 +5158,41 @@ gtk_xtext_save (GtkXText * xtext, int fh)
 	int newlen;
 	char *buf;
 
+	/* Virtual mode: stream all messages from DB in batches */
+	if (xtext->buffer->virtual_mode && xtext->buffer->virt_db &&
+	    xtext->buffer->virt_channel)
+	{
+		int total = scrollback_count (xtext->buffer->virt_db,
+		                              xtext->buffer->virt_channel);
+		int offset = 0;
+		int batch = 500;
+
+		while (offset < total)
+		{
+			GSList *msgs = scrollback_load_range (xtext->buffer->virt_db,
+			                                      xtext->buffer->virt_channel,
+			                                      offset, batch);
+			GSList *iter;
+
+			for (iter = msgs; iter; iter = iter->next)
+			{
+				scrollback_msg *msg = iter->data;
+				if (msg->text)
+				{
+					buf = gtk_xtext_strip_color ((unsigned char *)msg->text,
+					                             strlen (msg->text), NULL,
+					                             &newlen, NULL, FALSE);
+					HC_IGNORE_RESULT (write (fh, buf, newlen));
+					HC_IGNORE_RESULT (write (fh, "\n", 1));
+					g_free (buf);
+				}
+			}
+			offset += batch;
+			scrollback_msg_list_free (msgs);
+		}
+		return;
+	}
+
 	ent = xtext->buffer->text_first;
 	while (ent)
 	{
@@ -6555,6 +6591,17 @@ gtk_xtext_clear (xtext_buffer *buf, int lines)
 			buf->text_first = next;
 		}
 		buf->text_last = NULL;
+
+		/* Virtual mode: clear the DB and reset all virtual counters */
+		if (buf->virtual_mode && buf->virt_db && buf->virt_channel)
+		{
+			scrollback_clear (buf->virt_db, buf->virt_channel);
+			buf->total_entries = 0;
+			buf->mat_first_index = 0;
+			buf->mat_count = 0;
+			buf->lines_before_mat = 0;
+			buf->lines_mat = 0;
+		}
 	}
 
 	if (buf->xtext->buffer == buf)
@@ -8078,12 +8125,84 @@ gtk_xtext_is_empty (xtext_buffer *buf)
 }
 
 
+/* Helper: search a raw text string using the output buffer's search state.
+ * Creates a minimal temporary textentry for gtk_xtext_search_textentry. */
+static GList *
+gtk_xtext_search_raw_text (xtext_buffer *out, const char *text, int len)
+{
+	textentry tmp;
+	memset (&tmp, 0, sizeof (tmp));
+	tmp.str = (unsigned char *)text;
+	tmp.str_len = len;
+	return gtk_xtext_search_textentry (out, &tmp);
+}
+
 int
 gtk_xtext_lastlog (xtext_buffer *out, xtext_buffer *search_area)
 {
 	textentry *ent;
 	int matches;
 	GList *gl;
+
+	/* Virtual mode: search entire DB history */
+	if (search_area->virtual_mode && search_area->virt_db &&
+	    search_area->virt_channel)
+	{
+		int total = scrollback_count (search_area->virt_db,
+		                              search_area->virt_channel);
+		int offset = 0;
+		int batch = 500;
+
+		matches = 0;
+		while (offset < total)
+		{
+			GSList *msgs = scrollback_load_range (search_area->virt_db,
+			                                      search_area->virt_channel,
+			                                      offset, batch);
+			GSList *iter;
+
+			for (iter = msgs; iter; iter = iter->next)
+			{
+				scrollback_msg *msg = iter->data;
+				if (!msg->text)
+					continue;
+
+				gl = gtk_xtext_search_raw_text (out, msg->text,
+				                                strlen (msg->text));
+				if (gl)
+				{
+					int len = strlen (msg->text);
+					char *tab;
+
+					matches++;
+					tab = strchr (msg->text, '\t');
+					if (tab && search_area->xtext->auto_indent)
+					{
+						int left_len = tab - msg->text;
+						gtk_xtext_append_indent (out,
+						                         (unsigned char *)msg->text, left_len,
+						                         (unsigned char *)tab + 1,
+						                         len - left_len - 1, 0);
+					}
+					else
+					{
+						gtk_xtext_append (out, (unsigned char *)msg->text, len, 0);
+					}
+
+					if (out->text_last)
+					{
+						out->text_last->stamp = msg->timestamp;
+						gtk_xtext_search_textentry_add (out, out->text_last,
+						                                gl, TRUE);
+					}
+				}
+			}
+			offset += batch;
+			scrollback_msg_list_free (msgs);
+		}
+		out->search_found = g_list_reverse (out->search_found);
+		return matches;
+	}
 
 	ent = search_area->text_first;
 	matches = 0;
@@ -8122,12 +8241,39 @@ gtk_xtext_lastlog (xtext_buffer *out, xtext_buffer *search_area)
 void
 gtk_xtext_foreach (xtext_buffer *buf, GtkXTextForeach func, void *data)
 {
-	textentry *ent = buf->text_first;
-
-	while (ent)
+	/* Virtual mode: stream all messages from DB */
+	if (buf->virtual_mode && buf->virt_db && buf->virt_channel)
 	{
-		(*func) (buf->xtext, ent->str, data);
-		ent = ent->next;
+		int total = scrollback_count (buf->virt_db, buf->virt_channel);
+		int offset = 0;
+		int batch = 500;
+
+		while (offset < total)
+		{
+			GSList *msgs = scrollback_load_range (buf->virt_db, buf->virt_channel,
+			                                      offset, batch);
+			GSList *iter;
+
+			for (iter = msgs; iter; iter = iter->next)
+			{
+				scrollback_msg *msg = iter->data;
+				if (msg->text)
+					(*func) (buf->xtext, (unsigned char *)msg->text, data);
+			}
+			offset += batch;
+			scrollback_msg_list_free (msgs);
+		}
+		return;
+	}
+
+	{
+		textentry *ent = buf->text_first;
+
+		while (ent)
+		{
+			(*func) (buf->xtext, ent->str, data);
+			ent = ent->next;
+		}
 	}
 }
 
