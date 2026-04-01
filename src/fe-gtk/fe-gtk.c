@@ -2493,13 +2493,13 @@ void
 fe_scrollback_set_virtual (session *sess, void *db, const char *channel,
                            int total_entries, gint64 max_rowid)
 {
-	GtkXText *xtext;
-
-	if (!sess || !sess->gui || !sess->gui->xtext)
+	if (!sess || !sess->res || !sess->res->buffer)
 		return;
 
-	xtext = GTK_XTEXT (sess->gui->xtext);
-	gtk_xtext_buffer_set_virtual (xtext->buffer, db, channel, total_entries, max_rowid);
+	/* Use the session's own buffer, not xtext->buffer which points to
+	 * whichever tab is currently active.  During startup, multiple
+	 * sessions load scrollback concurrently but only one is displayed. */
+	gtk_xtext_buffer_set_virtual (sess->res->buffer, db, channel, total_entries, max_rowid);
 }
 
 void
