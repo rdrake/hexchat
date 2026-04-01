@@ -1183,6 +1183,10 @@ gtk_xtext_selection_clear (xtext_buffer *buf)
 		ent = ent->next;
 	}
 
+	/* Clear selection pins — eviction can resume normally */
+	buf->sel_pin_start_id = 0;
+	buf->sel_pin_end_id = 0;
+
 	return ret;
 }
 
@@ -1752,6 +1756,10 @@ lamejump:
 
 	xtext->buffer->last_ent_start_id = start_ent->entry_id;
 	xtext->buffer->last_ent_end_id = end_ent->entry_id;
+
+	/* Update selection pins for virtual scrollback eviction protection */
+	xtext->buffer->sel_pin_start_id = start_ent->entry_id;
+	xtext->buffer->sel_pin_end_id = end_ent->entry_id;
 	xtext->buffer->last_offset_start = start_offset;
 	xtext->buffer->last_offset_end = end_offset;
 
@@ -2590,6 +2598,10 @@ gtk_xtext_unselect (GtkXText *xtext)
 	xtext->buffer->last_ent_start_id = 0;
 	xtext->buffer->last_ent_end_id = 0;
 
+	/* Clear selection pins — eviction can resume normally */
+	xtext->buffer->sel_pin_start_id = 0;
+	xtext->buffer->sel_pin_end_id = 0;
+
 	/* GTK3: Queue redraw to ensure selection is cleared */
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 }
@@ -3177,6 +3189,13 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 	/* Initialize select_end to same position to avoid stale values */
 	xtext->select_end_x = x;
 	xtext->select_end_y = y;
+
+	/* Pin the clicked entry so virtual scrollback doesn't evict it */
+	{
+		textentry *ent = gtk_xtext_find_char (xtext, x, y, NULL, NULL);
+		if (ent)
+			xtext->buffer->sel_pin_start_id = ent->entry_id;
+	}
 }
 
 static gboolean
