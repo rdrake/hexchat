@@ -251,4 +251,32 @@ void chathistory_request_targets_on_reconnect (server *serv);
  */
 void chathistory_cancel_chunk_processing (session *sess);
 
+/* --- Deferred catch-up coordination --- */
+
+#define CHATHISTORY_DEFERRED_DELAY  2000	/* ms after last 366 before sending LATEST */
+#define CHATHISTORY_BEFORE_LIMIT    50		/* messages per BEFORE catch-up request */
+#define CHATHISTORY_BEFORE_DELAY    3		/* seconds between BEFORE catch-up requests */
+#define CHATHISTORY_SANITY_LIMIT    5000	/* max total messages in BEFORE catch-up per session */
+
+/**
+ * Schedule deferred LATEST requests for all channels on a server.
+ * Called from end-of-NAMES (366) handler instead of chathistory_start_catchup.
+ * Resets a 2-second timer — fires after all JOINs settle.
+ */
+void chathistory_schedule_deferred (server *serv);
+
+/**
+ * Check if BEFORE catch-up should start/resume for the active session.
+ * Called after all LATEST batches complete, after a BEFORE batch completes,
+ * and on tab switch.
+ */
+void chathistory_check_before_catchup (server *serv);
+
+/**
+ * Notify chathistory system of a tab switch.
+ * If the active session changes, BEFORE catch-up pauses on the old tab
+ * and starts/resumes on the new tab.
+ */
+void chathistory_notify_tab_switch (session *new_sess);
+
 #endif /* HEXCHAT_CHATHISTORY_H */

@@ -760,12 +760,10 @@ skip_banner:
 		}
 	}
 
-	/* Catch up missed messages via CHATHISTORY LATEST */
-	if (prefs.hex_irc_chathistory_auto && serv->have_chathistory &&
-	    !sess->history_loading)
-	{
-		chathistory_start_catchup (sess);
-	}
+	/* Schedule deferred CHATHISTORY LATEST for all channels.
+	 * Each 366 resets the 2-second timer so it fires after all JOINs settle,
+	 * letting WHO/MODE drain from the send queue first. */
+	chathistory_schedule_deferred (serv);
 
 	/* Query server read position so we can position the marker line */
 	if (serv->have_read_marker)

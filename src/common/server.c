@@ -1371,6 +1371,20 @@ server_cleanup (server * serv)
 		serv->connected = FALSE;
 		serv->end_of_motd = FALSE;
 
+		/* Cancel deferred chathistory timers */
+		if (serv->chathistory_start_timer > 0)
+		{
+			g_source_remove (serv->chathistory_start_timer);
+			serv->chathistory_start_timer = 0;
+		}
+		if (serv->chathistory_before_timer > 0)
+		{
+			g_source_remove (serv->chathistory_before_timer);
+			serv->chathistory_before_timer = 0;
+		}
+		serv->chathistory_latest_pending = 0;
+		serv->chathistory_before_sess = NULL;
+
 		/* Stop stale sweep timer */
 		if (serv->stale_sweep_timer)
 		{

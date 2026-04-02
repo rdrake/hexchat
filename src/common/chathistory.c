@@ -39,6 +39,7 @@
 
 /* Forward declarations */
 static void schedule_background_fetch (session *sess);
+static void schedule_before_catchup (server *serv);
 static void chathistory_replay_mode (session *sess, char *nick,
                                      char *mode_str, char **params,
                                      int param_count,
@@ -361,6 +362,9 @@ static void
 finish_catchup (session *sess)
 {
 	sess->catchup_in_progress = FALSE;
+	sess->catchup_is_before = FALSE;
+	sess->history_catchup_stale_count = 0;
+	sess->history_catchup_retrieved = 0;
 
 	/* Catch-up sets oldest_msgid to its oldest batch message, which may be
 	 * newer than the DB's oldest.  Reset to the DB's oldest so that
@@ -374,7 +378,10 @@ finish_catchup (session *sess)
 
 	fe_reset_scroll_top_backoff (sess);
 
-	chathistory_start_background_fetch (sess);
+	/* If this session was the active BEFORE target, clear it so
+	 * check_before_catchup can pick the next session. */
+	if (sess->server && sess->server->chathistory_before_sess == sess)
+		sess->server->chathistory_before_sess = NULL;
 }
 
 void
@@ -1078,27 +1085,87 @@ finish_batch_processing (chathistory_chunk_state *chunk)
 		sess->oldest_msgid = g_strdup (chunk->batch_oldest_msgid);
 	}
 
-	/* Catch-up loop: check if we need to paginate backward */
+	/* Catch-up loop */
 	if (chunk->is_catchup)
 	{
-		int effective_limit = get_effective_limit (serv, prefs.hex_irc_chathistory_lines);
-
-		/* All messages were duplicates — gap is already filled */
-		if (chunk->msg_count == 0)
+		if (sess->catchup_is_before)
 		{
-			finish_catchup (sess);
+			/* --- BEFORE pagination phase --- */
+			sess->history_catchup_retrieved += chunk->msg_count;
+
+			/* Empty batch → server has no more history */
+			if (chunk->raw_count == 0)
+			{
+				sess->history_exhausted = TRUE;
+				finish_catchup (sess);
+				chathistory_check_before_catchup (serv);
+				return;
+			}
+
+			/* Timestamp stop: earliest message is older than lower bound → gap bridged */
+			if (sess->catchup_lower_bound > 0 && chunk->oldest_timestamp > 0 &&
+			    chunk->oldest_timestamp < sess->catchup_lower_bound)
+			{
+				finish_catchup (sess);
+				chathistory_check_before_catchup (serv);
+				return;
+			}
+
+			/* Stale count: all duplicates */
+			if (chunk->msg_count == 0)
+			{
+				sess->history_catchup_stale_count++;
+				if (sess->history_catchup_stale_count >= 3)
+				{
+					sess->history_exhausted = TRUE;
+					finish_catchup (sess);
+					chathistory_check_before_catchup (serv);
+					return;
+				}
+			}
+			else
+			{
+				sess->history_catchup_stale_count = 0;
+			}
+
+			/* Sanity limit */
+			if (sess->history_catchup_retrieved >= CHATHISTORY_SANITY_LIMIT)
+			{
+				finish_catchup (sess);
+				chathistory_check_before_catchup (serv);
+				return;
+			}
+
+			/* Tab switched away — pause this session, check new active */
+			if (serv->chathistory_before_sess != sess ||
+			    sess != current_sess)
+			{
+				serv->chathistory_before_sess = NULL;
+				chathistory_check_before_catchup (serv);
+				return;
+			}
+
+			/* Continue BEFORE pagination after a delay */
+			if (chunk->batch_oldest_msgid)
+			{
+				schedule_before_catchup (serv);
+			}
+			else
+			{
+				finish_catchup (sess);
+				chathistory_check_before_catchup (serv);
+			}
 			return;
 		}
 
-		/* Batch was full — more messages may exist in the gap */
-		if (chunk->raw_count >= effective_limit && chunk->batch_oldest_msgid)
-		{
-			chathistory_request_before_msgid (sess, chunk->batch_oldest_msgid, effective_limit);
-			return;  /* Stay in catch-up loop */
-		}
+		/* --- Initial LATEST phase --- */
+		if (serv->chathistory_latest_pending > 0)
+			serv->chathistory_latest_pending--;
 
-		/* Batch was not full — gap is filled */
-		finish_catchup (sess);
+		/* All LATEST batches done → start BEFORE catch-up on active tab */
+		if (serv->chathistory_latest_pending == 0)
+			chathistory_check_before_catchup (serv);
+
 		return;
 	}
 
@@ -1113,7 +1180,6 @@ finish_batch_processing (chathistory_chunk_state *chunk)
 		if (max_age_cutoff > 0 && chunk->oldest_timestamp < max_age_cutoff)
 		{
 			sess->background_history_active = FALSE;
-			/* fall through — won't schedule background fetch */
 		}
 	}
 
@@ -1581,6 +1647,196 @@ chathistory_stop_background_fetch (session *sess)
 	{
 		g_source_remove (sess->background_history_timer);
 		sess->background_history_timer = 0;
+	}
+}
+
+/* --- Deferred catch-up coordination --- */
+
+/* Send LATEST for a single session as part of deferred catch-up */
+static void
+send_deferred_latest (session *sess)
+{
+	if (!sess || !sess->server)
+		return;
+	if (sess->history_loading || sess->catchup_in_progress || sess->history_exhausted)
+		return;
+	if (sess->type != SESS_CHANNEL || !sess->channel[0])
+		return;
+
+	sess->catchup_in_progress = TRUE;
+	sess->catchup_is_before = FALSE;
+	sess->catchup_lower_bound = sess->scrollback_newest_time > CHATHISTORY_FUZZ_INTERVAL
+		? sess->scrollback_newest_time - CHATHISTORY_FUZZ_INTERVAL : 0;
+
+	/* Choose LATEST reference based on available scrollback */
+	if (sess->scrollback_newest_msgid && sess->scrollback_newest_msgid[0])
+	{
+		char *ref = g_strdup_printf ("msgid=%s", sess->scrollback_newest_msgid);
+		chathistory_request_latest (sess, ref, prefs.hex_irc_chathistory_lines);
+		g_free (ref);
+	}
+	else if (sess->scrollback_newest_time > 0)
+	{
+		char ref[64];
+		g_snprintf (ref, sizeof (ref), "timestamp=%" G_GINT64_FORMAT,
+		            (gint64) sess->scrollback_newest_time);
+		chathistory_request_latest (sess, ref, prefs.hex_irc_chathistory_lines);
+	}
+	else
+	{
+		chathistory_request_latest (sess, NULL, prefs.hex_irc_chathistory_lines);
+	}
+
+	sess->server->chathistory_latest_pending++;
+}
+
+/* Timer callback: fires 2s after the last 366, sends LATEST for all channels */
+static gboolean
+chathistory_deferred_start_cb (gpointer data)
+{
+	server *serv = data;
+	GSList *list;
+
+	serv->chathistory_start_timer = 0;
+
+	if (!is_server (serv) || !serv->connected || !serv->have_chathistory)
+		return G_SOURCE_REMOVE;
+
+	if (!prefs.hex_irc_chathistory_auto)
+		return G_SOURCE_REMOVE;
+
+	serv->chathistory_latest_pending = 0;
+
+	/* Send LATEST for current_sess first (active tab gets priority) */
+	if (current_sess && current_sess->server == serv)
+		send_deferred_latest (current_sess);
+
+	/* Then all other sessions on this server */
+	for (list = sess_list; list; list = list->next)
+	{
+		session *sess = list->data;
+		if (sess->server == serv && sess != current_sess)
+			send_deferred_latest (sess);
+	}
+
+	/* If no sessions needed catch-up, nothing to do */
+	if (serv->chathistory_latest_pending == 0)
+		return G_SOURCE_REMOVE;
+
+	return G_SOURCE_REMOVE;
+}
+
+void
+chathistory_schedule_deferred (server *serv)
+{
+	if (!serv || !serv->have_chathistory || !prefs.hex_irc_chathistory_auto)
+		return;
+
+	/* Reset the timer — each new 366 pushes the start out by DEFERRED_DELAY */
+	if (serv->chathistory_start_timer > 0)
+		g_source_remove (serv->chathistory_start_timer);
+
+	serv->chathistory_start_timer = g_timeout_add (CHATHISTORY_DEFERRED_DELAY,
+	                                                chathistory_deferred_start_cb,
+	                                                serv);
+}
+
+static gboolean
+chathistory_before_timer_cb (gpointer data)
+{
+	server *serv = data;
+
+	serv->chathistory_before_timer = 0;
+
+	if (!is_server (serv) || !serv->connected)
+		return G_SOURCE_REMOVE;
+
+	chathistory_check_before_catchup (serv);
+	return G_SOURCE_REMOVE;
+}
+
+/* Schedule check_before_catchup after CHATHISTORY_BEFORE_DELAY seconds */
+static void
+schedule_before_catchup (server *serv)
+{
+	if (serv->chathistory_before_timer > 0)
+		g_source_remove (serv->chathistory_before_timer);
+
+	serv->chathistory_before_timer = g_timeout_add_seconds (
+		CHATHISTORY_BEFORE_DELAY, chathistory_before_timer_cb, serv);
+}
+
+void
+chathistory_check_before_catchup (server *serv)
+{
+	GSList *list;
+	session *target = NULL;
+
+	if (!serv || !serv->connected || !serv->have_chathistory)
+		return;
+
+	/* Don't start BEFORE until all LATEST are done */
+	if (serv->chathistory_latest_pending > 0)
+		return;
+
+	/* If there's already an active BEFORE session with a pending request, wait */
+	if (serv->chathistory_before_sess &&
+	    serv->chathistory_before_sess->history_loading)
+		return;
+
+	/* Prefer current_sess if it needs BEFORE catch-up */
+	if (current_sess && current_sess->server == serv &&
+	    current_sess->catchup_in_progress && !current_sess->history_exhausted &&
+	    !current_sess->history_loading)
+	{
+		target = current_sess;
+	}
+
+	if (!target)
+	{
+		/* No active tab needs catch-up — don't start on inactive tabs.
+		 * BEFORE catch-up only runs on the active tab. */
+		serv->chathistory_before_sess = NULL;
+		return;
+	}
+
+	/* Start/resume BEFORE catch-up on the target session */
+	serv->chathistory_before_sess = target;
+	target->catchup_is_before = TRUE;
+
+	if (target->oldest_msgid && target->oldest_msgid[0])
+	{
+		chathistory_request_before_msgid (target, target->oldest_msgid,
+		                                  CHATHISTORY_BEFORE_LIMIT);
+	}
+	else
+	{
+		/* No msgid to reference — can't paginate */
+		finish_catchup (target);
+		serv->chathistory_before_sess = NULL;
+	}
+}
+
+void
+chathistory_notify_tab_switch (session *new_sess)
+{
+	server *serv;
+
+	if (!new_sess || !new_sess->server)
+		return;
+
+	serv = new_sess->server;
+
+	if (!serv->have_chathistory)
+		return;
+
+	/* If the BEFORE target changed, the current BEFORE batch will detect
+	 * the mismatch in finish_batch_processing and call check_before_catchup.
+	 * But if there's no in-flight request, start immediately. */
+	if (serv->chathistory_before_sess != new_sess &&
+	    serv->chathistory_latest_pending == 0)
+	{
+		chathistory_check_before_catchup (serv);
 	}
 }
 

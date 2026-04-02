@@ -33,6 +33,7 @@
 #include "../common/modes.h"
 #include "../common/url.h"
 #include "../common/util.h"
+#include "../common/chathistory.h"
 #include "../common/text.h"
 #include "../common/chanopt.h"
 #include "../common/cfgfiles.h"
@@ -3936,6 +3937,7 @@ mg_switch_tab_cb (chanview *cv, chan *ch, int tag, gpointer ud)
 			if (old && current_tab)
 				mg_unpopulate (current_tab);
 			mg_populate (sess);
+			chathistory_notify_tab_switch (sess);
 		}
 	} else if (old != active_tab)
 	{

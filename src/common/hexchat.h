@@ -464,9 +464,13 @@ typedef struct session
 	int history_exhausted:1; /* server has no more history for this target */
 	int history_request_used_msgid:1; /* current request used msgid reference (vs timestamp) */
 	int catchup_in_progress:1; /* catch-up loop active (join or TARGETS) */
+	int catchup_is_before:1; /* currently in BEFORE pagination phase (not initial LATEST) */
 	int display_only:1; /* next text output skips scrollback/log save */
 	int background_history_active:1; /* background history fetch enabled for this session */
 	guint background_history_timer;	/* timer for next background history fetch */
+	time_t catchup_lower_bound;		/* timestamp stop condition for BEFORE pagination */
+	int history_catchup_stale_count;	/* consecutive all-dupe BEFORE responses */
+	int history_catchup_retrieved;	/* total messages retrieved in BEFORE catch-up */
 	void *chunk_state;				/* chathistory_chunk_state* during async batch processing */
 	tab_state_flags tab_state;
 	tab_state_flags last_tab_state; /* before event is handled */
@@ -635,6 +639,10 @@ typedef struct server
 	char *bad_nick_prefixes;		/* for ircd that doesn't give the modes */
 	int modes_per_line;				/* 6 on undernet, 4 on efnet etc... */
 	int chathistory_limit;			/* max messages per CHATHISTORY request (from ISUPPORT) */
+	guint chathistory_start_timer;	/* deferred LATEST: 2s after last 366 */
+	guint chathistory_before_timer;	/* delay between BEFORE catch-up requests */
+	int chathistory_latest_pending;	/* count of sessions awaiting LATEST response */
+	struct session *chathistory_before_sess;	/* session doing active BEFORE catch-up (NULL = none) */
 	int multiline_max_bytes;		/* max bytes in multiline batch (from ISUPPORT) */
 	int multiline_max_lines;		/* max lines in multiline batch (from ISUPPORT) */
 	int sts_upgrade_port;			/* STS TLS port to upgrade to (0 = no upgrade needed) */
