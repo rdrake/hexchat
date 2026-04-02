@@ -732,7 +732,7 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 
 	if (xtext->buffer->old_value != value)
 	{
-		if (value >= upper - page_size)
+		if (value >= upper - page_size - 1.0)
 			xtext->buffer->scrollbar_down = TRUE;
 		else
 			xtext->buffer->scrollbar_down = FALSE;
@@ -1156,8 +1156,30 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 	}
 	else
 	{
+		/* Height-only change: anchor to the bottom of the viewport.
+		 * Adjust value so the same content stays at the bottom edge. */
+		gboolean was_down = xtext->buffer->scrollbar_down;
+		gdouble old_page = gtk_adjustment_get_page_size (xtext->adj);
+		gdouble old_value = gtk_adjustment_get_value (xtext->adj);
+
 		xtext->buffer->pagetop_ent = NULL;
 		gtk_xtext_adjustment_set (xtext->buffer, FALSE);
+
+		if (was_down)
+		{
+			xtext->buffer->scrollbar_down = TRUE;
+		}
+		else
+		{
+			gdouble new_page = gtk_adjustment_get_page_size (xtext->adj);
+			gdouble new_value = old_value + old_page - new_page;
+			gdouble upper = gtk_adjustment_get_upper (xtext->adj);
+			if (new_value > upper - new_page)
+				new_value = upper - new_page;
+			if (new_value < 0)
+				new_value = 0;
+			gtk_adjustment_set_value (xtext->adj, new_value);
+		}
 		gtk_widget_queue_draw (widget);
 	}
 	if (xtext->buffer->scrollbar_down)
@@ -5669,14 +5691,57 @@ gtk_xtext_render_page (GtkXText * xtext)
 		return;
 	}
 
-	xtext->pixel_offset = (gtk_adjustment_get_value (xtext->adj) - startline) * xtext->fontsize;
+	line = 0;
+	if (xtext->buffer->virtual_mode && xtext->buffer->scrollbar_down
+		&& xtext->buffer->text_last
+		&& xtext->buffer->num_lines > gtk_adjustment_get_page_size (xtext->adj))
+	{
+		/* Bottom-up: anchor to text_last and walk backward to fill the page.
+		 * Bypasses lbm estimate for pixel-perfect bottom alignment.
+		 * Only when content exceeds the page — partially-filled buffers
+		 * use the normal top-down path. */
+		int effective_height = height;
+		int lines_needed, accumulated;
+		textentry *walk;
 
+		if (xtext->status_strip_visible)
+			effective_height -= (xtext->fontsize * 2 / 3 + 4);
+		lines_needed = (effective_height + xtext->fontsize - 1) / xtext->fontsize;
 
-	subline = line = 0;
-	ent = xtext->buffer->text_first;
+		accumulated = 0;
+		ent = NULL;
+		subline = 0;
+		for (walk = xtext->buffer->text_last; walk; walk = walk->prev)
+		{
+			accumulated += ENT_DISPLAY_LINES (walk);
+			if (accumulated >= lines_needed)
+			{
+				ent = walk;
+				subline = accumulated - lines_needed;
+				break;
+			}
+		}
 
-	if (startline > 0)
-		ent = gtk_xtext_nth (xtext, startline, &subline);
+		if (ent)
+			xtext->pixel_offset = lines_needed * xtext->fontsize - effective_height;
+		else
+		{
+			/* Materialized entries don't fill the page even though num_lines
+			 * says they should (lbm over-estimate).  Fall through to top-down. */
+			goto top_down;
+		}
+	}
+	else
+	{
+top_down:
+		/* Top-down: standard path using adjustment value */
+		xtext->pixel_offset = (gtk_adjustment_get_value (xtext->adj) - startline)
+							  * xtext->fontsize;
+		subline = 0;
+		ent = xtext->buffer->text_first;
+		if (startline > 0)
+			ent = gtk_xtext_nth (xtext, startline, &subline);
+	}
 
 	xtext->buffer->pagetop_ent = ent;
 	xtext->buffer->pagetop_subline = subline;
@@ -7488,15 +7553,13 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	}
 
 	/* Virtual scrollback (Phase 3): new entry appended at the end.
-	 * Only increment total_entries if the entry was actually saved to the
-	 * DB (has_db_row).  Entries rejected by INSERT OR IGNORE (dupes) or
-	 * system messages that skip scrollback_save have no DB row — counting
-	 * them inflates total_entries above scrollback_count, creating phantom
-	 * entries_after that cause a blank line at the bottom. */
+	 * Always increment total_entries — every materialized entry is real,
+	 * whether DB-backed or not (system messages, non-DB sessions).
+	 * Duplicate inflation from chathistory batches is corrected by the
+	 * DB sync in fe_set_batch_mode at batch end. */
 	if (buf->virtual_mode)
 	{
-		if (ent->has_db_row)
-			buf->total_entries++;
+		buf->total_entries++;
 		buf->mat_count++;
 	}
 
@@ -7548,16 +7611,6 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 		buf->old_value = buf->num_lines - gtk_adjustment_get_page_size (buf->xtext->adj);
 		if (buf->old_value < 0)
 			buf->old_value = 0;
-		/* Sync adjustment immediately so GTK doesn't snapshot the widget
-		 * between num_lines increment and the deferred render_page_timeout.
-		 * Without this, there's a 1-line gap at the bottom. */
-		if (buf->xtext->buffer == buf)
-		{
-			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
-			gtk_adjustment_set_upper (buf->xtext->adj, buf->num_lines);
-			gtk_adjustment_set_value (buf->xtext->adj, buf->old_value);
-			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
-		}
 	}
 	if (buf->search_flags & follow)
 	{
@@ -7711,8 +7764,7 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	if (buf->virtual_mode)
 	{
 		buf->lines_mat += new_lines;
-		if (ent->has_db_row)
-			buf->total_entries++;
+		buf->total_entries++;
 		buf->mat_count++;
 		/* Prepending at head shifts the materialized window down */
 		if (buf->mat_first_index > 0)
@@ -7974,8 +8026,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		 * materialized entries, including the new entry and any day boundary
 		 * changes on its neighbor (already reflected in num_lines±1 above). */
 		buf->lines_mat += new_lines;
-		if (ent->has_db_row)
-			buf->total_entries++;
+		buf->total_entries++;
 		buf->mat_count++;
 		/* If inserted at head, the materialized window shifted down */
 		if (ent == buf->text_first)
@@ -10202,27 +10253,25 @@ gtk_xtext_save_scroll_anchor (xtext_buffer *buf, xtext_scroll_anchor *anchor)
 		return;
 	}
 
-	/* Use pagetop_ent if available (most accurate) */
-	if (buf->pagetop_ent)
-	{
-		anchor->anchor_entry_id = buf->pagetop_ent->entry_id;
-		anchor->subline_offset = buf->pagetop_subline;
-		anchor->pixel_offset = buf->xtext ? buf->xtext->pixel_offset : 0;
-		return;
-	}
-
-	/* Fallback: try to calculate from adjustment value */
+	/* Anchor to the bottom of the viewport — the entry the user is reading.
+	 * After resize, this entry stays at the bottom of the viewport. */
 	if (buf->xtext && buf->xtext->adj)
 	{
 		int subline;
-		textentry *ent = gtk_xtext_nth (buf->xtext,
-		                                (int)gtk_adjustment_get_value (buf->xtext->adj),
-		                                &subline);
+		gdouble adj_val = gtk_adjustment_get_value (buf->xtext->adj);
+		gdouble page = gtk_adjustment_get_page_size (buf->xtext->adj);
+		int bottom_line = (int)(adj_val + page);
+		textentry *ent;
+
+		if (bottom_line < 1)
+			bottom_line = 1;
+		/* bottom_line is the first line NOT visible; subtract 1 for last visible */
+		ent = gtk_xtext_nth (buf->xtext, bottom_line - 1, &subline);
 		if (ent)
 		{
 			anchor->anchor_entry_id = ent->entry_id;
 			anchor->subline_offset = subline;
-			anchor->pixel_offset = buf->xtext->pixel_offset;
+			anchor->pixel_offset = 0;
 		}
 	}
 }
@@ -10274,10 +10323,14 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 		return;
 	}
 
-	/* Calculate the line number for this entry */
+	/* Calculate the absolute line number for this entry.
+	 * entry_get_line returns relative to text_first; in virtual mode,
+	 * add lines_before_mat to get the absolute adjustment position. */
 	target_line = gtk_xtext_entry_get_line (buf, ent);
 	if (target_line < 0)
 		return;  /* Entry not found (shouldn't happen) */
+	if (buf->virtual_mode)
+		target_line += buf->lines_before_mat;
 
 	/* Add subline offset, clamped to the entry's current subline count
 	 * (wrap points may have changed after reflow at a new width) */
@@ -10291,10 +10344,12 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 		target_line += clamped;
 	}
 
-	/* Clamp to valid range */
+	/* Position the anchor entry at the BOTTOM of the viewport.
+	 * target_line is the last visible line; the viewport starts
+	 * page_size lines above it. */
 	upper = gtk_adjustment_get_upper (adj);
 	page_size = gtk_adjustment_get_page_size (adj);
-	new_value = (gdouble)target_line;
+	new_value = (gdouble)(target_line + 1) - page_size;
 
 	if (new_value > upper - page_size)
 		new_value = upper - page_size;
@@ -10302,7 +10357,7 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 		new_value = 0;
 
 	/* Update scrollbar_down flag based on new position */
-	if (new_value >= upper - page_size - 0.5)
+	if (new_value >= upper - page_size - 1.0)
 		buf->scrollbar_down = TRUE;
 	else
 		buf->scrollbar_down = FALSE;
@@ -10312,9 +10367,6 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 
 	/* Invalidate pagetop cache since position changed */
 	buf->pagetop_ent = NULL;
-
-	/* Store pixel offset for smooth scrolling (used by render_page) */
-	buf->xtext->pixel_offset = anchor->pixel_offset;
 }
 
 GtkWidget *
