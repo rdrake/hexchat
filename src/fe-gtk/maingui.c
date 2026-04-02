@@ -959,6 +959,17 @@ mg_populate_userlist (session *sess)
 			mg_set_access_icon (sess->gui, get_user_icon (sess->server, sess->me), sess->server->is_away);
 		userlist_show (sess);
 		userlist_set_value (sess->gui->user_tree, sess->res->old_ul_value);
+
+		/* Re-apply right pane position after model connect triggers layout reflow */
+		if (sess->gui->hpane_right)
+		{
+			int pane_width = gtk_widget_get_width (sess->gui->hpane_right);
+			int right_size = MAX (prefs.hex_gui_pane_right_size,
+			                      prefs.hex_gui_pane_right_size_min);
+			if (pane_width > 0 && right_size > 0)
+				gtk_paned_set_position (GTK_PANED (sess->gui->hpane_right),
+				                        pane_width - right_size);
+		}
 	}
 
 	ul_tag = 0;
@@ -1069,14 +1080,20 @@ mg_populate (session *sess)
 			gtk_label_set_text (GTK_LABEL (lbl), sess->server->nick);
 	}
 
-	/* this is slow, so make it a timeout event */
+	if (ul_tag != 0)
+	{
+		g_source_remove (ul_tag);
+		ul_tag = 0;
+	}
 	if (!gui->is_tab)
 	{
 		mg_populate_userlist (sess);
-	} else
+	}
+	else
 	{
-		if (ul_tag == 0)
-			ul_tag = g_idle_add ((GSourceFunc)mg_populate_userlist, NULL);
+		/* Short timeout so the pane position restore idle settles before
+		 * the model connects and triggers a layout reflow. */
+		ul_tag = g_timeout_add (50, (GSourceFunc)mg_populate_userlist, NULL);
 	}
 
 	fe_userlist_numbers (sess);
