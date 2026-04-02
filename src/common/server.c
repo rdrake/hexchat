@@ -207,8 +207,11 @@ tcp_send_len (server *serv, char *buf, int len)
 	}
 	else
 	{
-		/* WHO gets the lowest priority */
-		if (g_ascii_strncasecmp (dbuf + 1, "WHO ", 4) == 0)
+		/* WHO and CHATHISTORY get the lowest priority.
+		 * CHATHISTORY may be prefixed with @label=hcN from labeled-response. */
+		if (g_ascii_strncasecmp (dbuf + 1, "WHO ", 4) == 0 ||
+			 g_ascii_strncasecmp (dbuf + 1, "CHATHISTORY ", 12) == 0 ||
+			 (dbuf[1] == '@' && strstr (dbuf + 1, " CHATHISTORY ") != NULL))
 			dbuf[0] = 0;
 		/* as do MODE queries (but not changes) */
 		else if (g_ascii_strncasecmp (dbuf + 1, "MODE ", 5) == 0)

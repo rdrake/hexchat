@@ -289,6 +289,18 @@ GSList *scrollback_search_text (scrollback_db *db, const char *channel,
                                 const char *pattern);
 
 /**
+ * Begin a ref-counted transaction.  Multiple begin calls nest;
+ * the actual SQL BEGIN only fires on the first.
+ */
+void scrollback_begin_transaction (scrollback_db *db);
+
+/**
+ * Commit a ref-counted transaction.  The actual SQL COMMIT only
+ * fires when the outermost transaction ends (depth returns to 0).
+ */
+void scrollback_commit_transaction (scrollback_db *db);
+
+/**
  * Initialize the scrollback subsystem.
  * Called once at startup.
  */

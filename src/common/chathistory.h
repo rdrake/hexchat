@@ -241,4 +241,14 @@ void chathistory_process_targets_batch (server *serv, batch_info *batch);
  */
 void chathistory_request_targets_on_reconnect (server *serv);
 
+/* --- Chunked batch processing --- */
+
+#define CHATHISTORY_CHUNK_SIZE 50
+
+/**
+ * Cancel any in-progress chunked batch processing for a session.
+ * Called from session_free to prevent use-after-free in idle callbacks.
+ */
+void chathistory_cancel_chunk_processing (session *sess);
+
 #endif /* HEXCHAT_CHATHISTORY_H */

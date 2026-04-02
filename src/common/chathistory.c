@@ -35,6 +35,7 @@
 #include "fe.h"
 #include "proto-irc.h"
 #include "modes.h"
+#include "scrollback.h"
 
 /* Forward declarations */
 static void schedule_background_fetch (session *sess);
@@ -1022,18 +1023,210 @@ chathistory_handle_fail (server *serv, const char *context)
 	}
 }
 
+/* --- Chunked batch processing state --- */
+
+typedef struct {
+	session *sess;
+	server *serv;
+	GSList *remaining;			/* next message to process */
+	GSList *all_messages;		/* head of list, for freeing */
+	int msg_count;				/* messages successfully processed so far */
+	int raw_count;				/* total messages in batch */
+	time_t oldest_timestamp;
+	time_t newest_timestamp;
+	char *batch_oldest_msgid;	/* owned copy */
+	gboolean is_catchup;
+	guint idle_tag;
+	scrollback_db *db;			/* for transaction begin/commit between chunks */
+} chathistory_chunk_state;
+
+static void
+chunk_state_free (chathistory_chunk_state *chunk)
+{
+	if (!chunk)
+		return;
+	if (chunk->idle_tag > 0)
+	{
+		g_source_remove (chunk->idle_tag);
+		chunk->idle_tag = 0;
+	}
+	if (chunk->sess && chunk->sess->chunk_state == chunk)
+		chunk->sess->chunk_state = NULL;
+	g_slist_free_full (chunk->all_messages, (GDestroyNotify) batch_message_free);
+	g_free (chunk->batch_oldest_msgid);
+	g_free (chunk);
+}
+
+/* Post-processing after all messages in a batch have been processed.
+ * Handles mode flag cleanup, pagination, and background fetch scheduling. */
+static void
+finish_batch_processing (chathistory_chunk_state *chunk)
+{
+	session *sess = chunk->sess;
+	server *serv = chunk->serv;
+
+	/* Clear processing mode flags */
+	sess->history_prepend_mode = FALSE;
+	sess->history_insert_sorted_mode = FALSE;
+	sess->history_loading = FALSE;
+	fe_set_batch_mode (sess, FALSE);
+
+	/* Update oldest_msgid for scroll-to-load pagination */
+	if (chunk->batch_oldest_msgid && chunk->msg_count > 0)
+	{
+		g_free (sess->oldest_msgid);
+		sess->oldest_msgid = g_strdup (chunk->batch_oldest_msgid);
+	}
+
+	/* Catch-up loop: check if we need to paginate backward */
+	if (chunk->is_catchup)
+	{
+		int effective_limit = get_effective_limit (serv, prefs.hex_irc_chathistory_lines);
+
+		/* All messages were duplicates — gap is already filled */
+		if (chunk->msg_count == 0)
+		{
+			finish_catchup (sess);
+			return;
+		}
+
+		/* Batch was full — more messages may exist in the gap */
+		if (chunk->raw_count >= effective_limit && chunk->batch_oldest_msgid)
+		{
+			chathistory_request_before_msgid (sess, chunk->batch_oldest_msgid, effective_limit);
+			return;  /* Stay in catch-up loop */
+		}
+
+		/* Batch was not full — gap is filled */
+		finish_catchup (sess);
+		return;
+	}
+
+	/* --- Non-catch-up post-processing (scroll-to-load, background fetch) --- */
+
+	/* Check if we hit the age limit (only for background fetching) */
+	if (sess->background_history_active && chunk->oldest_timestamp > 0)
+	{
+		time_t max_age_cutoff = 0;
+		if (prefs.hex_irc_chathistory_background_max_age > 0)
+			max_age_cutoff = time (NULL) - (prefs.hex_irc_chathistory_background_max_age * 3600);
+		if (max_age_cutoff > 0 && chunk->oldest_timestamp < max_age_cutoff)
+		{
+			sess->background_history_active = FALSE;
+			/* fall through — won't schedule background fetch */
+		}
+	}
+
+	/* All messages were duplicates — stop fetching */
+	if (chunk->raw_count > 0 && chunk->msg_count == 0)
+	{
+		sess->history_exhausted = TRUE;
+		sess->background_history_active = FALSE;
+	}
+
+	fe_reset_scroll_top_backoff (sess);
+
+	/* Schedule next background fetch if active */
+	if (sess->background_history_active && !sess->history_exhausted)
+	{
+		schedule_background_fetch (sess);
+	}
+}
+
+/* Process up to CHUNK_SIZE messages from the remaining list. */
+static void
+process_chunk_messages (chathistory_chunk_state *chunk)
+{
+	int i;
+	GSList *iter;
+
+	for (i = 0, iter = chunk->remaining; iter && i < CHATHISTORY_CHUNK_SIZE;
+	     iter = iter->next, i++)
+	{
+		batch_message *msg = iter->data;
+
+		if (process_batch_message (chunk->serv, chunk->sess, msg))
+			chunk->msg_count++;
+
+		if (msg->timestamp > 0)
+		{
+			if (chunk->oldest_timestamp == 0 || msg->timestamp < chunk->oldest_timestamp)
+				chunk->oldest_timestamp = msg->timestamp;
+			if (msg->timestamp > chunk->newest_timestamp)
+				chunk->newest_timestamp = msg->timestamp;
+		}
+	}
+	chunk->remaining = iter;
+}
+
+/* Idle callback for chunked batch processing.  Fires at G_PRIORITY_DEFAULT_IDLE
+ * (lower than socket I/O), so NAMES/WHO responses interleave between chunks. */
+static gboolean
+chunk_idle_cb (gpointer data)
+{
+	chathistory_chunk_state *chunk = data;
+
+	/* Session may have been destroyed since we were scheduled */
+	if (!is_session (chunk->sess))
+	{
+		chunk->idle_tag = 0;
+		chunk->sess = NULL;  /* prevent chunk_state_free from clearing sess->chunk_state */
+		chunk_state_free (chunk);
+		return G_SOURCE_REMOVE;
+	}
+
+	if (chunk->db)
+		scrollback_begin_transaction (chunk->db);
+
+	process_chunk_messages (chunk);
+
+	if (chunk->db)
+		scrollback_commit_transaction (chunk->db);
+
+	if (chunk->remaining == NULL)
+	{
+		/* All messages processed */
+		chunk->idle_tag = 0;
+		finish_batch_processing (chunk);
+		chunk_state_free (chunk);
+		return G_SOURCE_REMOVE;
+	}
+
+	return G_SOURCE_CONTINUE;
+}
+
+void
+chathistory_cancel_chunk_processing (session *sess)
+{
+	chathistory_chunk_state *chunk;
+
+	if (!sess || !sess->chunk_state)
+		return;
+
+	chunk = sess->chunk_state;
+
+	/* Commit any in-flight transaction */
+	if (chunk->db)
+		scrollback_commit_transaction (chunk->db);
+
+	/* Clear batch mode on the buffer so it renders properly */
+	sess->history_prepend_mode = FALSE;
+	sess->history_insert_sorted_mode = FALSE;
+	sess->history_loading = FALSE;
+	fe_set_batch_mode (sess, FALSE);
+
+	chunk_state_free (chunk);
+}
+
 void
 chathistory_process_batch (server *serv, batch_info *batch)
 {
 	session *sess = NULL;
-	GSList *iter;
-	int msg_count = 0;
 	gboolean is_catchup;
-	time_t oldest_timestamp = 0;
-	time_t newest_timestamp = 0;
-	time_t max_age_cutoff = 0;
-	gboolean hit_age_limit = FALSE;
 	char *batch_oldest_msgid = NULL;
+	int raw_count;
+	const char *network;
+	scrollback_db *db;
 
 	if (!batch || !batch->type)
 		return;
@@ -1047,20 +1240,12 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	if (!sess)
 		return;
 
-	/* Mark that we're no longer loading */
-	sess->history_loading = FALSE;
-
 	is_catchup = sess->catchup_in_progress;
-
-	/* Calculate age cutoff for background fetching (0 = unlimited) */
-	if (prefs.hex_irc_chathistory_background_max_age > 0)
-	{
-		max_age_cutoff = time (NULL) - (prefs.hex_irc_chathistory_background_max_age * 3600);
-	}
 
 	/* Empty batch handling */
 	if (!batch->messages)
 	{
+		sess->history_loading = FALSE;
 		if (is_catchup)
 		{
 			/* Server may not recognize our msgid (e.g., server restart).
@@ -1089,99 +1274,67 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	 * also ensures batch_oldest_msgid is captured correctly below. */
 	batch->messages = g_slist_sort (batch->messages, compare_batch_msg_timestamp);
 
-	/* All chathistory batches use insert_sorted — it places each message at
-	 * the correct chronological position regardless of request type.  This
-	 * keeps one well-tested code path for virtual scrollback tracking
-	 * (mat_count, total_entries, viewport adjustment) instead of maintaining
-	 * parallel logic in prepend_entry and append_entry. */
 	if (batch->messages)
 	{
 		batch_message *first_msg = batch->messages->data;
 		if (first_msg && first_msg->msgid)
 			batch_oldest_msgid = first_msg->msgid;
 	}
+
+	raw_count = g_slist_length (batch->messages);
+
+	/* Keep history_loading TRUE until finish_batch_processing clears it —
+	 * this prevents new requests from being sent during chunked processing. */
 	sess->history_insert_sorted_mode = TRUE;
 	fe_set_batch_mode (sess, TRUE);
 
-	/* Process messages */
-	for (iter = batch->messages; iter; iter = iter->next)
+	network = server_get_network (serv, FALSE);
+	db = network ? scrollback_open (network) : NULL;
+
+	if (raw_count <= CHATHISTORY_CHUNK_SIZE)
 	{
-		batch_message *msg = iter->data;
+		/* Small batch — process synchronously */
+		chathistory_chunk_state sync_state = { 0 };
+		sync_state.sess = sess;
+		sync_state.serv = serv;
+		sync_state.remaining = batch->messages;
+		sync_state.raw_count = raw_count;
+		sync_state.is_catchup = is_catchup;
+		sync_state.batch_oldest_msgid = (char *)batch_oldest_msgid; /* borrowed, not freed */
 
-		if (process_batch_message (serv, sess, msg))
-			msg_count++;
+		if (db)
+			scrollback_begin_transaction (db);
 
-		if (msg->timestamp > 0)
-		{
-			if (oldest_timestamp == 0 || msg->timestamp < oldest_timestamp)
-				oldest_timestamp = msg->timestamp;
-			if (msg->timestamp > newest_timestamp)
-				newest_timestamp = msg->timestamp;
-		}
+		process_chunk_messages (&sync_state);
+
+		if (db)
+			scrollback_commit_transaction (db);
+
+		/* finish_batch_processing reads from the chunk state but doesn't
+		 * free it — safe to use a stack-allocated struct here. */
+		finish_batch_processing (&sync_state);
 	}
-
-	/* Clear processing mode flags */
-	sess->history_prepend_mode = FALSE;
-	sess->history_insert_sorted_mode = FALSE;
-	fe_set_batch_mode (sess, FALSE);
-
-	/* Update oldest_msgid for scroll-to-load pagination */
-	if (batch_oldest_msgid && msg_count > 0)
+	else
 	{
-		g_free (sess->oldest_msgid);
-		sess->oldest_msgid = g_strdup (batch_oldest_msgid);
-	}
+		/* Large batch — process in chunks via idle callbacks.
+		 * Steal the message list from batch so batch_info_free won't free it. */
+		chathistory_chunk_state *chunk = g_new0 (chathistory_chunk_state, 1);
+		chunk->sess = sess;
+		chunk->serv = serv;
+		chunk->all_messages = batch->messages;
+		chunk->remaining = batch->messages;
+		chunk->raw_count = raw_count;
+		chunk->is_catchup = is_catchup;
+		chunk->db = db;
+		chunk->batch_oldest_msgid = g_strdup (batch_oldest_msgid);
+		batch->messages = NULL;  /* prevent batch_info_free from freeing */
 
-	/* Catch-up loop: check if we need to paginate backward */
-	if (is_catchup)
-	{
-		int raw_count = g_slist_length (batch->messages);
-		int effective_limit = get_effective_limit (serv, prefs.hex_irc_chathistory_lines);
+		sess->chunk_state = chunk;
 
-		/* All messages were duplicates — gap is already filled */
-		if (msg_count == 0)
-		{
-			finish_catchup (sess);
-			return;
-		}
-
-		/* Batch was full — more messages may exist in the gap */
-		if (raw_count >= effective_limit && batch_oldest_msgid)
-		{
-			chathistory_request_before_msgid (sess, batch_oldest_msgid, effective_limit);
-			return;  /* Stay in catch-up loop */
-		}
-
-		/* Batch was not full — gap is filled */
-		finish_catchup (sess);
-		return;
-	}
-
-	/* --- Non-catch-up post-processing (scroll-to-load, background fetch) --- */
-
-	/* Check if we hit the age limit (only for background fetching) */
-	if (sess->background_history_active && max_age_cutoff > 0 && oldest_timestamp > 0)
-	{
-		if (oldest_timestamp < max_age_cutoff)
-		{
-			hit_age_limit = TRUE;
-			sess->background_history_active = FALSE;
-		}
-	}
-
-	/* All messages were duplicates — stop fetching */
-	if (batch->messages && msg_count == 0)
-	{
-		sess->history_exhausted = TRUE;
-		sess->background_history_active = FALSE;
-	}
-
-	fe_reset_scroll_top_backoff (sess);
-
-	/* Schedule next background fetch if active */
-	if (sess->background_history_active && !sess->history_exhausted && !hit_age_limit)
-	{
-		schedule_background_fetch (sess);
+		/* Defer ALL processing to idle — this lets the socket read handler
+		 * return quickly so WHO replies and GTK renders can interleave
+		 * between chunks instead of being blocked by inline processing. */
+		chunk->idle_tag = g_idle_add (chunk_idle_cb, chunk);
 	}
 }
 

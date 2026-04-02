@@ -7906,8 +7906,17 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	if (ent->indent < MARGIN)
 		ent->indent = MARGIN;
 
-	/* Find insertion point - walk from head to find first entry with stamp > ent->stamp */
-	pos = buf->text_first;
+	/* Find insertion point - walk forward to find first entry with stamp > ent->stamp.
+	 * When insert_hint is set (sorted batch), start from the hint to avoid O(N²). */
+	if (buf->insert_hint && buf->insert_hint->stamp <= ent->stamp)
+	{
+		lines_before_insert = buf->insert_hint_lines;
+		pos = buf->insert_hint->next;
+	}
+	else
+	{
+		pos = buf->text_first;
+	}
 	while (pos && pos->stamp <= ent->stamp)
 	{
 		if (pos->sublines)
@@ -8018,6 +8027,13 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 
 	new_lines = ENT_DISPLAY_LINES (ent);
 	buf->num_lines += new_lines;
+
+	/* Update insert hint for next sorted insert in this batch */
+	if (buf->batch_mode)
+	{
+		buf->insert_hint = ent;
+		buf->insert_hint_lines = lines_before_insert + new_lines;
+	}
 
 	/* Virtual mode bookkeeping */
 	if (buf->virtual_mode)

@@ -698,6 +698,7 @@ session_free (session *killsess)
 	g_free (killsess->react_target_nick);
 	g_free (killsess->picker_pending_cmd);
 	chathistory_stop_background_fetch (killsess);
+	chathistory_cancel_chunk_processing (killsess);
 
 	fe_session_callback (killsess);
 

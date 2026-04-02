@@ -1855,7 +1855,7 @@ inbound_login_end (session *sess, char *text, const message_tags_data *tags_data
 
 /* IRCv3 Batch helper functions */
 
-static void
+void
 batch_message_free (batch_message *msg)
 {
 	if (!msg)

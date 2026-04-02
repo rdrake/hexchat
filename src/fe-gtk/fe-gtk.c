@@ -2520,6 +2520,12 @@ fe_set_batch_mode (session *sess, gboolean on)
 	buf = sess->res->buffer;
 	buf->batch_mode = on ? 1 : 0;
 
+	if (!on)
+	{
+		buf->insert_hint = NULL;
+		buf->insert_hint_lines = 0;
+	}
+
 	/* When batch ends, sync total_entries from DB (authoritative) and
 	 * recalculate num_lines.  In-memory total_entries can drift if
 	 * duplicate messages are rejected by INSERT OR IGNORE but

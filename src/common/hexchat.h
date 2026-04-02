@@ -467,6 +467,7 @@ typedef struct session
 	int display_only:1; /* next text output skips scrollback/log save */
 	int background_history_active:1; /* background history fetch enabled for this session */
 	guint background_history_timer;	/* timer for next background history fetch */
+	void *chunk_state;				/* chathistory_chunk_state* during async batch processing */
 	tab_state_flags tab_state;
 	tab_state_flags last_tab_state; /* before event is handled */
 	gtk_xtext_search_flags lastlog_flags;
@@ -545,6 +546,8 @@ typedef struct batch_message
 	time_t timestamp;    /* Server time if available */
 	char *msgid;         /* Message ID if available */
 } batch_message;
+
+void batch_message_free (batch_message *msg);
 
 typedef struct server
 {

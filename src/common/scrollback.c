@@ -38,6 +38,7 @@
 struct scrollback_db {
 	sqlite3 *db;
 	char *network;
+	int transaction_depth;	/* ref-counted transaction nesting */
 
 	/* Prepared statements for performance */
 	sqlite3_stmt *stmt_insert;
@@ -963,6 +964,26 @@ close_db_callback (gpointer key, gpointer value, gpointer user_data)
 	sqlite3_close (db->db);
 	g_free (db->network);
 	g_free (db);
+}
+
+void
+scrollback_begin_transaction (scrollback_db *db)
+{
+	if (!db || !db->db)
+		return;
+	db->transaction_depth++;
+	if (db->transaction_depth == 1)
+		sqlite3_exec (db->db, "BEGIN TRANSACTION", NULL, NULL, NULL);
+}
+
+void
+scrollback_commit_transaction (scrollback_db *db)
+{
+	if (!db || !db->db || db->transaction_depth <= 0)
+		return;
+	db->transaction_depth--;
+	if (db->transaction_depth == 0)
+		sqlite3_exec (db->db, "COMMIT", NULL, NULL, NULL);
 }
 
 void

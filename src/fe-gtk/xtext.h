@@ -182,6 +182,8 @@ typedef struct {
 	/* Virtual scrollback (Phase 2) */
 	unsigned int virtual_mode:1;	/* TRUE when paging from SQLite */
 	unsigned int batch_mode:1;	/* TRUE during bulk insert — suppress per-entry renders */
+	textentry *insert_hint;			/* cursor for sorted batch inserts (cleared at batch end) */
+	int insert_hint_lines;			/* cumulative display lines up to insert_hint */
 	void *virt_db;					/* scrollback_db* (void* to avoid header dependency) */
 	char *virt_channel;				/* channel name for DB queries */
 
