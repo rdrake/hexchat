@@ -936,7 +936,7 @@ userlist_create (GtkWidget *box)
 
 	sw = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (sw),
-		GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+		GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_hexpand (sw, TRUE);
 	gtk_widget_set_vexpand (sw, TRUE);
 	gtk_box_append (GTK_BOX (box), sw);
