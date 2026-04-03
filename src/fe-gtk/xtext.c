@@ -4002,7 +4002,7 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 		/* Default foreground (Pango attrs override per-span) */
 		xtext_set_source_color (xtext, xtext->col_fore);
 
-		pango_line = pango_layout_get_lines (xtext->layout)->data;
+		pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
 		xtext_draw_layout_line (xtext, x, y, pango_line);
 
 		/* --- Draw emoji sprites over U+FFFC placeholders --- */
@@ -4094,7 +4094,7 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 					cairo_clip (xtext->cr);
 
 					gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
-					pango_line = pango_layout_get_lines (xtext->layout)->data;
+					pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
 					xtext_draw_layout_line (xtext, x, y, pango_line);
 
 					/* Redraw emoji sprites within selection */
@@ -4201,7 +4201,7 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 					pango_layout_set_attributes (xtext->layout, hl_attrs);
 
 					gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
-					pango_line = pango_layout_get_lines (xtext->layout)->data;
+					pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
 					xtext_draw_layout_line (xtext, x, y, pango_line);
 
 					pango_attr_list_unref (hl_attrs);
@@ -4232,7 +4232,7 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 					pango_layout_set_attributes (xtext->layout, hl_attrs);
 
 					gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
-					pango_line = pango_layout_get_lines (xtext->layout)->data;
+					pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
 					xtext_draw_layout_line (xtext, x, y, pango_line);
 
 					pango_attr_list_unref (hl_attrs);
