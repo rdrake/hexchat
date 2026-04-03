@@ -893,6 +893,7 @@ gtk_xtext_adjustment_set (xtext_buffer *buf, int fire_signal)
 		if (value > upper - page_size)
 		{
 			buf->scrollbar_down = TRUE;
+			buf->scroll_anchor.anchor_to_bottom = TRUE;
 			value = upper - page_size;
 		}
 
@@ -957,9 +958,28 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 	if (xtext->buffer->old_value != value)
 	{
 		if (value >= upper - page_size - 1.0)
+		{
 			xtext->buffer->scrollbar_down = TRUE;
+			xtext->buffer->scroll_anchor.anchor_to_bottom = TRUE;
+		}
 		else
+		{
+			int anchor_subline;
+			textentry *anchor_ent;
+
 			xtext->buffer->scrollbar_down = FALSE;
+			xtext->buffer->scroll_anchor.anchor_to_bottom = FALSE;
+
+			/* Sync anchor to current scroll position so it's always
+			 * up-to-date (not just at render time).  This is essential
+			 * for Phase 3 where render_page reads from the anchor. */
+			anchor_ent = gtk_xtext_nth (xtext, (int)value, &anchor_subline);
+			if (anchor_ent)
+			{
+				xtext->buffer->scroll_anchor.anchor_entry_id = anchor_ent->entry_id;
+				xtext->buffer->scroll_anchor.subline_offset = anchor_subline;
+			}
+		}
 
 		/* Detect scroll-to-top for chathistory loading.
 		 * For DB-backed buffers, the scrollbar minimum is lines_before_mat
@@ -6105,7 +6125,10 @@ gtk_xtext_render_page (GtkXText * xtext)
 	else
 	{
 top_down:
-		/* Top-down: standard path using adjustment value */
+		/* Top-down: standard path using adjustment value.
+		 * The persistent scroll_anchor is maintained in shadow mode
+		 * (updated in adjustment_changed and below) for future use
+		 * when the adjustment becomes fully derived from the anchor. */
 		xtext->pixel_offset = (gtk_adjustment_get_value (xtext->adj) - startline)
 							  * xtext->fontsize;
 		subline = 0;
@@ -6117,6 +6140,13 @@ top_down:
 	xtext->buffer->pagetop_ent = ent;
 	xtext->buffer->pagetop_subline = subline;
 	xtext->buffer->pagetop_line = startline;
+
+	/* Shadow: keep persistent anchor in sync with what's rendered */
+	if (ent && !xtext->buffer->scroll_anchor.anchor_to_bottom)
+	{
+		xtext->buffer->scroll_anchor.anchor_entry_id = ent->entry_id;
+		xtext->buffer->scroll_anchor.subline_offset = subline;
+	}
 
 	if (xtext->buffer->num_lines <= gtk_adjustment_get_page_size (xtext->adj))
 		dontscroll (xtext->buffer);
@@ -6874,6 +6904,26 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 
 	if (ent == buffer->pagetop_ent)
 		buffer->pagetop_ent = NULL;
+
+	/* If the scroll anchor points to this entry, move to neighbor */
+	if (buffer->scroll_anchor.anchor_entry_id == ent->entry_id)
+	{
+		if (ent->next)
+		{
+			buffer->scroll_anchor.anchor_entry_id = ent->next->entry_id;
+			buffer->scroll_anchor.subline_offset = 0;
+		}
+		else if (ent->prev)
+		{
+			buffer->scroll_anchor.anchor_entry_id = ent->prev->entry_id;
+			buffer->scroll_anchor.subline_offset = 0;
+		}
+		else
+		{
+			buffer->scroll_anchor.anchor_entry_id = 0;
+			buffer->scroll_anchor.anchor_to_bottom = TRUE;
+		}
+	}
 	if (ent == buffer->xtext->hover_ent)
 		buffer->xtext->hover_ent = NULL;
 	if (ent == buffer->xtext->hover_reply_target)
@@ -7806,6 +7856,7 @@ gtk_xtext_render_page_timeout (GtkXText * xtext)
 		gtk_adjustment_set_value (adj, gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj));
 		g_signal_handler_unblock (xtext->adj, xtext->vc_signal_tag);
 		xtext->buffer->old_value = gtk_adjustment_get_value (adj);
+		xtext->buffer->scroll_anchor.anchor_to_bottom = TRUE;
 		/* GTK3: Queue a redraw instead of rendering directly */
 		gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	} else
@@ -9558,6 +9609,7 @@ gtk_xtext_buffer_new (GtkXText *xtext)
 	buf->old_value = -1;
 	buf->xtext = xtext;
 	buf->scrollbar_down = TRUE;
+	buf->scroll_anchor.anchor_to_bottom = TRUE;
 	buf->indent = xtext->space_width * 2;
 	dontscroll (buf);
 

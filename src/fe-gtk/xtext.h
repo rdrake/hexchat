@@ -178,6 +178,8 @@ typedef struct {
 	int pagetop_subline;
 	textentry *pagetop_ent;			/* what's at xtext->adj->value */
 
+	xtext_scroll_anchor scroll_anchor;	/* persistent scroll position (source of truth) */
+
 	int num_lines;
 	int indent;						  /* position of separator (pixels) from left */
 
