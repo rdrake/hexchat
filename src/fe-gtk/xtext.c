@@ -5576,13 +5576,10 @@ gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal)
 static textentry *
 gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 {
-	int lines = 0;
 	textentry *ent;
+	int offset;
 
-	/* Virtual scrollback: adjust line to be relative to the materialized window.
-	 * Use lines_before_mat directly — both virt_skip_older and ensure_range
-	 * adjust adj_value in lockstep with lbm, so (adj_value - lbm) is always
-	 * consistent.  Do NOT trigger ensure_range here. */
+	/* Virtual scrollback: adjust line to be relative to the materialized window. */
 	if (xtext->buffer->virtual_mode)
 	{
 		line -= xtext->buffer->lines_before_mat;
@@ -5592,64 +5589,32 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 			line = xtext->buffer->lines_mat - 1;
 	}
 
-	ent = xtext->buffer->text_first;
-
-	/* -- optimization -- try to make a short-cut using the pagetop ent */
-	if (xtext->buffer->pagetop_ent)
+	/* O(log n) lookup via the counted B-tree */
+	if (xtext->buffer->entry_tree)
 	{
-		int pt_line = xtext->buffer->pagetop_line;
-
-		/* In virtual mode, line has already been converted to relative
-		 * (line -= lbm above) but pagetop_line is stored as absolute
-		 * (adj_value, set by render_page).  Convert to relative for
-		 * consistent comparison.  Safe because lbm is stable between
-		 * when pagetop was set and now — ensure_range clears pagetop_ent
-		 * via calc_lines_virtual_ex whenever lbm changes. */
-		if (xtext->buffer->virtual_mode)
-			pt_line -= xtext->buffer->lines_before_mat;
-
-		if (line == pt_line)
+		ent = (textentry *)index234_by_weight (xtext->buffer->entry_tree,
+		                                       line, &offset);
+		if (ent)
 		{
-			*subline = xtext->buffer->pagetop_subline;
-			return xtext->buffer->pagetop_ent;
-		}
-		if (line > pt_line)
-		{
-			/* lets start from the pagetop instead of the absolute beginning */
-			ent = xtext->buffer->pagetop_ent;
-			lines = pt_line - xtext->buffer->pagetop_subline;
-		}
-		else if (line > pt_line - line)
-		{
-			/* move backwards from pagetop */
-			ent = xtext->buffer->pagetop_ent;
-			lines = pt_line - xtext->buffer->pagetop_subline;
-			while (1)
-			{
-				if (lines <= line)
-				{
-					*subline = line - lines;
-					return ent;
-				}
-				ent = ent->prev;
-				if (!ent)
-					break;
-				lines -= ENT_DISPLAY_LINES (ent);
-			}
-			return NULL;
-		}
-	}
-	/* -- end of optimization -- */
-
-	while (ent)
-	{
-		lines += ent->display_lines;
-		if (lines > line)
-		{
-			*subline = ent->display_lines - (lines - line);
+			*subline = offset;
 			return ent;
 		}
-		ent = ent->next;
+	}
+
+	/* Fallback: linear walk (shouldn't happen if tree is maintained) */
+	{
+		int lines = 0;
+		ent = xtext->buffer->text_first;
+		while (ent)
+		{
+			lines += ent->display_lines;
+			if (lines > line)
+			{
+				*subline = ent->display_lines - (lines - line);
+				return ent;
+			}
+			ent = ent->next;
+		}
 	}
 	return NULL;
 }
@@ -10465,21 +10430,32 @@ gtk_xtext_entry_has_self_reaction (textentry *ent, const char *reaction_text)
 int
 gtk_xtext_entry_get_line (xtext_buffer *buf, textentry *target_ent)
 {
-	textentry *ent;
-	int lines = 0;
-
 	if (!buf || !target_ent)
 		return -1;
 
-	ent = buf->text_first;
-	while (ent)
+	/* O(log n) lookup via counted B-tree */
+	if (buf->entry_tree)
 	{
-		if (ent == target_ent)
-			return lines;
+		int pos = weight_pos234 (buf->entry_tree, target_ent);
+		if (pos >= 0)
+			return pos;
+	}
 
-		lines += ent->display_lines;
+	/* Fallback: linear walk */
+	{
+		textentry *ent;
+		int lines = 0;
 
-		ent = ent->next;
+		ent = buf->text_first;
+		while (ent)
+		{
+			if (ent == target_ent)
+				return lines;
+
+			lines += ent->display_lines;
+
+			ent = ent->next;
+		}
 	}
 
 	return -1;  /* Entry not found in buffer */
