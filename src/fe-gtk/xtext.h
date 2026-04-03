@@ -136,12 +136,23 @@ typedef struct xtext_scroll_anchor {
 	gboolean anchor_to_bottom; /* Special: always show newest (ignores entry_id) */
 } xtext_scroll_anchor;
 
-/* LRU tracker for display line cache.  Manages which entries keep computed
- * sublines in memory.  Entries outside the LRU window have their sublines
- * freed (set to NULL), triggering lazy Pango recompute on next render. */
+/* Cached display data for a single entry — owns sublines and PangoLayout. */
+typedef struct {
+	guint64 entry_id;			/* key for lookup */
+	int cached_width;			/* window_width when layout was created */
+	int display_lines;			/* line count at this width */
+	GSList *sublines;			/* wrap points (GINT_TO_POINTER byte offsets) */
+	PangoLayout *layout;		/* shaped message text (NULL if not cached) */
+	int layout_text_offset;		/* stripped_str offset where layout text starts */
+	int layout_n_lines;			/* pango_layout_get_line_count(layout) */
+} xtext_line_display;
+
+/* LRU cache for display data.  Manages PangoLayout and sublines lifecycle.
+ * Entries outside the LRU window have their layouts freed, triggering
+ * lazy Pango recompute on next render. */
 typedef struct {
 	GHashTable *by_id;		/* guint64 entry_id → GList* node in lru_order */
-	GQueue lru_order;		/* entry_ids, MRU at head, LRU at tail */
+	GQueue lru_order;		/* xtext_line_display*, MRU at head, LRU at tail */
 	int max_entries;		/* capacity */
 } xtext_display_cache;
 

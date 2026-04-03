@@ -341,6 +341,17 @@ static gboolean gtk_xtext_scroll (GtkEventControllerScroll *controller, double d
 /* ======== DISPLAY LINE CACHE ========== */
 /* ======================================= */
 
+static void
+line_display_free (xtext_line_display *disp)
+{
+	if (!disp)
+		return;
+	g_slist_free (disp->sublines);
+	if (disp->layout)
+		g_object_unref (disp->layout);
+	g_free (disp);
+}
+
 static xtext_display_cache *
 display_cache_new (int max_entries)
 {
@@ -359,15 +370,14 @@ display_cache_free (xtext_display_cache *cache)
 	if (!cache)
 		return;
 
-	/* Free all entry_id keys stored in the queue */
 	for (l = cache->lru_order.head; l; l = l->next)
-		g_free (l->data);	/* free the guint64* key */
+		line_display_free (l->data);
 	g_queue_clear (&cache->lru_order);
 	g_hash_table_destroy (cache->by_id);
 	g_free (cache);
 }
 
-/* Find entry by id in the buffer (for eviction).
+/* Find entry by id in the buffer.
  * Uses the entries_by_id hash table for O(1) lookup. */
 static textentry *
 display_cache_find_entry (xtext_buffer *buf, guint64 entry_id)
@@ -377,36 +387,93 @@ display_cache_find_entry (xtext_buffer *buf, guint64 entry_id)
 	return NULL;
 }
 
-/* Evict the least-recently-used entry's sublines */
+/* Evict the least-recently-used display */
 static void
 display_cache_evict_lru (xtext_display_cache *cache, xtext_buffer *buf)
 {
-	guint64 *evict_id;
+	xtext_line_display *evict;
 	textentry *ent;
 
 	if (g_queue_is_empty (&cache->lru_order))
 		return;
 
-	evict_id = g_queue_pop_tail (&cache->lru_order);
-	g_hash_table_remove (cache->by_id, evict_id);
+	evict = g_queue_pop_tail (&cache->lru_order);
+	g_hash_table_remove (cache->by_id, &evict->entry_id);
 
-	/* Free the evicted entry's sublines */
-	ent = display_cache_find_entry (buf, *evict_id);
-	if (ent && ent->sublines)
+	/* Clear the entry's sublines pointer (it was borrowed from the cache) */
+	ent = display_cache_find_entry (buf, evict->entry_id);
+	if (ent)
 	{
-		g_slist_free (ent->sublines);
 		ent->sublines = NULL;
 		ent->sublines_width = 0;
 	}
-	g_free (evict_id);
+
+	line_display_free (evict);
 }
 
-/* Touch an entry — mark as recently used, evict LRU if over capacity */
+/* Look up a cached display for an entry.  Returns NULL on miss or width mismatch. */
+static xtext_line_display *
+display_cache_get (xtext_display_cache *cache, guint64 entry_id, int window_width)
+{
+	GList *node;
+	xtext_line_display *disp;
+
+	if (!cache)
+		return NULL;
+
+	node = g_hash_table_lookup (cache->by_id, &entry_id);
+	if (!node)
+		return NULL;
+
+	disp = node->data;
+	if (disp->cached_width != window_width)
+		return NULL;	/* stale — caller must recompute */
+
+	/* Move to head (MRU) */
+	g_queue_unlink (&cache->lru_order, node);
+	g_queue_push_head_link (&cache->lru_order, node);
+	return disp;
+}
+
+/* Store a display in the cache.  Evicts LRU if over capacity.
+ * Takes ownership of disp — caller must not free. */
+static void
+display_cache_put (xtext_display_cache *cache, xtext_buffer *buf,
+                   xtext_line_display *disp)
+{
+	GList *node;
+
+	if (!cache || !disp)
+		return;
+
+	/* Remove old entry for this id if present */
+	node = g_hash_table_lookup (cache->by_id, &disp->entry_id);
+	if (node)
+	{
+		xtext_line_display *old = node->data;
+		g_hash_table_remove (cache->by_id, &old->entry_id);
+		g_queue_delete_link (&cache->lru_order, node);
+		/* Don't free old->sublines — entry might still reference them.
+		 * The entry's sublines pointer will be overwritten by the caller. */
+		old->sublines = NULL;
+		line_display_free (old);
+	}
+
+	/* Add to head (MRU) */
+	g_queue_push_head (&cache->lru_order, disp);
+	node = cache->lru_order.head;
+	g_hash_table_insert (cache->by_id, &disp->entry_id, node);
+
+	/* Evict LRU if over capacity */
+	while (g_queue_get_length (&cache->lru_order) > (guint)cache->max_entries)
+		display_cache_evict_lru (cache, buf);
+}
+
+/* Touch an entry — mark as recently used without storing new data */
 static void
 display_cache_touch (xtext_display_cache *cache, xtext_buffer *buf, guint64 entry_id)
 {
 	GList *node;
-	guint64 *key;
 
 	if (!cache)
 		return;
@@ -414,22 +481,9 @@ display_cache_touch (xtext_display_cache *cache, xtext_buffer *buf, guint64 entr
 	node = g_hash_table_lookup (cache->by_id, &entry_id);
 	if (node)
 	{
-		/* Already in cache — move to head (MRU) */
 		g_queue_unlink (&cache->lru_order, node);
 		g_queue_push_head_link (&cache->lru_order, node);
-		return;
 	}
-
-	/* Not in cache — add to head */
-	key = g_new (guint64, 1);
-	*key = entry_id;
-	g_queue_push_head (&cache->lru_order, key);
-	node = cache->lru_order.head;
-	g_hash_table_insert (cache->by_id, key, node);
-
-	/* Evict LRU if over capacity */
-	while (g_queue_get_length (&cache->lru_order) > (guint)cache->max_entries)
-		display_cache_evict_lru (cache, buf);
 }
 
 /* Remove an entry from the cache (entry being destroyed) */
@@ -444,11 +498,22 @@ display_cache_remove (xtext_display_cache *cache, guint64 entry_id)
 	node = g_hash_table_lookup (cache->by_id, &entry_id);
 	if (node)
 	{
-		guint64 *key = node->data;
-		g_hash_table_remove (cache->by_id, key);
+		xtext_line_display *disp = node->data;
+		g_hash_table_remove (cache->by_id, &disp->entry_id);
 		g_queue_delete_link (&cache->lru_order, node);
-		g_free (key);
+		line_display_free (disp);
 	}
+}
+
+/* Flush entire cache (font/palette change) */
+static void
+display_cache_flush (xtext_display_cache *cache, xtext_buffer *buf)
+{
+	if (!cache)
+		return;
+
+	while (!g_queue_is_empty (&cache->lru_order))
+		display_cache_evict_lru (cache, buf);
 }
 
 /* ======================================= */
@@ -3919,7 +3984,8 @@ static int
 gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
                           int raw_offset, int raw_len,
                           int win_width, int indent, int line,
-                          int left_only, int *x_size_ret)
+                          int left_only, int *x_size_ret,
+                          PangoLayoutLine *cached_pline)
 {
 	int ret = 1;
 	int x;
@@ -3969,19 +4035,30 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 	}
 
 	/* --- Build PangoLayout with attributes --- */
-	xtext_format_data fd = xtext_fdata_from_entry (ent);
-	PangoAttrList *attrs = xtext_build_attrlist (&fd, sub_start, sub_len,
-	                                              xtext->palette,
-	                                              xtext->fontsize,
-	                                              xtext->font->ascent);
+	PangoAttrList *attrs;
+	int text_width;
 
-	pango_layout_set_text (xtext->layout,
-	                        (char *)(ent->stripped_str + sub_start), sub_len);
-	pango_layout_set_attributes (xtext->layout, attrs);
+	/* TODO Phase B: use cached_pline from per-entry PangoLayout to skip
+	 * this set_text/set_attributes/reshape.  Currently the shared layout
+	 * is still needed for emoji index_to_pos, selection, and search overlays.
+	 * Once those are migrated to per-entry layout, this becomes a cache hit. */
+	(void)cached_pline;
 
-	/* Measure the layout */
-	pango_layout_get_extents (xtext->layout, NULL, &logical);
-	int text_width = PANGO_PIXELS (logical.width);
+	{
+		xtext_format_data fd = xtext_fdata_from_entry (ent);
+		attrs = xtext_build_attrlist (&fd, sub_start, sub_len,
+		                               xtext->palette,
+		                               xtext->fontsize,
+		                               xtext->font->ascent);
+
+		pango_layout_set_text (xtext->layout,
+		                        (char *)(ent->stripped_str + sub_start), sub_len);
+		pango_layout_set_attributes (xtext->layout, attrs);
+
+		pango_layout_get_extents (xtext->layout, NULL, &logical);
+		text_width = PANGO_PIXELS (logical.width);
+		pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
+	}
 
 	/* --- Draw background --- */
 	x = indent;
@@ -4002,7 +4079,6 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 		/* Default foreground (Pango attrs override per-span) */
 		xtext_set_source_color (xtext, xtext->col_fore);
 
-		pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
 		xtext_draw_layout_line (xtext, x, y, pango_line);
 
 		/* --- Draw emoji sprites over U+FFFC placeholders --- */
@@ -5120,7 +5196,7 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 			if (!text_subline)
 			{
 				if (!gtk_xtext_render_subline (xtext, y, ent, raw_offset, len,
-				                               win_width, indent, line, FALSE, NULL))
+				                               win_width, indent, line, FALSE, NULL, NULL))
 				{
 					/* small optimization */
 					gtk_xtext_draw_marker (xtext, ent, y - xtext->fontsize * (taken + start_subline + 1));
@@ -5317,6 +5393,10 @@ gtk_xtext_set_palette (GtkXText * xtext, GdkRGBA palette[])
 	}
 	xtext->col_fore = XTEXT_FG;
 	xtext->col_back = XTEXT_BG;
+
+	/* Palette change invalidates all cached PangoLayouts (attribute colors) */
+	if (xtext->buffer)
+		display_cache_flush (xtext->buffer->display_cache, xtext->buffer);
 }
 
 static void
@@ -5408,6 +5488,9 @@ gtk_xtext_set_font (GtkXText *xtext, char *name)
 	}
 
 	gtk_xtext_fix_indent (xtext->buffer);
+
+	/* Font change invalidates all cached PangoLayouts */
+	display_cache_flush (xtext->buffer->display_cache, xtext->buffer);
 
 	if (gtk_widget_get_realized (GTK_WIDGET(xtext)))
 	{
@@ -5535,21 +5618,105 @@ gtk_xtext_lines_taken (xtext_buffer *buf, textentry * ent)
 		return 1;
 	}
 
-	indent = ent->indent;
-	str = ent->str;
-
-	do
+	/* Multi-liner: create a PangoLayout with the message text, let Pango
+	 * wrap it, and read back line boundaries.  This replaces the find_next_wrap
+	 * loop — one Pango shaping pass instead of N. */
 	{
-		len = find_next_wrap (buf->xtext, ent, str, win_width, indent);
-		ent->sublines = g_slist_append (ent->sublines, GINT_TO_POINTER (str + len - ent->str));
-		indent = buf->indent;
-		str += len;
-	}
-	while (str < ent->str + ent->str_len);
+		xtext_line_display *disp;
+		PangoLayout *layout;
+		xtext_format_data fd;
+		PangoAttrList *attrs;
+		int text_start = 0;
+		int text_len;
+		int avail;
+		int n_lines, i;
+		GSList *sublines_rev = NULL;
+		int cum_stripped;
 
-	ent->sublines_width = buf->window_width;
-	ent_update_display_lines (ent);
-	return ent->display_lines;
+		/* Determine layout text range and available width */
+		if (buf->xtext->auto_indent && ent->left_len > 0 && ent->raw_to_stripped_map)
+		{
+			text_start = xtext_raw_to_stripped (ent->raw_to_stripped_map,
+			                                    ent->str_len, ent->left_len + 1);
+			avail = win_width - buf->indent;
+		}
+		else
+		{
+			text_start = 0;
+			avail = win_width - ent->indent;
+		}
+		if (avail < 1)
+			avail = 1;
+
+		text_len = ent->stripped_len - text_start;
+		if (text_len <= 0)
+		{
+			ent->sublines = g_slist_append (NULL, GINT_TO_POINTER (ent->str_len));
+			ent->sublines_width = buf->window_width;
+			ent->display_lines = 1 + ent->extra_lines_above
+				+ ent->extra_lines_below + (ent->collapsible ? 1 : 0);
+			return 1;
+		}
+
+		/* Create layout with full message text and wrapping */
+		layout = pango_layout_new (gtk_widget_get_pango_context (GTK_WIDGET (buf->xtext)));
+		pango_layout_set_font_description (layout, buf->xtext->font->font);
+		pango_layout_set_text (layout, (char *)(ent->stripped_str + text_start), text_len);
+
+		fd = xtext_fdata_from_entry (ent);
+		attrs = xtext_build_attrlist (&fd, text_start, text_len,
+		                               buf->xtext->palette, buf->xtext->fontsize,
+		                               buf->xtext->font->ascent);
+		pango_layout_set_attributes (layout, attrs);
+		pango_attr_list_unref (attrs);
+
+		pango_layout_set_width (layout, avail * PANGO_SCALE);
+		pango_layout_set_wrap (layout, PANGO_WRAP_WORD_CHAR);
+
+		/* Read back line boundaries and convert to raw byte offsets */
+		n_lines = pango_layout_get_line_count (layout);
+		cum_stripped = text_start;
+
+		for (i = 0; i < n_lines; i++)
+		{
+			PangoLayoutLine *pline = pango_layout_get_line_readonly (layout, i);
+			int raw_off;
+
+			cum_stripped += pline->length;
+
+			/* Skip past hard newlines so next subline starts at content */
+			while (cum_stripped < ent->stripped_len &&
+			       ent->stripped_str[cum_stripped] == '\n')
+				cum_stripped++;
+
+			/* Convert stripped offset to raw offset for sublines list */
+			if (cum_stripped >= ent->stripped_len)
+				raw_off = ent->str_len;
+			else
+				raw_off = xtext_stripped_to_raw (ent->raw_to_stripped_map,
+				                                 ent->str_len, cum_stripped);
+
+			sublines_rev = g_slist_prepend (sublines_rev, GINT_TO_POINTER (raw_off));
+		}
+
+		ent->sublines = g_slist_reverse (sublines_rev);
+		ent->sublines_width = buf->window_width;
+		ent_update_display_lines (ent);
+
+		/* Store layout in display cache for render reuse */
+		disp = g_new0 (xtext_line_display, 1);
+		disp->entry_id = ent->entry_id;
+		disp->cached_width = buf->window_width;
+		disp->display_lines = ent->display_lines;
+		disp->sublines = g_slist_copy (ent->sublines);
+		disp->layout = layout;	/* takes ownership */
+		disp->layout_text_offset = text_start;
+		disp->layout_n_lines = n_lines;
+
+		display_cache_put (buf->display_cache, buf, disp);
+
+		return ent->display_lines;
+	}
 }
 
 /* Recompute day boundary flags for all entries in a buffer.
