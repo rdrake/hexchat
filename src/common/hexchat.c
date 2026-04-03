@@ -699,6 +699,7 @@ session_free (session *killsess)
 	g_free (killsess->picker_pending_cmd);
 	chathistory_stop_background_fetch (killsess);
 	chathistory_cancel_chunk_processing (killsess);
+	chathistory_queue_free (killsess);
 
 	fe_session_callback (killsess);
 

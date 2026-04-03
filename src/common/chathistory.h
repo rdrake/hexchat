@@ -24,6 +24,32 @@
 
 #include "hexchat.h"
 
+/* --- Request queue types --- */
+
+typedef enum {
+	CHREQ_LATEST,
+	CHREQ_BEFORE,
+	CHREQ_AFTER,
+	CHREQ_AROUND,
+	CHREQ_BETWEEN,
+} chreq_type;
+
+typedef enum {
+	CHREQ_PRI_BACKGROUND = 0,	/* background older-history fetch */
+	CHREQ_PRI_CATCHUP    = 1,	/* automatic post-connect catch-up */
+	CHREQ_PRI_USER       = 2,	/* user-initiated (scroll-to-top) */
+} chreq_priority;
+
+typedef struct chreq_tag {
+	chreq_type type;
+	char *reference;			/* "msgid=xxx" or "timestamp=xxx" or "*" */
+	char *end_ref;				/* BETWEEN only (NULL otherwise) */
+	int limit;
+	chreq_priority priority;
+	unsigned int is_catchup:1;	/* part of automatic catch-up */
+	unsigned int used_msgid:1;	/* used msgid reference (for FAIL fallback) */
+} chreq;
+
 /* Default number of messages to request if not specified */
 #define CHATHISTORY_DEFAULT_LIMIT 50
 
@@ -278,5 +304,38 @@ void chathistory_check_before_catchup (server *serv);
  * and starts/resumes on the new tab.
  */
 void chathistory_notify_tab_switch (session *new_sess);
+
+/* --- Request queue management --- */
+
+/**
+ * Submit a chathistory request to the per-session queue.
+ * Handles deduplication and priority. If no request is in-flight,
+ * dispatches immediately. Otherwise queues as pending.
+ * Takes ownership of req (caller must not free).
+ */
+void chathistory_submit (session *sess, chreq *req);
+
+/**
+ * Mark the active request as complete and dispatch any pending request.
+ * Called from finish_batch_processing, empty batch handler, and FAIL handler.
+ */
+void chathistory_request_complete (session *sess);
+
+/**
+ * Free a chreq and its strings.
+ */
+void chreq_free (chreq *req);
+
+/**
+ * Create a chreq. Caller passes to chathistory_submit().
+ */
+chreq *chreq_new (chreq_type type, const char *reference, const char *end_ref,
+                   int limit, chreq_priority priority,
+                   gboolean is_catchup, gboolean used_msgid);
+
+/**
+ * Free the request queue for a session (disconnect/session_free cleanup).
+ */
+void chathistory_queue_free (session *sess);
 
 #endif /* HEXCHAT_CHATHISTORY_H */

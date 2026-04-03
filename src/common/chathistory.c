@@ -81,153 +81,292 @@ get_target_name (session *sess)
 		return NULL;
 }
 
+/* --- Request queue infrastructure --- */
+
+chreq *
+chreq_new (chreq_type type, const char *reference, const char *end_ref,
+           int limit, chreq_priority priority,
+           gboolean is_catchup, gboolean used_msgid)
+{
+	chreq *req = g_new0 (chreq, 1);
+	req->type = type;
+	req->reference = g_strdup (reference);
+	req->end_ref = g_strdup (end_ref);
+	req->limit = limit;
+	req->priority = priority;
+	req->is_catchup = is_catchup ? 1 : 0;
+	req->used_msgid = used_msgid ? 1 : 0;
+	return req;
+}
+
 void
-chathistory_request_latest (session *sess, const char *reference, int limit)
+chreq_free (chreq *req)
+{
+	if (!req)
+		return;
+	g_free (req->reference);
+	g_free (req->end_ref);
+	g_free (req);
+}
+
+/* Check if two requests are duplicates (same type + same reference) */
+static gboolean
+chreq_is_dup (const chreq *a, const chreq *b)
+{
+	if (!a || !b)
+		return FALSE;
+	if (a->type != b->type)
+		return FALSE;
+	return g_strcmp0 (a->reference, b->reference) == 0;
+}
+
+/* Dispatch a request onto the wire immediately. Sets session flags. */
+static void
+chathistory_dispatch_now (session *sess, chreq *req)
 {
 	server *serv = sess->server;
 	const char *target;
-	const char *ref;
 	int effective_limit;
-
-	if (!serv->have_chathistory || !serv->connected)
-		return;
 
 	target = get_target_name (sess);
 	if (!target || !target[0])
+	{
+		chreq_free (req);
 		return;
+	}
 
-	/* Don't start a new request if one is already in progress */
-	if (sess->history_loading)
+	if (!serv->have_chathistory || !serv->connected)
+	{
+		chreq_free (req);
 		return;
+	}
 
-	ref = (reference && reference[0]) ? reference : "*";
+	sess->ch_active = req;
 
-	effective_limit = get_effective_limit (serv, limit);
+	/* Set compatibility flags from request */
 	sess->history_loading = TRUE;
-	sess->history_request_is_before = FALSE;
-	sess->history_request_is_after = FALSE;
-	sess->history_request_used_msgid = (reference && g_str_has_prefix (reference, "msgid="));
+	sess->history_request_is_before = (req->type == CHREQ_BEFORE);
+	sess->history_request_is_after = (req->type == CHREQ_AFTER);
+	sess->history_request_used_msgid = req->used_msgid;
 
-	tcp_sendf_labeled_tracked (serv, "CHATHISTORY", target,
-	                           "CHATHISTORY LATEST %s %s %d\r\n", target, ref, effective_limit);
+	effective_limit = get_effective_limit (serv, req->limit);
+
+	switch (req->type)
+	{
+	case CHREQ_LATEST:
+		{
+			const char *ref = (req->reference && req->reference[0]) ? req->reference : "*";
+			tcp_sendf_labeled_tracked (serv, "CHATHISTORY", target,
+			                           "CHATHISTORY LATEST %s %s %d\r\n",
+			                           target, ref, effective_limit);
+		}
+		break;
+
+	case CHREQ_BEFORE:
+		tcp_sendf_labeled_tracked (serv, "CHATHISTORY", target,
+		                           "CHATHISTORY BEFORE %s %s %d\r\n",
+		                           target, req->reference, effective_limit);
+		break;
+
+	case CHREQ_AFTER:
+		tcp_sendf_labeled_tracked (serv, "CHATHISTORY", target,
+		                           "CHATHISTORY AFTER %s %s %d\r\n",
+		                           target, req->reference, effective_limit);
+		break;
+
+	case CHREQ_AROUND:
+		tcp_sendf_labeled_tracked (serv, "CHATHISTORY", target,
+		                           "CHATHISTORY AROUND %s %s %d\r\n",
+		                           target, req->reference, effective_limit);
+		break;
+
+	case CHREQ_BETWEEN:
+		tcp_sendf_labeled_tracked (serv, "CHATHISTORY", target,
+		                           "CHATHISTORY BETWEEN %s %s %s %d\r\n",
+		                           target, req->reference, req->end_ref,
+		                           effective_limit);
+		break;
+	}
+}
+
+void
+chathistory_submit (session *sess, chreq *req)
+{
+	if (!sess || !req)
+	{
+		chreq_free (req);
+		return;
+	}
+
+	/* Dedup against active request */
+	if (chreq_is_dup (sess->ch_active, req))
+	{
+		chreq_free (req);
+		return;
+	}
+
+	/* Dedup against pending request */
+	if (chreq_is_dup (sess->ch_pending, req))
+	{
+		chreq_free (req);
+		return;
+	}
+
+	/* No active request → dispatch immediately */
+	if (!sess->ch_active)
+	{
+		chathistory_dispatch_now (sess, req);
+		return;
+	}
+
+	/* Active request exists → queue as pending */
+	if (!sess->ch_pending || req->priority > sess->ch_pending->priority)
+	{
+		/* Replace lower-priority pending with this request */
+		chreq_free (sess->ch_pending);
+		sess->ch_pending = req;
+	}
+	else
+	{
+		/* Equal or lower priority — drop */
+		chreq_free (req);
+	}
+}
+
+void
+chathistory_request_complete (session *sess)
+{
+	chreq *pending;
+
+	if (!sess)
+		return;
+
+	chreq_free (sess->ch_active);
+	sess->ch_active = NULL;
+	sess->history_loading = FALSE;
+
+	/* Dispatch pending request if any */
+	pending = sess->ch_pending;
+	if (pending)
+	{
+		sess->ch_pending = NULL;
+		chathistory_dispatch_now (sess, pending);
+	}
+}
+
+void
+chathistory_queue_free (session *sess)
+{
+	if (!sess)
+		return;
+	chreq_free (sess->ch_active);
+	sess->ch_active = NULL;
+	chreq_free (sess->ch_pending);
+	sess->ch_pending = NULL;
+	sess->history_loading = FALSE;
+}
+
+/* --- Request API --- */
+
+/* Infer request priority from session state */
+static chreq_priority
+infer_priority (session *sess)
+{
+	if (sess->background_history_active)
+		return CHREQ_PRI_BACKGROUND;
+	if (sess->catchup_in_progress)
+		return CHREQ_PRI_CATCHUP;
+	return CHREQ_PRI_USER;
+}
+
+void
+chathistory_request_latest (session *sess, const char *reference, int limit)
+{
+	chreq *req;
+	gboolean used_msgid;
+
+	if (!sess->server->have_chathistory || !sess->server->connected)
+		return;
+	if (!get_target_name (sess))
+		return;
+
+	used_msgid = (reference && g_str_has_prefix (reference, "msgid="));
+	req = chreq_new (CHREQ_LATEST, reference, NULL, limit,
+	                  infer_priority (sess), sess->catchup_in_progress, used_msgid);
+	chathistory_submit (sess, req);
 }
 
 void
 chathistory_request_before (session *sess, const char *reference, int limit)
 {
-	server *serv = sess->server;
-	const char *target;
-	int effective_limit;
+	chreq *req;
+	gboolean used_msgid;
 
-	if (!serv->have_chathistory || !serv->connected)
+	if (!sess->server->have_chathistory || !sess->server->connected)
 		return;
-
-	target = get_target_name (sess);
-	if (!target || !target[0])
+	if (!get_target_name (sess))
 		return;
-
 	if (!reference || !reference[0])
 		return;
 
-	if (sess->history_loading)
-		return;
-
-	effective_limit = get_effective_limit (serv, limit);
-	sess->history_loading = TRUE;
-	sess->history_request_is_before = TRUE;  /* Needs prepend when processing */
-	sess->history_request_is_after = FALSE;
-
-	tcp_sendf_labeled_tracked (serv, "CHATHISTORY", target,
-	                           "CHATHISTORY BEFORE %s %s %d\r\n", target, reference, effective_limit);
+	used_msgid = g_str_has_prefix (reference, "msgid=");
+	req = chreq_new (CHREQ_BEFORE, reference, NULL, limit,
+	                  infer_priority (sess), sess->catchup_in_progress, used_msgid);
+	chathistory_submit (sess, req);
 }
 
 void
 chathistory_request_after (session *sess, const char *reference, int limit)
 {
-	server *serv = sess->server;
-	const char *target;
-	int effective_limit;
+	chreq *req;
+	gboolean used_msgid;
 
-	if (!serv->have_chathistory || !serv->connected)
+	if (!sess->server->have_chathistory || !sess->server->connected)
 		return;
-
-	target = get_target_name (sess);
-	if (!target || !target[0])
+	if (!get_target_name (sess))
 		return;
-
 	if (!reference || !reference[0])
 		return;
 
-	if (sess->history_loading)
-		return;
-
-	effective_limit = get_effective_limit (serv, limit);
-	sess->history_loading = TRUE;
-	sess->history_request_is_before = FALSE;
-	sess->history_request_is_after = TRUE;  /* Needs insert_sorted when processing */
-
-	tcp_sendf_labeled_tracked (serv, "CHATHISTORY", target,
-	                           "CHATHISTORY AFTER %s %s %d\r\n", target, reference, effective_limit);
+	used_msgid = g_str_has_prefix (reference, "msgid=");
+	req = chreq_new (CHREQ_AFTER, reference, NULL, limit,
+	                  infer_priority (sess), sess->catchup_in_progress, used_msgid);
+	chathistory_submit (sess, req);
 }
 
 void
 chathistory_request_around (session *sess, const char *reference, int limit)
 {
-	server *serv = sess->server;
-	const char *target;
-	int effective_limit;
+	chreq *req;
 
-	if (!serv->have_chathistory || !serv->connected)
+	if (!sess->server->have_chathistory || !sess->server->connected)
 		return;
-
-	target = get_target_name (sess);
-	if (!target || !target[0])
+	if (!get_target_name (sess))
 		return;
-
 	if (!reference || !reference[0])
 		return;
 
-	if (sess->history_loading)
-		return;
-
-	effective_limit = get_effective_limit (serv, limit);
-	sess->history_loading = TRUE;
-	sess->history_request_is_before = FALSE;  /* AROUND returns mixed - use append */
-	sess->history_request_is_after = FALSE;
-
-	tcp_sendf_labeled_tracked (serv, "CHATHISTORY", target,
-	                           "CHATHISTORY AROUND %s %s %d\r\n", target, reference, effective_limit);
+	req = chreq_new (CHREQ_AROUND, reference, NULL, limit,
+	                  infer_priority (sess), sess->catchup_in_progress, FALSE);
+	chathistory_submit (sess, req);
 }
 
 void
 chathistory_request_between (session *sess, const char *start_ref,
                              const char *end_ref, int limit)
 {
-	server *serv = sess->server;
-	const char *target;
-	int effective_limit;
+	chreq *req;
 
-	if (!serv->have_chathistory || !serv->connected)
+	if (!sess->server->have_chathistory || !sess->server->connected)
 		return;
-
-	target = get_target_name (sess);
-	if (!target || !target[0])
+	if (!get_target_name (sess))
 		return;
-
 	if (!start_ref || !start_ref[0] || !end_ref || !end_ref[0])
 		return;
 
-	if (sess->history_loading)
-		return;
-
-	effective_limit = get_effective_limit (serv, limit);
-	sess->history_loading = TRUE;
-	sess->history_request_is_before = FALSE;  /* BETWEEN used for gap-fill - append for now */
-	sess->history_request_is_after = FALSE;
-
-	tcp_sendf_labeled_tracked (serv, "CHATHISTORY", target,
-	                           "CHATHISTORY BETWEEN %s %s %s %d\r\n",
-	                           target, start_ref, end_ref, effective_limit);
+	req = chreq_new (CHREQ_BETWEEN, start_ref, end_ref, limit,
+	                  infer_priority (sess), sess->catchup_in_progress, FALSE);
+	chathistory_submit (sess, req);
 }
 
 void
@@ -257,8 +396,6 @@ chathistory_request_after_timestamp (session *sess, time_t timestamp, int limit)
 	/* Format timestamp reference per IRCv3 spec.
 	 * Use gint64 cast — time_t is 64-bit on Windows x64 but long is 32-bit. */
 	g_snprintf (ref, sizeof (ref), "timestamp=%" G_GINT64_FORMAT, (gint64) timestamp);
-
-	sess->history_request_used_msgid = FALSE;
 	chathistory_request_after (sess, ref, limit);
 }
 
@@ -273,7 +410,6 @@ chathistory_request_after_msgid (session *sess, const char *msgid, int limit)
 	/* Format msgid reference per IRCv3 spec */
 	ref = g_strdup_printf ("msgid=%s", msgid);
 
-	sess->history_request_used_msgid = TRUE;
 	chathistory_request_after (sess, ref, limit);
 
 	g_free (ref);
@@ -289,8 +425,6 @@ chathistory_request_before_msgid (session *sess, const char *msgid, int limit)
 
 	/* Format msgid reference per IRCv3 spec */
 	ref = g_strdup_printf ("msgid=%s", msgid);
-
-	sess->history_request_used_msgid = TRUE;
 	chathistory_request_before (sess, ref, limit);
 
 	g_free (ref);
@@ -300,12 +434,9 @@ void
 chathistory_request_older (session *sess)
 {
 	const char *reference = NULL;
+	char *ref;
+	chreq *req;
 
-	/* Request history before the oldest message in buffer.
-	 * Uses msgid if available, falls back to scrollback msgid or timestamp.
-	 * Skip the history_loading check — user-initiated scroll-to-top should
-	 * work even during catch-up batch processing. The server handles
-	 * concurrent requests fine. */
 	if (!sess || !sess->server || !sess->server->have_chathistory)
 		return;
 	if (sess->history_exhausted)
@@ -318,20 +449,16 @@ chathistory_request_older (session *sess)
 	else if (sess->scrollback_oldest_msgid && sess->scrollback_oldest_msgid[0])
 		reference = sess->scrollback_oldest_msgid;
 
-	if (reference)
-	{
-		/* Temporarily clear history_loading so the request isn't blocked
-		 * by an in-progress catch-up batch.  chathistory_request_before
-		 * will set it back to TRUE. */
-		gboolean was_loading = sess->history_loading;
-		sess->history_loading = FALSE;
-		chathistory_request_before_msgid (sess, reference,
-		                                  prefs.hex_irc_chathistory_lines);
-		/* If the request didn't go through (already loading), restore */
-		if (!sess->history_loading)
-			sess->history_loading = was_loading;
-	}
-	/* If no msgid reference available, we can't make a BEFORE request */
+	if (!reference)
+		return;
+
+	/* Submit as USER priority — preempts queued catch-up/background requests.
+	 * The queue handles dedup and serialization, no flag hacking needed. */
+	ref = g_strdup_printf ("msgid=%s", reference);
+	req = chreq_new (CHREQ_BEFORE, ref, NULL, prefs.hex_irc_chathistory_lines,
+	                  CHREQ_PRI_USER, FALSE, TRUE);
+	chathistory_submit (sess, req);
+	g_free (ref);
 }
 
 /* Compare batch messages by timestamp for sorting (ascending order) */
@@ -443,7 +570,7 @@ chathistory_cancel_catchup (session *sess)
 		return;
 
 	sess->catchup_in_progress = FALSE;
-	sess->history_loading = FALSE;
+	chathistory_queue_free (sess);
 	chathistory_stop_background_fetch (sess);
 }
 
@@ -1023,23 +1150,28 @@ chathistory_handle_fail (server *serv, const char *context)
 	if (!sess)
 		return;
 
-	/* Clear loading state so future requests aren't blocked */
-	sess->history_loading = FALSE;
-
-	if (sess->catchup_in_progress)
 	{
-		/* Catch-up: server rejected our reference.  If we used a msgid the
-		 * server doesn't recognise (e.g. after restart), retry with timestamp. */
-		if (sess->history_request_used_msgid && sess->scrollback_newest_time > 0)
+		/* Save flags from active request before completing it */
+		gboolean used_msgid = sess->history_request_used_msgid;
+
+		/* Clear active request and advance queue */
+		chathistory_request_complete (sess);
+
+		if (sess->catchup_in_progress)
 		{
-			char ref[64];
-			g_snprintf (ref, sizeof (ref), "timestamp=%" G_GINT64_FORMAT,
-			            (gint64) sess->scrollback_newest_time);
-			chathistory_request_latest (sess, ref, prefs.hex_irc_chathistory_lines);
-			return;
+			/* Catch-up: server rejected our reference.  If we used a msgid the
+			 * server doesn't recognise (e.g. after restart), retry with timestamp. */
+			if (used_msgid && sess->scrollback_newest_time > 0)
+			{
+				char ref[64];
+				g_snprintf (ref, sizeof (ref), "timestamp=%" G_GINT64_FORMAT,
+				            (gint64) sess->scrollback_newest_time);
+				chathistory_request_latest (sess, ref, prefs.hex_irc_chathistory_lines);
+				return;
+			}
+			/* All fallbacks exhausted — finish with whatever we have */
+			finish_catchup (sess);
 		}
-		/* All fallbacks exhausted — finish with whatever we have */
-		finish_catchup (sess);
 	}
 }
 
@@ -1085,11 +1217,12 @@ finish_batch_processing (chathistory_chunk_state *chunk)
 	session *sess = chunk->sess;
 	server *serv = chunk->serv;
 
-	/* Clear processing mode flags */
+	/* Clear processing mode flags and advance the request queue.
+	 * chathistory_request_complete dispatches any pending request. */
 	sess->history_prepend_mode = FALSE;
 	sess->history_insert_sorted_mode = FALSE;
-	sess->history_loading = FALSE;
 	fe_set_batch_mode (sess, FALSE);
+	chathistory_request_complete (sess);
 
 	/* Update oldest_msgid for scroll-to-load pagination */
 	if (chunk->batch_oldest_msgid && chunk->msg_count > 0)
@@ -1292,8 +1425,8 @@ chathistory_cancel_chunk_processing (session *sess)
 	/* Clear batch mode on the buffer so it renders properly */
 	sess->history_prepend_mode = FALSE;
 	sess->history_insert_sorted_mode = FALSE;
-	sess->history_loading = FALSE;
 	fe_set_batch_mode (sess, FALSE);
+	chathistory_queue_free (sess);
 
 	chunk_state_free (chunk);
 }
@@ -1325,12 +1458,13 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	/* Empty batch handling */
 	if (!batch->messages)
 	{
-		sess->history_loading = FALSE;
+		gboolean used_msgid = sess->history_request_used_msgid;
+		chathistory_request_complete (sess);
 		if (is_catchup)
 		{
 			/* Server may not recognize our msgid (e.g., server restart).
 			 * Fall back to timestamp-based LATEST, then LATEST *. */
-			if (sess->history_request_used_msgid && sess->scrollback_newest_time > 0)
+			if (used_msgid && sess->scrollback_newest_time > 0)
 			{
 				char ref[64];
 				g_snprintf (ref, sizeof (ref), "timestamp=%" G_GINT64_FORMAT,

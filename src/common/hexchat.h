@@ -456,13 +456,15 @@ typedef struct session
 	int end_of_names:1;
 	int doing_who:1;		/* /who sent on this channel */
 	int done_away_check:1;	/* done checking for away status changes */
-	int history_loading:1;	/* chathistory request in progress */
+	int history_loading:1;	/* chathistory request in progress (derived: ch_active != NULL) */
 	int history_request_is_before:1; /* current request is BEFORE (needs prepend) */
 	int history_request_is_after:1;  /* current request is AFTER (needs insert_sorted) */
 	int history_prepend_mode:1; /* currently processing BEFORE batch with prepend */
 	int history_insert_sorted_mode:1; /* currently processing AFTER batch with timestamp sort */
 	int history_exhausted:1; /* server has no more history for this target */
 	int history_request_used_msgid:1; /* current request used msgid reference (vs timestamp) */
+	struct chreq_tag *ch_active;	/* in-flight chathistory request (NULL = idle) */
+	struct chreq_tag *ch_pending;	/* queued chathistory request (NULL = nothing waiting) */
 	int catchup_in_progress:1; /* catch-up loop active (join or TARGETS) */
 	int catchup_is_before:1; /* currently in BEFORE pagination phase (not initial LATEST) */
 	int display_only:1; /* next text output skips scrollback/log save */
