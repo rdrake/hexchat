@@ -25,6 +25,7 @@ hexchat_gtk_sources = [
   'urlgrab.c',
   'userlistgui.c',
   'xtext.c',
+  'tree234.c',
   'xtext-render.c',
   'xtext-emoji.c',
   'hex-input-edit.c',
