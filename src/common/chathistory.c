@@ -302,8 +302,13 @@ chathistory_request_older (session *sess)
 	const char *reference = NULL;
 
 	/* Request history before the oldest message in buffer.
-	 * Uses msgid if available, falls back to scrollback msgid or timestamp. */
-	if (!chathistory_can_request_more (sess))
+	 * Uses msgid if available, falls back to scrollback msgid or timestamp.
+	 * Skip the history_loading check — user-initiated scroll-to-top should
+	 * work even during catch-up batch processing. The server handles
+	 * concurrent requests fine. */
+	if (!sess || !sess->server || !sess->server->have_chathistory)
+		return;
+	if (sess->history_exhausted)
 		return;
 
 	/* Try oldest_msgid first (tracks the oldest message from chathistory batches) */
@@ -315,8 +320,16 @@ chathistory_request_older (session *sess)
 
 	if (reference)
 	{
+		/* Temporarily clear history_loading so the request isn't blocked
+		 * by an in-progress catch-up batch.  chathistory_request_before
+		 * will set it back to TRUE. */
+		gboolean was_loading = sess->history_loading;
+		sess->history_loading = FALSE;
 		chathistory_request_before_msgid (sess, reference,
 		                                  prefs.hex_irc_chathistory_lines);
+		/* If the request didn't go through (already loading), restore */
+		if (!sess->history_loading)
+			sess->history_loading = was_loading;
 	}
 	/* If no msgid reference available, we can't make a BEFORE request */
 }
@@ -1325,12 +1338,17 @@ chathistory_process_batch (server *serv, batch_info *batch)
 				chathistory_request_latest (sess, ref, prefs.hex_irc_chathistory_lines);
 				return;
 			}
-			/* All fallbacks exhausted */
-			sess->history_exhausted = TRUE;
+			/* Catch-up complete — no new messages since last disconnect.
+			 * Don't set history_exhausted: older history may still exist
+			 * for scroll-to-top requests. */
 			finish_catchup (sess);
+			if (serv->chathistory_latest_pending > 0)
+				serv->chathistory_latest_pending--;
+			if (serv->chathistory_latest_pending == 0)
+				chathistory_check_before_catchup (serv);
 			return;
 		}
-		/* Not catch-up: exhausted */
+		/* Non-catch-up empty batch: server has no more history in this direction */
 		sess->history_exhausted = TRUE;
 		return;
 	}

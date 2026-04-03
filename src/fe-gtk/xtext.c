@@ -772,8 +772,8 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 		else
 			xtext->buffer->scrollbar_down = FALSE;
 
-		/* Detect scroll-to-top for chathistory loading */
-		if (value == 0 && xtext->scroll_to_top_cb && upper > page_size)
+		/* Detect scroll-to-top for chathistory loading. */
+		if (value <= 1.0 && xtext->scroll_to_top_cb && upper > page_size)
 		{
 			/* Cancel existing debounce timer and start a new one */
 			if (xtext->scroll_top_debounce_tag)
@@ -784,7 +784,7 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 				gtk_xtext_scroll_top_timeout,
 				xtext);
 		}
-		else if (value > 0 && xtext->scroll_top_debounce_tag)
+		else if (value > 1.0 && xtext->scroll_top_debounce_tag)
 		{
 			/* User scrolled away from top - cancel pending request */
 			g_source_remove (xtext->scroll_top_debounce_tag);
@@ -849,7 +849,7 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			 * we're at the true top of the DB — fire the callback immediately
 			 * (no debounce needed, the DB is exhausted and only the server
 			 * can provide more history). */
-			if (value == 0 && xtext->scroll_to_top_cb &&
+			if (value <= 1.0 && xtext->scroll_to_top_cb &&
 			    gtk_adjustment_get_upper (xtext->adj) > page_size &&
 			    xtext->buffer->mat_first_index == 0)
 			{
