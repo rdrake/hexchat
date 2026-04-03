@@ -400,14 +400,10 @@ display_cache_evict_lru (xtext_display_cache *cache, xtext_buffer *buf)
 	evict = g_queue_pop_tail (&cache->lru_order);
 	g_hash_table_remove (cache->by_id, &evict->entry_id);
 
-	/* Clear the entry's sublines pointer (it was borrowed from the cache) */
-	ent = display_cache_find_entry (buf, evict->entry_id);
-	if (ent)
-	{
-		ent->sublines = NULL;
-		ent->sublines_width = 0;
-	}
-
+	/* Entry keeps its sublines — they're cheap (GSList of ints) and
+	 * avoid full PangoLayout re-creation when scrolling back.  Only the
+	 * PangoLayout (expensive) is freed via the cache.  Sublines go stale
+	 * on width change (sublines_width != window_width), not on eviction. */
 	line_display_free (evict);
 }
 
