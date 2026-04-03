@@ -3237,6 +3237,10 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 
 		if (zone == XTEXT_ZONE_COLLAPSE && zone_ent)
 		{
+			xtext_scroll_anchor anchor;
+			gboolean was_down = xtext->buffer->scrollbar_down;
+
+			gtk_xtext_save_scroll_anchor (xtext->buffer, &anchor);
 			{
 				int old_dl = zone_ent->display_lines;
 				zone_ent->collapsed = !zone_ent->collapsed;
@@ -3245,7 +3249,10 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 					update_weight234 (xtext->buffer->entry_tree, zone_ent,
 					                  zone_ent->display_lines - old_dl);
 			}
-			gtk_xtext_calc_lines (xtext->buffer, TRUE);
+			gtk_xtext_calc_lines (xtext->buffer, FALSE);
+			gtk_xtext_restore_scroll_anchor (xtext->buffer, &anchor);
+			if (was_down)
+				xtext->buffer->scrollbar_down = TRUE;
 			gtk_widget_queue_draw (GTK_WIDGET (xtext));
 			xtext->press_handled = TRUE;
 			return;
