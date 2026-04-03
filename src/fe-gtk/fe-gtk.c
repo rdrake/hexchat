@@ -2550,6 +2550,11 @@ fe_set_batch_mode (session *sess, gboolean on)
 				if (buf->num_lines < buf->lines_before_mat + buf->lines_mat)
 					buf->num_lines = buf->lines_before_mat + buf->lines_mat;
 			}
+
+			/* Enforce materialization window — chathistory batches using
+			 * insert_sorted accumulate entries beyond the 500 limit.
+			 * Prune from head (oldest) since user is at the bottom. */
+			gtk_xtext_enforce_mat_window (buf);
 		}
 
 		upper = buf->num_lines > 0 ? buf->num_lines : 1;

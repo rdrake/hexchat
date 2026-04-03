@@ -24,6 +24,8 @@
 #include "gtk-helpers.h"
 #include "xtext-render.h"   /* ATTR_*, XTEXT_*, format span types, rendering functions */
 
+#define VIRT_MAT_WINDOW 500				/* virtual scrollback materialization window (entries) */
+
 #define GTK_TYPE_XTEXT              (gtk_xtext_get_type ())
 #define GTK_XTEXT(object)           (G_TYPE_CHECK_INSTANCE_CAST ((object), GTK_TYPE_XTEXT, GtkXText))
 #define GTK_XTEXT_CLASS(klass)      (G_TYPE_CHECK_CLASS_CAST ((klass), GTK_TYPE_XTEXT, GtkXTextClass))
@@ -432,6 +434,7 @@ void gtk_xtext_set_error_function (GtkXText *xtext, void (*error_function) (int)
 void gtk_xtext_set_indent (GtkXText *xtext, gboolean indent);
 void gtk_xtext_set_max_indent (GtkXText *xtext, int max_auto_indent);
 void gtk_xtext_set_max_lines (GtkXText *xtext, int max_lines);
+void gtk_xtext_enforce_mat_window (xtext_buffer *buf);
 void gtk_xtext_set_show_marker (GtkXText *xtext, gboolean show_marker);
 void gtk_xtext_set_show_separator (GtkXText *xtext, gboolean show_separator);
 void gtk_xtext_set_thin_separator (GtkXText *xtext, gboolean thin_separator);

@@ -25,7 +25,7 @@
 #define MARGIN 2						/* dont touch. */
 #define REFRESH_TIMEOUT 20
 #define VIRT_PAGE_SIZE 100				/* entries to keep beyond viewport as eviction buffer */
-#define VIRT_MAT_WINDOW 500				/* normal materialization window size (entries) */
+/* VIRT_MAT_WINDOW is defined in xtext.h */
 
 /* Collapsible multiline messages: preview line count when collapsed */
 #define COLLAPSE_PREVIEW_LINES 3
@@ -6640,6 +6640,7 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 			{
 				buffer->text_first->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
 				buffer->text_first->extra_lines_above--;
+				buffer->text_first->display_lines--;
 				ent_lines++;  /* account for the removed boundary line */
 			}
 		}
@@ -8108,6 +8109,14 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		/* If inserted at head, the materialized window shifted down */
 		if (ent == buf->text_first)
 			buf->mat_first_index = (buf->mat_first_index > 0) ? buf->mat_first_index - 1 : 0;
+
+		/* Enforce materialization window for non-batch inserts.
+		 * During batch_mode, pruning is deferred to fe_set_batch_mode. */
+		if (!buf->batch_mode && buf->xtext->max_lines > 2 &&
+		    buf->mat_count > VIRT_MAT_WINDOW)
+		{
+			gtk_xtext_remove_top (buf);
+		}
 	}
 
 	/* Adjust scroll position if we inserted before current view */
@@ -8761,6 +8770,19 @@ void
 gtk_xtext_set_max_lines (GtkXText *xtext, int max_lines)
 {
 	xtext->max_lines = max_lines;
+}
+
+void
+gtk_xtext_enforce_mat_window (xtext_buffer *buf)
+{
+	if (!buf || !buf->virtual_mode)
+		return;
+	if (buf->mat_count > VIRT_MAT_WINDOW)
+	{
+		while (buf->mat_count > VIRT_MAT_WINDOW)
+			gtk_xtext_remove_top (buf);
+		buf->pagetop_ent = NULL;
+	}
 }
 
 void
