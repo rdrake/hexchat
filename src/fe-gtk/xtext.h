@@ -132,6 +132,7 @@ typedef struct {
 	gfloat old_value;					/* last known adj->value */
 	textentry *text_first;
 	textentry *text_last;
+	struct tree234_Tag *entry_tree;	/* counted B-tree for O(log n) positional access */
 
 	guint64 last_ent_start_id;	  /* this basically describes the last rendered */
 	guint64 last_ent_end_id;	  /* selection (entry_ids, 0 = not set). */

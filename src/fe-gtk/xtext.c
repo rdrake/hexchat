@@ -58,6 +58,7 @@
 
 #include "fe-gtk.h"
 #include "xtext.h"
+#include "tree234.h"
 #include "xtext-emoji.h"
 #include "fkeys.h"
 #include "gtk-helpers.h"
@@ -181,7 +182,9 @@ enum
 
 /* Recompute display_lines from current sublines/collapse/extra state.
  * Must be called after changing sublines, collapsed, collapsible,
- * extra_lines_above, or extra_lines_below. */
+ * extra_lines_above, or extra_lines_below.
+ * Note: callers that change display_lines directly (e.g. ent->display_lines++)
+ * must call update_weight234 separately if the entry is in a tree. */
 static inline void
 ent_update_display_lines (textentry *ent)
 {
@@ -193,6 +196,28 @@ ent_update_display_lines (textentry *ent)
 	else
 		ent->display_lines = text_lines + ent->extra_lines_above
 			+ ent->extra_lines_below + (ent->collapsible ? 1 : 0);
+}
+
+/* Weight callback for the entry tree — returns display_lines for a textentry */
+static int
+entry_weight_cb (void *elem)
+{
+	textentry *ent = (textentry *)elem;
+	return ent->display_lines;
+}
+
+/* Comparator for sorted insertion by timestamp */
+static int
+entry_stamp_cmp (void *a, void *b)
+{
+	textentry *ea = (textentry *)a;
+	textentry *eb = (textentry *)b;
+	if (ea->stamp < eb->stamp) return -1;
+	if (ea->stamp > eb->stamp) return 1;
+	/* Same timestamp — use entry_id for stable ordering */
+	if (ea->entry_id < eb->entry_id) return -1;
+	if (ea->entry_id > eb->entry_id) return 1;
+	return 0;
 }
 
 /* values for selection info */
@@ -3189,8 +3214,14 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 
 		if (zone == XTEXT_ZONE_COLLAPSE && zone_ent)
 		{
-			zone_ent->collapsed = !zone_ent->collapsed;
-			ent_update_display_lines (zone_ent);
+			{
+				int old_dl = zone_ent->display_lines;
+				zone_ent->collapsed = !zone_ent->collapsed;
+				ent_update_display_lines (zone_ent);
+				if (xtext->buffer->entry_tree && zone_ent->display_lines != old_dl)
+					update_weight234 (xtext->buffer->entry_tree, zone_ent,
+					                  zone_ent->display_lines - old_dl);
+			}
 			gtk_xtext_calc_lines (xtext->buffer, TRUE);
 			gtk_widget_queue_draw (GTK_WIDGET (xtext));
 			xtext->press_handled = TRUE;
@@ -5853,8 +5884,11 @@ top_down:
 			gtk_xtext_lines_taken (xtext->buffer, ent);
 			if (ent->display_lines != old_dl)
 			{
-				xtext->buffer->lines_mat += ent->display_lines - old_dl;
-				xtext->buffer->num_lines += ent->display_lines - old_dl;
+				int delta = ent->display_lines - old_dl;
+				xtext->buffer->lines_mat += delta;
+				xtext->buffer->num_lines += delta;
+				if (xtext->buffer->entry_tree)
+					update_weight234 (xtext->buffer->entry_tree, ent, delta);
 			}
 		}
 
@@ -5892,8 +5926,12 @@ top_down:
 				/* Entry is expanded — check if entirely outside viewport */
 				if (line_pos + ent_lines <= adj_val || line_pos >= adj_val + adj_page)
 				{
+					int old_dl = check->display_lines;
 					check->collapsed = TRUE;
 					ent_update_display_lines (check);
+					if (xtext->buffer->entry_tree && check->display_lines != old_dl)
+						update_weight234 (xtext->buffer->entry_tree, check,
+						                  check->display_lines - old_dl);
 					changed = TRUE;
 				}
 			}
@@ -6592,6 +6630,11 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 		g_hash_table_remove (buffer->entries_by_msgid, ent->msgid);
 	if (buffer->entries_by_id)
 		g_hash_table_remove (buffer->entries_by_id, GSIZE_TO_POINTER (ent->entry_id));
+
+	/* Remove from B-tree */
+	if (buffer->entry_tree)
+		del234 (buffer->entry_tree, ent);
+
 	g_free (ent->msgid);
 
 	/* Phase 4: free separate str and redaction info */
@@ -6676,6 +6719,8 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 				buffer->text_first->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
 				buffer->text_first->extra_lines_above--;
 				buffer->text_first->display_lines--;
+				if (buffer->entry_tree)
+					update_weight234 (buffer->entry_tree, buffer->text_first, -1);
 				ent_lines++;  /* account for the removed boundary line */
 			}
 		}
@@ -6810,6 +6855,13 @@ gtk_xtext_clear (xtext_buffer *buf, int lines)
 			buf->text_first = next;
 		}
 		buf->text_last = NULL;
+
+		/* Recreate the B-tree (old one has stale pointers) */
+		if (buf->entry_tree)
+		{
+			freetree234 (buf->entry_tree);
+			buf->entry_tree = newtree234_weighted (entry_stamp_cmp, entry_weight_cb);
+		}
 
 		/* Virtual mode: clear the DB and reset all virtual counters */
 		if (buf->virtual_mode && buf->virt_db && buf->virt_channel)
@@ -7643,6 +7695,10 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 		buf->num_lines += ent->display_lines;
 	}
 
+	/* Add to B-tree for O(log n) positional access */
+	if (buf->entry_tree)
+		add234 (buf->entry_tree, ent);
+
 	/* Virtual scrollback (Phase 3): new entry appended at the end.
 	 * Always increment total_entries — every materialized entry is real,
 	 * whether DB-backed or not (system messages, non-DB sessions).
@@ -7814,6 +7870,8 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 			ent->next->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
 			ent->next->extra_lines_above++;
 			ent->next->display_lines++;
+			if (buf->entry_tree)
+				update_weight234 (buf->entry_tree, ent->next, 1);
 			buf->num_lines++;
 			if (buf->virtual_mode) buf->lines_mat++;
 		}
@@ -7822,6 +7880,8 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 			ent->next->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
 			ent->next->extra_lines_above--;
 			ent->next->display_lines--;
+			if (buf->entry_tree)
+				update_weight234 (buf->entry_tree, ent->next, -1);
 			buf->num_lines--;
 			if (buf->virtual_mode) buf->lines_mat--;
 		}
@@ -7855,6 +7915,11 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 
 	new_lines = ENT_DISPLAY_LINES (ent);
 	buf->num_lines += new_lines;
+
+	/* Add to B-tree for O(log n) positional access */
+	if (buf->entry_tree)
+		add234 (buf->entry_tree, ent);
+
 	if (buf->virtual_mode)
 	{
 		buf->lines_mat += new_lines;
@@ -8083,6 +8148,8 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 			ent->next->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
 			ent->next->extra_lines_above++;
 			ent->next->display_lines++;
+			if (buf->entry_tree)
+				update_weight234 (buf->entry_tree, ent->next, 1);
 			buf->num_lines++;
 			if (buf->virtual_mode) buf->lines_mat++;
 		}
@@ -8091,6 +8158,8 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 			ent->next->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
 			ent->next->extra_lines_above--;
 			ent->next->display_lines--;
+			if (buf->entry_tree)
+				update_weight234 (buf->entry_tree, ent->next, -1);
 			buf->num_lines--;
 			if (buf->virtual_mode) buf->lines_mat--;
 		}
@@ -8124,6 +8193,10 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 
 	new_lines = ENT_DISPLAY_LINES (ent);
 	buf->num_lines += new_lines;
+
+	/* Add to B-tree for O(log n) positional access */
+	if (buf->entry_tree)
+		add234 (buf->entry_tree, ent);
 
 	/* Update insert hint for next sorted insert in this batch */
 	if (buf->batch_mode)
@@ -9240,6 +9313,10 @@ gtk_xtext_buffer_new (GtkXText *xtext)
 	buf->entries_by_id = g_hash_table_new (g_direct_hash, g_direct_equal);
 	buf->next_entry_id = 1;	/* Start at 1, so 0 can mean "not set" */
 
+	/* Counted B-tree for O(log n) positional access by display line.
+	 * Uses timestamp comparator for sorted insertion. */
+	buf->entry_tree = newtree234_weighted (entry_stamp_cmp, entry_weight_cb);
+
 	return buf;
 }
 
@@ -9300,6 +9377,10 @@ gtk_xtext_buffer_free (xtext_buffer *buf)
 		g_hash_table_destroy (buf->entries_by_msgid);
 	if (buf->entries_by_id)
 		g_hash_table_destroy (buf->entries_by_id);
+
+	/* Free the B-tree (entries already freed above, tree just has pointers) */
+	if (buf->entry_tree)
+		freetree234 (buf->entry_tree);
 
 	/* Virtual scrollback (Phase 2) */
 	g_free (buf->virt_channel);
@@ -9521,6 +9602,12 @@ gtk_xtext_virt_materialize_msg (xtext_buffer *buf, scrollback_msg *msg)
 	ent->sublines = NULL;
 	if (buf->window_width > 0)
 		gtk_xtext_lines_taken (buf, ent);
+	else
+		ent->display_lines = 1;
+
+	/* Add to B-tree for O(log n) positional access */
+	if (buf->entry_tree)
+		add234 (buf->entry_tree, ent);
 
 	return ent;
 }
@@ -9545,6 +9632,8 @@ gtk_xtext_virt_evict_head (xtext_buffer *buf)
 			buf->text_first->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
 			buf->text_first->extra_lines_above--;
 			buf->text_first->display_lines--;
+			if (buf->entry_tree)
+				update_weight234 (buf->entry_tree, buf->text_first, -1);
 		}
 	}
 	else
@@ -9669,12 +9758,16 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 					e->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
 					e->extra_lines_above++;
 					e->display_lines++;
+					if (buf->entry_tree)
+						update_weight234 (buf->entry_tree, e, 1);
 				}
 				else if (!should && was)
 				{
 					e->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
 					e->extra_lines_above--;
 					e->display_lines--;
+					if (buf->entry_tree)
+						update_weight234 (buf->entry_tree, e, -1);
 				}
 			}
 		}
@@ -9722,6 +9815,8 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 				ent->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
 				ent->extra_lines_above++;
 				ent->display_lines++;
+				if (buf->entry_tree)
+					update_weight234 (buf->entry_tree, ent, 1);
 			}
 			loaded++;
 		}
@@ -9762,6 +9857,8 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 				ent->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
 				ent->extra_lines_above++;
 				ent->display_lines++;
+				if (buf->entry_tree)
+					update_weight234 (buf->entry_tree, ent, 1);
 			}
 
 			buf->mat_count++;
