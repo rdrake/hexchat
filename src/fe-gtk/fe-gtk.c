@@ -38,6 +38,7 @@
 #include "../common/hexchatc.h"
 #include "../common/plugin.h"
 #include "../common/server.h"
+#include "../common/scrollback.h"
 #include "../common/outbound.h"
 #include "../common/url.h"
 #include "gtkutil.h"
@@ -2540,11 +2541,6 @@ fe_set_batch_mode (session *sess, gboolean on)
 	 * append_entry still increments the counter. */
 	if (!on && buf->xtext && buf->xtext->buffer == buf)
 	{
-		GtkAdjustment *adj = buf->xtext->adj;
-		gboolean was_down = buf->scrollbar_down;
-		gdouble page = gtk_adjustment_get_page_size (adj);
-		gdouble upper;
-
 		/* Invalidate pagetop cache — batch inserts and pruning
 		 * change the linked list and line counts. */
 		buf->pagetop_ent = NULL;
@@ -2567,8 +2563,6 @@ fe_set_batch_mode (session *sess, gboolean on)
 			 * evicts from whichever end is furthest from the viewport. */
 			gtk_xtext_enforce_mat_window (buf);
 		}
-
-		upper = buf->num_lines > 0 ? buf->num_lines : 1;
 
 		/* Recalculate line counts after pruning */
 		gtk_xtext_calc_lines (buf, FALSE);
