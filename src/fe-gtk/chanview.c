@@ -435,7 +435,7 @@ chanview_add_real (chanview *cv, char *name, void *family, void *userdata,
 		ch->cv = cv;
 		ch->allow_closure = allow_closure;
 		ch->tag = tag;
-		ch->icon = icon;
+		ch->icon = icon ? g_object_ref (icon) : NULL;
 	}
 
 	if (parent_item)
