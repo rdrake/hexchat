@@ -1818,8 +1818,12 @@ send_deferred_latest (session *sess)
 
 	sess->catchup_in_progress = TRUE;
 	sess->catchup_is_before = FALSE;
-	sess->catchup_lower_bound = sess->scrollback_newest_time > CHATHISTORY_FUZZ_INTERVAL
-		? sess->scrollback_newest_time - CHATHISTORY_FUZZ_INTERVAL : 0;
+	if (sess->scrollback_newest_time > CHATHISTORY_FUZZ_INTERVAL)
+		sess->catchup_lower_bound = sess->scrollback_newest_time - CHATHISTORY_FUZZ_INTERVAL;
+	else if (prefs.hex_irc_chathistory_background_max_age > 0)
+		sess->catchup_lower_bound = time (NULL) - (prefs.hex_irc_chathistory_background_max_age * 3600);
+	else
+		sess->catchup_lower_bound = 0;
 
 	/* Choose LATEST reference based on available scrollback */
 	if (sess->scrollback_newest_msgid && sess->scrollback_newest_msgid[0])
