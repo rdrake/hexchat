@@ -5317,9 +5317,19 @@ gtk_xtext_lines_taken (xtext_buffer *buf, textentry * ent)
 	int indent, len;
 	int win_width;
 
+	win_width = buf->window_width - MARGIN;
+
+	/* Fast path: if entry was already a single-liner and still fits,
+	 * sublines are unchanged — skip the free/realloc/Pango cycle. */
+	if (ent->sublines && !ent->sublines->next &&
+	    win_width >= ent->indent + ent->str_width &&
+	    !(ent->stripped_str && memchr (ent->stripped_str, '\n', ent->stripped_len)))
+	{
+		return 1;
+	}
+
 	g_slist_free (ent->sublines);
 	ent->sublines = NULL;
-	win_width = buf->window_width - MARGIN;
 
 	if (win_width >= ent->indent + ent->str_width &&
 	    !(ent->stripped_str && memchr (ent->stripped_str, '\n', ent->stripped_len)))
