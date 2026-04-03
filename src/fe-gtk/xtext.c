@@ -1144,15 +1144,29 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 			return;
 		}
 
-		/* Save scroll anchor from the top of the viewport (pagetop).
-		 * After reflow we restore the same entry at the top. */
 		gtk_xtext_save_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
 
-		/* Throttle expensive line recalculation during rapid resize.
-		 * Cancel any pending recalc and schedule a new one. */
-		if (xtext->resize_tag)
-			g_source_remove (xtext->resize_tag);
-		xtext->resize_tag = g_timeout_add (RESIZE_TIMEOUT, gtk_xtext_resize_cb, xtext);
+		if (xtext->buffer->virtual_mode)
+		{
+			/* Virtual mode: only ~500 materialized entries to reflow.
+			 * Recalculate immediately for smooth live resize. */
+			if (xtext->resize_tag)
+			{
+				g_source_remove (xtext->resize_tag);
+				xtext->resize_tag = 0;
+			}
+			gtk_xtext_calc_lines (xtext->buffer, FALSE);
+			gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
+			gtk_widget_queue_draw (widget);
+		}
+		else
+		{
+			/* Non-virtual: potentially thousands of entries.
+			 * Throttle expensive line recalculation during rapid resize. */
+			if (xtext->resize_tag)
+				g_source_remove (xtext->resize_tag);
+			xtext->resize_tag = g_timeout_add (RESIZE_TIMEOUT, gtk_xtext_resize_cb, xtext);
+		}
 	}
 	else
 	{
