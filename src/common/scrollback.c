@@ -459,6 +459,55 @@ finalize_statements (scrollback_db *sdb)
 	if (sdb->channel_id_cache) g_hash_table_destroy (sdb->channel_id_cache);
 }
 
+/* Sentinel value stored in open_dbs to indicate a previously-failed open.
+ * Prevents retrying (and re-warning) for every channel on the same network. */
+#define SCROLLBACK_FAILED_SENTINEL ((scrollback_db *)(gsize)1)
+
+/* Check database integrity.  Returns TRUE if OK, FALSE if corrupt. */
+static gboolean
+scrollback_check_integrity (sqlite3 *db)
+{
+	sqlite3_stmt *stmt;
+	int rc;
+	gboolean ok = FALSE;
+
+	rc = sqlite3_prepare_v2 (db, "PRAGMA quick_check(1)", -1, &stmt, NULL);
+	if (rc != SQLITE_OK)
+		return FALSE;
+
+	if (sqlite3_step (stmt) == SQLITE_ROW)
+	{
+		const char *result = (const char *)sqlite3_column_text (stmt, 0);
+		if (result && strcmp (result, "ok") == 0)
+			ok = TRUE;
+	}
+	sqlite3_finalize (stmt);
+	return ok;
+}
+
+/* Back up a corrupt DB file by renaming it with a timestamp suffix. */
+static void
+scrollback_backup_corrupt (const char *path)
+{
+	char *backup_path;
+	char *wal_path, *shm_path;
+
+	backup_path = g_strdup_printf ("%s.corrupt.%" G_GINT64_FORMAT, path, (gint64)time (NULL));
+	g_rename (path, backup_path);
+	g_free (backup_path);
+
+	/* Also move any leftover WAL/SHM files */
+	wal_path = g_strdup_printf ("%s-wal", path);
+	if (g_file_test (wal_path, G_FILE_TEST_EXISTS))
+		g_unlink (wal_path);
+	g_free (wal_path);
+
+	shm_path = g_strdup_printf ("%s-shm", path);
+	if (g_file_test (shm_path, G_FILE_TEST_EXISTS))
+		g_unlink (shm_path);
+	g_free (shm_path);
+}
+
 scrollback_db *
 scrollback_open (const char *network)
 {
@@ -476,12 +525,19 @@ scrollback_open (const char *network)
 		vfs_registered = TRUE;
 	}
 
-	/* Check if already open */
-	if (open_dbs)
+	/* Ensure cache hash table exists */
+	if (!open_dbs)
+		open_dbs = g_hash_table_new (g_str_hash, g_str_equal);
+
+	/* Check if already open (or previously failed) */
 	{
-		sdb = g_hash_table_lookup (open_dbs, network);
-		if (sdb)
-			return sdb;
+		gpointer val;
+		if (g_hash_table_lookup_extended (open_dbs, network, NULL, &val))
+		{
+			if (val == SCROLLBACK_FAILED_SENTINEL)
+				return NULL;	/* previously failed, don't retry */
+			return (scrollback_db *)val;
+		}
 	}
 
 	if (!ensure_scrollback_dir ())
@@ -497,10 +553,34 @@ scrollback_open (const char *network)
 	if (rc != SQLITE_OK)
 	{
 		g_warning ("Failed to open scrollback database %s: %s", path, sqlite3_errmsg (sdb->db));
+		sqlite3_close (sdb->db);
 		g_free (path);
 		g_free (sdb->network);
+		g_hash_table_insert (open_dbs, g_strdup (network), SCROLLBACK_FAILED_SENTINEL);
 		g_free (sdb);
 		return NULL;
+	}
+
+	/* Check for corruption before using the database */
+	if (!scrollback_check_integrity (sdb->db))
+	{
+		g_warning ("Scrollback database corrupt for %s — backing up and recreating", network);
+		sqlite3_close (sdb->db);
+		scrollback_backup_corrupt (path);
+
+		/* Re-open — creates a fresh empty database */
+		rc = sqlite3_open_v2 (path, &sdb->db,
+		                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, "zstd");
+		if (rc != SQLITE_OK)
+		{
+			g_warning ("Failed to recreate scrollback database %s: %s", path, sqlite3_errmsg (sdb->db));
+			sqlite3_close (sdb->db);
+			g_free (path);
+			g_free (sdb->network);
+			g_hash_table_insert (open_dbs, g_strdup (network), SCROLLBACK_FAILED_SENTINEL);
+			g_free (sdb);
+			return NULL;
+		}
 	}
 
 	g_free (path);
@@ -509,6 +589,7 @@ scrollback_open (const char *network)
 	{
 		sqlite3_close (sdb->db);
 		g_free (sdb->network);
+		g_hash_table_insert (open_dbs, g_strdup (network), SCROLLBACK_FAILED_SENTINEL);
 		g_free (sdb);
 		return NULL;
 	}
@@ -517,13 +598,12 @@ scrollback_open (const char *network)
 	{
 		sqlite3_close (sdb->db);
 		g_free (sdb->network);
+		g_hash_table_insert (open_dbs, g_strdup (network), SCROLLBACK_FAILED_SENTINEL);
 		g_free (sdb);
 		return NULL;
 	}
 
 	/* Add to open databases */
-	if (!open_dbs)
-		open_dbs = g_hash_table_new (g_str_hash, g_str_equal);
 	g_hash_table_insert (open_dbs, sdb->network, sdb);
 
 	return sdb;
@@ -960,6 +1040,11 @@ static void
 close_db_callback (gpointer key, gpointer value, gpointer user_data)
 {
 	scrollback_db *db = value;
+	if (db == SCROLLBACK_FAILED_SENTINEL)
+	{
+		g_free (key);	/* network name was g_strdup'd for sentinel entries */
+		return;
+	}
 	finalize_statements (db);
 	sqlite3_close (db->db);
 	g_free (db->network);
@@ -983,7 +1068,17 @@ scrollback_commit_transaction (scrollback_db *db)
 		return;
 	db->transaction_depth--;
 	if (db->transaction_depth == 0)
-		sqlite3_exec (db->db, "COMMIT", NULL, NULL, NULL);
+	{
+		char *errmsg = NULL;
+		int rc = sqlite3_exec (db->db, "COMMIT", NULL, NULL, &errmsg);
+		if (rc != SQLITE_OK)
+		{
+			g_warning ("Scrollback commit failed for %s: %s",
+			           db->network ? db->network : "?",
+			           errmsg ? errmsg : "unknown error");
+			sqlite3_free (errmsg);
+		}
+	}
 }
 
 void
