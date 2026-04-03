@@ -1128,7 +1128,8 @@ finish_batch_processing (chathistory_chunk_state *chunk)
 				sess->history_catchup_stale_count = 0;
 			}
 
-			/* Sanity limit */
+			/* Sanity limit — only for automatic post-connect catch-up.
+			 * Scroll-to-top and gap-fill are user-driven and uncapped. */
 			if (sess->history_catchup_retrieved >= CHATHISTORY_SANITY_LIMIT)
 			{
 				finish_catchup (sess);

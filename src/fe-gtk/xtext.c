@@ -27,22 +27,13 @@
 #define VIRT_PAGE_SIZE 100				/* entries to keep beyond viewport as eviction buffer */
 #define VIRT_MAT_WINDOW 500				/* normal materialization window size (entries) */
 
-/* Total line count for an entry: text sublines + extra lines for reply context / reaction badges */
-#define ENT_TOTAL_LINES(ent) \
-	(g_slist_length ((ent)->sublines) + (ent)->extra_lines_above + (ent)->extra_lines_below)
-
 /* Collapsible multiline messages: preview line count when collapsed */
 #define COLLAPSE_PREVIEW_LINES 3
 
-/* Display lines: respects collapse state.
- * Collapsed: preview lines + 1 indicator + extra above/below.
- * Expanded collapsible: total lines + 1 indicator (for "Show less").
- * Normal: total lines. */
-#define ENT_DISPLAY_LINES(ent) \
-	((ent)->collapsed \
-		? (MIN(COLLAPSE_PREVIEW_LINES, (int)g_slist_length((ent)->sublines)) + 1 \
-		   + (ent)->extra_lines_above + (ent)->extra_lines_below) \
-		: (ENT_TOTAL_LINES(ent) + ((ent)->collapsible ? 1 : 0)))
+/* Cached display line count — set by ent_update_display_lines().
+ * A simple field read, replacing the old g_slist_length call in hot paths. */
+#define ENT_DISPLAY_LINES(ent) ((ent)->display_lines)
+
 
 #include <string.h>
 #include <ctype.h>
@@ -168,6 +159,9 @@ struct textentry
 	unsigned int collapsible:1;		/* multiline entry can be collapsed/expanded */
 	unsigned int has_db_row:1;		/* entry was saved to DB (has valid DB rowid) */
 
+	int display_lines;				/* cached display line count (replaces g_slist_length in hot paths) */
+	int sublines_width;				/* window_width when sublines were computed (0 = needs recompute) */
+
 	/* Pre-parsed rendering data (built once at entry creation) */
 	unsigned char *stripped_str;       /* text with format codes removed, emoji → U+FFFC */
 	guint16 stripped_len;              /* byte length of stripped_str */
@@ -184,6 +178,22 @@ enum
 	SET_SCROLL_ADJUSTMENTS,
 	LAST_SIGNAL
 };
+
+/* Recompute display_lines from current sublines/collapse/extra state.
+ * Must be called after changing sublines, collapsed, collapsible,
+ * extra_lines_above, or extra_lines_below. */
+static inline void
+ent_update_display_lines (textentry *ent)
+{
+	int text_lines = (int)g_slist_length (ent->sublines);
+
+	if (ent->collapsed)
+		ent->display_lines = MIN (COLLAPSE_PREVIEW_LINES, text_lines) + 1
+			+ ent->extra_lines_above + ent->extra_lines_below;
+	else
+		ent->display_lines = text_lines + ent->extra_lines_above
+			+ ent->extra_lines_below + (ent->collapsible ? 1 : 0);
+}
 
 /* values for selection info */
 enum
@@ -1154,8 +1164,8 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 
 		if (xtext->buffer->virtual_mode)
 		{
-			/* Virtual mode: only ~500 materialized entries to reflow.
-			 * Recalculate immediately for smooth live resize. */
+			/* Virtual mode: ~500 materialized entries. Single-liner fast path
+			 * skips Pango for most entries; only multi-liners need recompute. */
 			if (xtext->resize_tag)
 			{
 				g_source_remove (xtext->resize_tag);
@@ -1163,6 +1173,7 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 			}
 			gtk_xtext_calc_lines (xtext->buffer, FALSE);
 			gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
+			gtk_xtext_adjustment_set (xtext->buffer, FALSE);
 			gtk_widget_queue_draw (widget);
 		}
 		else
@@ -3179,6 +3190,7 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 		if (zone == XTEXT_ZONE_COLLAPSE && zone_ent)
 		{
 			zone_ent->collapsed = !zone_ent->collapsed;
+			ent_update_display_lines (zone_ent);
 			gtk_xtext_calc_lines (xtext->buffer, TRUE);
 			gtk_widget_queue_draw (GTK_WIDGET (xtext));
 			xtext->press_handled = TRUE;
@@ -5320,11 +5332,15 @@ gtk_xtext_lines_taken (xtext_buffer *buf, textentry * ent)
 	win_width = buf->window_width - MARGIN;
 
 	/* Fast path: if entry was already a single-liner and still fits,
-	 * sublines are unchanged — skip the free/realloc/Pango cycle. */
+	 * sublines are unchanged — skip the free/realloc/Pango cycle.
+	 * Inline display_lines update (we know text_lines=1). */
 	if (ent->sublines && !ent->sublines->next &&
 	    win_width >= ent->indent + ent->str_width &&
 	    !(ent->stripped_str && memchr (ent->stripped_str, '\n', ent->stripped_len)))
 	{
+		ent->sublines_width = buf->window_width;
+		ent->display_lines = 1 + ent->extra_lines_above
+			+ ent->extra_lines_below + (ent->collapsible ? 1 : 0);
 		return 1;
 	}
 
@@ -5335,6 +5351,9 @@ gtk_xtext_lines_taken (xtext_buffer *buf, textentry * ent)
 	    !(ent->stripped_str && memchr (ent->stripped_str, '\n', ent->stripped_len)))
 	{
 		ent->sublines = g_slist_append (ent->sublines, GINT_TO_POINTER (ent->str_len));
+		ent->sublines_width = buf->window_width;
+		ent->display_lines = 1 + ent->extra_lines_above
+			+ ent->extra_lines_below + (ent->collapsible ? 1 : 0);
 		return 1;
 	}
 
@@ -5350,7 +5369,9 @@ gtk_xtext_lines_taken (xtext_buffer *buf, textentry * ent)
 	}
 	while (str < ent->str + ent->str_len);
 
-	return g_slist_length (ent->sublines);
+	ent->sublines_width = buf->window_width;
+	ent_update_display_lines (ent);
+	return ent->display_lines;
 }
 
 /* Recompute day boundary flags for all entries in a buffer.
@@ -5396,13 +5417,14 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 
 	/* Walk materialized entries using ENT_DISPLAY_LINES.
 	 * recompute_sublines = TRUE on resize (Pango re-measurement needed).
+	 * The single-liner fast path in lines_taken skips Pango for most entries.
 	 * recompute_sublines = FALSE during scroll (sublines already correct
 	 * from materialization — just sum cached values, very cheap). */
 	for (ent = buf->text_first; ent; ent = ent->next)
 	{
 		if (recompute_sublines)
 			gtk_xtext_lines_taken (buf, ent);
-		lines += ENT_DISPLAY_LINES (ent);
+		lines += ent->display_lines;
 		count++;
 	}
 
@@ -5567,10 +5589,10 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 
 	while (ent)
 	{
-		lines += ENT_DISPLAY_LINES (ent);
+		lines += ent->display_lines;
 		if (lines > line)
 		{
-			*subline = ENT_DISPLAY_LINES (ent) - (lines - line);
+			*subline = ent->display_lines - (lines - line);
 			return ent;
 		}
 		ent = ent->next;
@@ -5836,6 +5858,7 @@ top_down:
 				if (line_pos + ent_lines <= adj_val || line_pos >= adj_val + adj_page)
 				{
 					check->collapsed = TRUE;
+					ent_update_display_lines (check);
 					changed = TRUE;
 				}
 			}
@@ -7567,19 +7590,21 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 			{
 				ent->collapsible = TRUE;
 				ent->collapsed = TRUE;
+				ent_update_display_lines (ent);
 			}
 		}
 
 		{
-			int display_lines = ENT_DISPLAY_LINES (ent);
-			buf->num_lines += display_lines;
+			int dl = ENT_DISPLAY_LINES (ent);
+			buf->num_lines += dl;
 			if (buf->virtual_mode)
-				buf->lines_mat += display_lines;
+				buf->lines_mat += dl;
 		}
 	}
 	else
 	{
-		buf->num_lines += 1 + ent->extra_lines_above;  /* placeholder — real count deferred to first allocation */
+		ent->display_lines = 1 + ent->extra_lines_above;  /* placeholder — real count deferred to first allocation */
+		buf->num_lines += ent->display_lines;
 	}
 
 	/* Virtual scrollback (Phase 3): new entry appended at the end.
@@ -7752,6 +7777,7 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		{
 			ent->next->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
 			ent->next->extra_lines_above++;
+			ent->next->display_lines++;
 			buf->num_lines++;
 			if (buf->virtual_mode) buf->lines_mat++;
 		}
@@ -7759,6 +7785,7 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		{
 			ent->next->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
 			ent->next->extra_lines_above--;
+			ent->next->display_lines--;
 			buf->num_lines--;
 			if (buf->virtual_mode) buf->lines_mat--;
 		}
@@ -7786,6 +7813,7 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		{
 			ent->collapsible = TRUE;
 			ent->collapsed = TRUE;
+			ent_update_display_lines (ent);
 		}
 	}
 
@@ -8018,6 +8046,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		{
 			ent->next->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
 			ent->next->extra_lines_above++;
+			ent->next->display_lines++;
 			buf->num_lines++;
 			if (buf->virtual_mode) buf->lines_mat++;
 		}
@@ -8025,6 +8054,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		{
 			ent->next->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
 			ent->next->extra_lines_above--;
+			ent->next->display_lines--;
 			buf->num_lines--;
 			if (buf->virtual_mode) buf->lines_mat--;
 		}
@@ -8052,6 +8082,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		{
 			ent->collapsible = TRUE;
 			ent->collapsed = TRUE;
+			ent_update_display_lines (ent);
 		}
 	}
 
@@ -9434,6 +9465,7 @@ gtk_xtext_virt_evict_head (xtext_buffer *buf)
 		{
 			buf->text_first->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
 			buf->text_first->extra_lines_above--;
+			buf->text_first->display_lines--;
 		}
 	}
 	else
@@ -9557,11 +9589,13 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 				{
 					e->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
 					e->extra_lines_above++;
+					e->display_lines++;
 				}
 				else if (!should && was)
 				{
 					e->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
 					e->extra_lines_above--;
+					e->display_lines--;
 				}
 			}
 		}
@@ -9608,6 +9642,7 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 			{
 				ent->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
 				ent->extra_lines_above++;
+				ent->display_lines++;
 			}
 			loaded++;
 		}
@@ -9647,6 +9682,7 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 			{
 				ent->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
 				ent->extra_lines_above++;
+				ent->display_lines++;
 			}
 
 			buf->mat_count++;
@@ -10265,7 +10301,7 @@ gtk_xtext_entry_get_line (xtext_buffer *buf, textentry *target_ent)
 		if (ent == target_ent)
 			return lines;
 
-		lines += ENT_DISPLAY_LINES (ent);
+		lines += ent->display_lines;
 
 		ent = ent->next;
 	}
@@ -10299,20 +10335,19 @@ gtk_xtext_save_scroll_anchor (xtext_buffer *buf, xtext_scroll_anchor *anchor)
 		return;
 	}
 
-	/* Anchor to the bottom of the viewport — the entry the user is reading.
-	 * After resize, this entry stays at the bottom of the viewport. */
+	/* Anchor to the center of the viewport — stays visually stable during
+	 * width-change resize even when line counts shift from re-wrapping. */
 	if (buf->xtext && buf->xtext->adj)
 	{
 		int subline;
 		gdouble adj_val = gtk_adjustment_get_value (buf->xtext->adj);
 		gdouble page = gtk_adjustment_get_page_size (buf->xtext->adj);
-		int bottom_line = (int)(adj_val + page);
+		int center_line = (int)(adj_val + page / 2.0);
 		textentry *ent;
 
-		if (bottom_line < 1)
-			bottom_line = 1;
-		/* bottom_line is the first line NOT visible; subtract 1 for last visible */
-		ent = gtk_xtext_nth (buf->xtext, bottom_line - 1, &subline);
+		if (center_line < 0)
+			center_line = 0;
+		ent = gtk_xtext_nth (buf->xtext, center_line, &subline);
 		if (ent)
 		{
 			anchor->anchor_entry_id = ent->entry_id;
@@ -10390,12 +10425,11 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 		target_line += clamped;
 	}
 
-	/* Position the anchor entry at the BOTTOM of the viewport.
-	 * target_line is the last visible line; the viewport starts
-	 * page_size lines above it. */
+	/* Position the anchor entry at the CENTER of the viewport.
+	 * Keeps the user's focus point visually stable during resize. */
 	upper = gtk_adjustment_get_upper (adj);
 	page_size = gtk_adjustment_get_page_size (adj);
-	new_value = (gdouble)(target_line + 1) - page_size;
+	new_value = (gdouble)target_line - page_size / 2.0;
 
 	if (new_value > upper - page_size)
 		new_value = upper - page_size;
