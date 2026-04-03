@@ -6104,6 +6104,22 @@ gtk_xtext_render_page (GtkXText * xtext)
 		subline = 0;
 		for (walk = xtext->buffer->text_last; walk; walk = walk->prev)
 		{
+			/* Reflow stale entries before using display_lines for positioning.
+			 * Only entries in the backward walk (~1 page) are touched, not all
+			 * materialized entries.  Without this, stale estimates cause the
+			 * walk to overcount lines and start rendering too close to text_last,
+			 * leaving blank space at the bottom. */
+			if (walk->sublines_width != xtext->buffer->window_width)
+			{
+				int old_dl = walk->display_lines;
+				gtk_xtext_lines_taken (xtext->buffer, walk);
+				if (walk->display_lines != old_dl && xtext->buffer->entry_tree)
+				{
+					int delta = walk->display_lines - old_dl;
+					xtext->buffer->num_lines += delta;
+					update_weight234 (xtext->buffer->entry_tree, walk, delta);
+				}
+			}
 			accumulated += ENT_DISPLAY_LINES (walk);
 			if (accumulated >= lines_needed)
 			{
@@ -6254,6 +6270,7 @@ top_down:
 		if (xtext->status_strip_visible)
 			text_area_h -= (xtext->fontsize * 2 / 3 + 4);
 		if (line < text_area_h - xtext->fontsize &&
+		    gtk_adjustment_get_page_size (xtext->adj) > 0 &&
 		    xtext->buffer->num_lines > gtk_adjustment_get_page_size (xtext->adj))
 		{
 			FILE *f = fopen ("c:\\tmp\\xtext_debug.log", "a");
