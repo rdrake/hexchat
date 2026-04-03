@@ -840,6 +840,12 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			gtk_widget_queue_draw (GTK_WIDGET (xtext));
 		} else
 		{
+			/* Invalidate pagetop cache — the scroll position jumped (thumb drag,
+			 * page click, etc.) so the cached entry no longer matches.  Without
+			 * this, motion_notify → find_char → nth() uses the stale cache and
+			 * returns the wrong entry, causing flicker. */
+			xtext->buffer->pagetop_ent = NULL;
+
 			if (!xtext->io_tag)
 				xtext->io_tag = g_timeout_add (REFRESH_TIMEOUT,
 															(GSourceFunc)
