@@ -5693,8 +5693,18 @@ gtk_xtext_lines_taken (xtext_buffer *buf, textentry * ent)
 		pango_layout_set_width (layout, avail * PANGO_SCALE);
 		pango_layout_set_wrap (layout, PANGO_WRAP_WORD_CHAR);
 
-		/* Read back line boundaries and convert to raw byte offsets */
+		/* Read back line boundaries and convert to raw byte offsets.
+		 * Skip trailing empty layout lines — Pango creates one for text
+		 * ending with \n or at exact width boundaries.  The render loop's
+		 * str < str+str_len check won't render it, causing a display_lines
+		 * overcount that produces blank space at the bottom. */
 		n_lines = pango_layout_get_line_count (layout);
+		if (n_lines > 1)
+		{
+			PangoLayoutLine *last = pango_layout_get_line_readonly (layout, n_lines - 1);
+			if (last->length == 0)
+				n_lines--;
+		}
 		cum_stripped = text_start;
 
 		for (i = 0; i < n_lines; i++)
@@ -6191,38 +6201,38 @@ top_down:
 		/* Lazy reflow: recompute stale sublines before rendering.
 		 * calc_lines uses the lazy path for all buffers, so stale entries
 		 * (multi-liners with old sublines_width) get reflowed here on demand. */
-		if (ent->sublines_width != xtext->buffer->window_width)
-		{
-			int old_dl = ent->display_lines;
-			gtk_xtext_lines_taken (xtext->buffer, ent);
-			if (ent->display_lines != old_dl)
+			if (ent->sublines_width != xtext->buffer->window_width)
 			{
-				int delta = ent->display_lines - old_dl;
-				xtext->buffer->num_lines += delta;
-				if (xtext->buffer->entry_tree)
-					update_weight234 (xtext->buffer->entry_tree, ent, delta);
+				int old_dl = ent->display_lines;
+				gtk_xtext_lines_taken (xtext->buffer, ent);
+					if (ent->display_lines != old_dl)
+				{
+					int delta = ent->display_lines - old_dl;
+					xtext->buffer->num_lines += delta;
+					if (xtext->buffer->entry_tree)
+						update_weight234 (xtext->buffer->entry_tree, ent, delta);
+				}
 			}
-		}
 
-		/* Mark this entry as recently rendered — LRU cache will evict
-		 * cold entries' sublines to bound memory. */
-		display_cache_touch (xtext->buffer->display_cache, xtext->buffer, ent->entry_id);
+			/* Mark this entry as recently rendered — LRU cache will evict
+			 * cold entries' sublines to bound memory. */
+			display_cache_touch (xtext->buffer->display_cache, xtext->buffer, ent->entry_id);
 
-		gtk_xtext_reset (xtext, FALSE);
-		/* Phase 4: state-based rendering */
-		if (ent->state == XTEXT_STATE_REDACTED || ent->state == XTEXT_STATE_REDACTED_PROMPT)
-			xtext->col_fore = XTEXT_REDACTED_FG;
-		if (ent->state == XTEXT_STATE_PENDING)
-			xtext->render_alpha = 0.5;
-		line += gtk_xtext_render_line (xtext, ent, line, lines_max,
-												 subline, width);
-		xtext->render_alpha = 1.0;
-		subline = 0;
+			gtk_xtext_reset (xtext, FALSE);
+			/* Phase 4: state-based rendering */
+			if (ent->state == XTEXT_STATE_REDACTED || ent->state == XTEXT_STATE_REDACTED_PROMPT)
+				xtext->col_fore = XTEXT_REDACTED_FG;
+			if (ent->state == XTEXT_STATE_PENDING)
+				xtext->render_alpha = 0.5;
+			line += gtk_xtext_render_line (xtext, ent, line, lines_max,
+													 subline, width);
+			xtext->render_alpha = 1.0;
+			subline = 0;
 
-		if (line >= lines_max)
-			break;
+			if (line >= lines_max)
+				break;
 
-		ent = ent->next;
+			ent = ent->next;
 	}
 
 	/* Auto-collapse expanded entries that scrolled off screen */
@@ -6264,33 +6274,6 @@ top_down:
 
 	line = (xtext->fontsize * line) - xtext->pixel_offset;
 
-	/* Diagnostic: detect blank space at bottom */
-	{
-		int text_area_h = height;
-		if (xtext->status_strip_visible)
-			text_area_h -= (xtext->fontsize * 2 / 3 + 4);
-		if (line < text_area_h - xtext->fontsize &&
-		    gtk_adjustment_get_page_size (xtext->adj) > 0 &&
-		    xtext->buffer->num_lines > gtk_adjustment_get_page_size (xtext->adj))
-		{
-			FILE *f = fopen ("c:\\tmp\\xtext_debug.log", "a");
-			if (f)
-			{
-				fprintf (f, "blank %dpx line=%d text_h=%d num_lines=%d "
-				         "page=%.0f val=%.1f upper=%.0f lbm=%d mat=%d sb_down=%d pix_off=%d\n",
-				         text_area_h - line, line, text_area_h,
-				         xtext->buffer->num_lines,
-				         gtk_adjustment_get_page_size (xtext->adj),
-				         gtk_adjustment_get_value (xtext->adj),
-				         gtk_adjustment_get_upper (xtext->adj),
-				         xtext->buffer->lines_before_mat,
-				         BUF_LINES_MAT (xtext->buffer),
-				         xtext->buffer->scrollbar_down,
-				         xtext->pixel_offset);
-				fclose (f);
-			}
-		}
-	}
 
 	/* fill any space below the last line with our background GC */
 	xtext_draw_bg (xtext, 0, line, width + MARGIN, height - line);
