@@ -1295,6 +1295,9 @@ gtk_xtext_selection_clear (xtext_buffer *buf)
 static int
 find_x (GtkXText *xtext, textentry *ent, int x, int subline, int indent, gboolean use_trailing)
 {
+	/* Note: subline should already be adjusted for extra_lines_above by the caller
+	 * (gtk_xtext_find_x handles this before calling find_x). */
+
 	/* New path: use same PangoLayout as renderer for pixel-identical hit testing */
 	if (ent->stripped_str && ent->raw_to_stripped_map)
 	{
@@ -1393,6 +1396,14 @@ gtk_xtext_find_x (GtkXText * xtext, int x, textentry * ent, int subline,
 {
 	int indent;
 	unsigned char *str;
+
+	/* Adjust for extra lines above (day separator, reply context) */
+	subline -= ent->extra_lines_above;
+	if (subline < 0)
+	{
+		*out_of_bounds = TRUE;
+		return 0;  /* click was on day separator / reply context line */
+	}
 
 	if (subline < 1)
 		indent = ent->indent;
