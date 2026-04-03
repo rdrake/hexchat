@@ -47,12 +47,14 @@ typedef struct node234_Tag node234;
 struct tree234_Tag {
     node234 *root;
     cmpfn234 cmp;
+    weightfn234 weight;
 };
 
 struct node234_Tag {
     node234 *parent;
     node234 *kids[4];
     int counts[4];
+    int weights[4];    /* augmented: per-subtree weight sums */
     void *elems[3];
 };
 
@@ -64,6 +66,16 @@ tree234 *newtree234(cmpfn234 cmp) {
     LOG(("created tree %p\n", ret));
     ret->root = NULL;
     ret->cmp = cmp;
+    ret->weight = NULL;
+    return ret;
+}
+
+tree234 *newtree234_weighted(cmpfn234 cmp, weightfn234 weight) {
+    tree234 *ret = mknew(tree234);
+    LOG(("created weighted tree %p\n", ret));
+    ret->root = NULL;
+    ret->cmp = cmp;
+    ret->weight = weight;
     return ret;
 }
 
@@ -101,6 +113,22 @@ static int countnode234(node234 *n) {
 }
 
 /*
+ * Count the total weight of a node (sum of subtree weights + element weights).
+ */
+static int weighnode234(node234 *n, weightfn234 wfn) {
+    int w = 0;
+    int i;
+    if (!n)
+	return 0;
+    for (i = 0; i < 4; i++)
+	w += n->weights[i];
+    for (i = 0; i < 3; i++)
+	if (n->elems[i])
+	    w += wfn(n->elems[i]);
+    return w;
+}
+
+/*
  * Count the elements in a tree.
  */
 int count234(tree234 *t) {
@@ -118,6 +146,7 @@ static void *add234_internal(tree234 *t, void *e, int index) {
     node234 *n, **np, *left, *right;
     void *orig_e = e;
     int c, lcount, rcount;
+    int lweight = 0, rweight = 0;
 
     LOG(("adding node %p to tree %p\n", e, t));
     if (t->root == NULL) {
@@ -127,6 +156,8 @@ static void *add234_internal(tree234 *t, void *e, int index) {
 	t->root->kids[2] = t->root->kids[3] = NULL;
 	t->root->counts[0] = t->root->counts[1] = 0;
 	t->root->counts[2] = t->root->counts[3] = 0;
+	t->root->weights[0] = t->root->weights[1] = 0;
+	t->root->weights[2] = t->root->weights[3] = 0;
 	t->root->parent = NULL;
 	t->root->elems[0] = e;
 	LOG(("  created root %p\n", t->root));
@@ -204,8 +235,8 @@ static void *add234_internal(tree234 *t, void *e, int index) {
     /*
      * We need to insert the new element in n at position np.
      */
-    left = NULL;  lcount = 0;
-    right = NULL; rcount = 0;
+    left = NULL;  lcount = 0;  lweight = 0;
+    right = NULL; rcount = 0; rweight = 0;
     while (n) {
 	LOG(("  at %p: %p/%d [%p] %p/%d [%p] %p/%d [%p] %p/%d\n",
 	     n,
@@ -222,15 +253,20 @@ static void *add234_internal(tree234 *t, void *e, int index) {
 	    if (np == &n->kids[0]) {
 		LOG(("  inserting on left of 2-node\n"));
 		n->kids[2] = n->kids[1];     n->counts[2] = n->counts[1];
+		                              n->weights[2] = n->weights[1];
 		n->elems[1] = n->elems[0];
 		n->kids[1] = right;          n->counts[1] = rcount;
+		                              n->weights[1] = rweight;
 		n->elems[0] = e;
 		n->kids[0] = left;           n->counts[0] = lcount;
+		                              n->weights[0] = lweight;
 	    } else { /* np == &n->kids[1] */
 		LOG(("  inserting on right of 2-node\n"));
 		n->kids[2] = right;          n->counts[2] = rcount;
+		                              n->weights[2] = rweight;
 		n->elems[1] = e;
 		n->kids[1] = left;           n->counts[1] = lcount;
+		                              n->weights[1] = lweight;
 	    }
 	    if (n->kids[0]) n->kids[0]->parent = n;
 	    if (n->kids[1]) n->kids[1]->parent = n;
@@ -244,24 +280,33 @@ static void *add234_internal(tree234 *t, void *e, int index) {
 	    if (np == &n->kids[0]) {
 		LOG(("  inserting on left of 3-node\n"));
 		n->kids[3] = n->kids[2];    n->counts[3] = n->counts[2];
+		                             n->weights[3] = n->weights[2];
 		n->elems[2] = n->elems[1];
 		n->kids[2] = n->kids[1];    n->counts[2] = n->counts[1];
+		                             n->weights[2] = n->weights[1];
 		n->elems[1] = n->elems[0];
 		n->kids[1] = right;         n->counts[1] = rcount;
+		                             n->weights[1] = rweight;
 		n->elems[0] = e;
 		n->kids[0] = left;          n->counts[0] = lcount;
+		                             n->weights[0] = lweight;
 	    } else if (np == &n->kids[1]) {
 		LOG(("  inserting in middle of 3-node\n"));
 		n->kids[3] = n->kids[2];    n->counts[3] = n->counts[2];
+		                             n->weights[3] = n->weights[2];
 		n->elems[2] = n->elems[1];
 		n->kids[2] = right;         n->counts[2] = rcount;
+		                             n->weights[2] = rweight;
 		n->elems[1] = e;
 		n->kids[1] = left;          n->counts[1] = lcount;
+		                             n->weights[1] = lweight;
 	    } else { /* np == &n->kids[2] */
 		LOG(("  inserting on right of 3-node\n"));
 		n->kids[3] = right;         n->counts[3] = rcount;
+		                             n->weights[3] = rweight;
 		n->elems[2] = e;
 		n->kids[2] = left;          n->counts[2] = lcount;
+		                             n->weights[2] = lweight;
 	    }
 	    if (n->kids[0]) n->kids[0]->parent = n;
 	    if (n->kids[1]) n->kids[1]->parent = n;
@@ -283,47 +328,68 @@ static void *add234_internal(tree234 *t, void *e, int index) {
 	     */
 	    if (np == &n->kids[0]) {
 		m->kids[0] = left;          m->counts[0] = lcount;
+		                             m->weights[0] = lweight;
 		m->elems[0] = e;
 		m->kids[1] = right;         m->counts[1] = rcount;
+		                             m->weights[1] = rweight;
 		m->elems[1] = n->elems[0];
 		m->kids[2] = n->kids[1];    m->counts[2] = n->counts[1];
+		                             m->weights[2] = n->weights[1];
 		e = n->elems[1];
 		n->kids[0] = n->kids[2];    n->counts[0] = n->counts[2];
+		                             n->weights[0] = n->weights[2];
 		n->elems[0] = n->elems[2];
 		n->kids[1] = n->kids[3];    n->counts[1] = n->counts[3];
+		                             n->weights[1] = n->weights[3];
 	    } else if (np == &n->kids[1]) {
 		m->kids[0] = n->kids[0];    m->counts[0] = n->counts[0];
+		                             m->weights[0] = n->weights[0];
 		m->elems[0] = n->elems[0];
 		m->kids[1] = left;          m->counts[1] = lcount;
+		                             m->weights[1] = lweight;
 		m->elems[1] = e;
 		m->kids[2] = right;         m->counts[2] = rcount;
+		                             m->weights[2] = rweight;
 		e = n->elems[1];
 		n->kids[0] = n->kids[2];    n->counts[0] = n->counts[2];
+		                             n->weights[0] = n->weights[2];
 		n->elems[0] = n->elems[2];
 		n->kids[1] = n->kids[3];    n->counts[1] = n->counts[3];
+		                             n->weights[1] = n->weights[3];
 	    } else if (np == &n->kids[2]) {
 		m->kids[0] = n->kids[0];    m->counts[0] = n->counts[0];
+		                             m->weights[0] = n->weights[0];
 		m->elems[0] = n->elems[0];
 		m->kids[1] = n->kids[1];    m->counts[1] = n->counts[1];
+		                             m->weights[1] = n->weights[1];
 		m->elems[1] = n->elems[1];
 		m->kids[2] = left;          m->counts[2] = lcount;
+		                             m->weights[2] = lweight;
 		/* e = e; */
 		n->kids[0] = right;         n->counts[0] = rcount;
+		                             n->weights[0] = rweight;
 		n->elems[0] = n->elems[2];
 		n->kids[1] = n->kids[3];    n->counts[1] = n->counts[3];
+		                             n->weights[1] = n->weights[3];
 	    } else { /* np == &n->kids[3] */
 		m->kids[0] = n->kids[0];    m->counts[0] = n->counts[0];
+		                             m->weights[0] = n->weights[0];
 		m->elems[0] = n->elems[0];
 		m->kids[1] = n->kids[1];    m->counts[1] = n->counts[1];
+		                             m->weights[1] = n->weights[1];
 		m->elems[1] = n->elems[1];
 		m->kids[2] = n->kids[2];    m->counts[2] = n->counts[2];
+		                             m->weights[2] = n->weights[2];
 		n->kids[0] = left;          n->counts[0] = lcount;
+		                             n->weights[0] = lweight;
 		n->elems[0] = e;
 		n->kids[1] = right;         n->counts[1] = rcount;
+		                             n->weights[1] = rweight;
 		e = n->elems[2];
 	    }
 	    m->kids[3] = n->kids[3] = n->kids[2] = NULL;
 	    m->counts[3] = n->counts[3] = n->counts[2] = 0;
+	    m->weights[3] = n->weights[3] = n->weights[2] = 0;
 	    m->elems[2] = n->elems[2] = n->elems[1] = NULL;
 	    if (m->kids[0]) m->kids[0]->parent = m;
 	    if (m->kids[1]) m->kids[1]->parent = m;
@@ -338,7 +404,9 @@ static void *add234_internal(tree234 *t, void *e, int index) {
 		 n->kids[0], n->counts[0], n->elems[0],
 		 n->kids[1], n->counts[1]));
 	    left = m;  lcount = countnode234(left);
+	               lweight = t->weight ? weighnode234(left, t->weight) : 0;
 	    right = n; rcount = countnode234(right);
+	               rweight = t->weight ? weighnode234(right, t->weight) : 0;
 	}
 	if (n->parent)
 	    np = (n->parent->kids[0] == n ? &n->parent->kids[0] :
@@ -357,23 +425,29 @@ static void *add234_internal(tree234 *t, void *e, int index) {
     if (n) {
 	while (n->parent) {
 	    int count = countnode234(n);
+	    int w = t->weight ? weighnode234(n, t->weight) : 0;
 	    int childnum;
 	    childnum = (n->parent->kids[0] == n ? 0 :
 			n->parent->kids[1] == n ? 1 :
 			n->parent->kids[2] == n ? 2 : 3);
 	    n->parent->counts[childnum] = count;
+	    n->parent->weights[childnum] = w;
 	    n = n->parent;
 	}
     } else {
 	LOG(("  root is overloaded, split into two\n"));
 	t->root = mknew(node234);
 	t->root->kids[0] = left;     t->root->counts[0] = lcount;
+	                              t->root->weights[0] = lweight;
 	t->root->elems[0] = e;
 	t->root->kids[1] = right;    t->root->counts[1] = rcount;
+	                              t->root->weights[1] = rweight;
 	t->root->elems[1] = NULL;
 	t->root->kids[2] = NULL;     t->root->counts[2] = 0;
+	                              t->root->weights[2] = 0;
 	t->root->elems[2] = NULL;
 	t->root->kids[3] = NULL;     t->root->counts[3] = 0;
+	                              t->root->weights[3] = 0;
 	t->root->parent = NULL;
 	if (t->root->kids[0]) t->root->kids[0]->parent = t->root;
 	if (t->root->kids[1]) t->root->kids[1]->parent = t->root;
@@ -621,23 +695,29 @@ static void *delpos234_internal(tree234 *t, int index) {
 				    sib->elems[1] ? 1 : 0);
 		    sub->kids[2] = sub->kids[1];
 		    sub->counts[2] = sub->counts[1];
+		    sub->weights[2] = sub->weights[1];
 		    sub->elems[1] = sub->elems[0];
 		    sub->kids[1] = sub->kids[0];
 		    sub->counts[1] = sub->counts[0];
+		    sub->weights[1] = sub->weights[0];
 		    sub->elems[0] = n->elems[ki-1];
 		    sub->kids[0] = sib->kids[lastelem+1];
 		    sub->counts[0] = sib->counts[lastelem+1];
+		    sub->weights[0] = sib->weights[lastelem+1];
 		    if (sub->kids[0]) sub->kids[0]->parent = sub;
 		    n->elems[ki-1] = sib->elems[lastelem];
 		    sib->kids[lastelem+1] = NULL;
 		    sib->counts[lastelem+1] = 0;
+		    sib->weights[lastelem+1] = 0;
 		    sib->elems[lastelem] = NULL;
 		    n->counts[ki] = countnode234(sub);
+		    if (t->weight) n->weights[ki] = weighnode234(sub, t->weight);
 		    LOG(("  case 3a left\n"));
 		    LOG(("  index and left subtree count before adjustment: %d, %d\n",
 			 index, n->counts[ki-1]));
 		    index += n->counts[ki-1];
 		    n->counts[ki-1] = countnode234(sib);
+		    if (t->weight) n->weights[ki-1] = weighnode234(sib, t->weight);
 		    index -= n->counts[ki-1];
 		    LOG(("  index and left subtree count after adjustment: %d, %d\n",
 			 index, n->counts[ki-1]));
@@ -657,20 +737,26 @@ static void *delpos234_internal(tree234 *t, int index) {
 		    sub->elems[1] = n->elems[ki];
 		    sub->kids[2] = sib->kids[0];
 		    sub->counts[2] = sib->counts[0];
+		    sub->weights[2] = sib->weights[0];
 		    if (sub->kids[2]) sub->kids[2]->parent = sub;
 		    n->elems[ki] = sib->elems[0];
 		    sib->kids[0] = sib->kids[1];
 		    sib->counts[0] = sib->counts[1];
+		    sib->weights[0] = sib->weights[1];
 		    for (j = 0; j < 2 && sib->elems[j+1]; j++) {
 			sib->kids[j+1] = sib->kids[j+2];
 			sib->counts[j+1] = sib->counts[j+2];
+			sib->weights[j+1] = sib->weights[j+2];
 			sib->elems[j] = sib->elems[j+1];
 		    }
 		    sib->kids[j+1] = NULL;
 		    sib->counts[j+1] = 0;
+		    sib->weights[j+1] = 0;
 		    sib->elems[j] = NULL;
 		    n->counts[ki] = countnode234(sub);
+		    if (t->weight) n->weights[ki] = weighnode234(sub, t->weight);
 		    n->counts[ki+1] = countnode234(sib);
+		    if (t->weight) n->weights[ki+1] = weighnode234(sib, t->weight);
 		    LOG(("  case 3a right\n"));
 		} else {
 		    /*
@@ -704,19 +790,24 @@ static void *delpos234_internal(tree234 *t, int index) {
 
 		    sub->kids[3] = sub->kids[1];
 		    sub->counts[3] = sub->counts[1];
+		    sub->weights[3] = sub->weights[1];
 		    sub->elems[2] = sub->elems[0];
 		    sub->kids[2] = sub->kids[0];
 		    sub->counts[2] = sub->counts[0];
+		    sub->weights[2] = sub->weights[0];
 		    sub->elems[1] = n->elems[ki];
 		    sub->kids[1] = sib->kids[1];
 		    sub->counts[1] = sib->counts[1];
+		    sub->weights[1] = sib->weights[1];
 		    if (sub->kids[1]) sub->kids[1]->parent = sub;
 		    sub->elems[0] = sib->elems[0];
 		    sub->kids[0] = sib->kids[0];
 		    sub->counts[0] = sib->counts[0];
+		    sub->weights[0] = sib->weights[0];
 		    if (sub->kids[0]) sub->kids[0]->parent = sub;
 
 		    n->counts[ki+1] = countnode234(sub);
+		    if (t->weight) n->weights[ki+1] = weighnode234(sub, t->weight);
 
 		    sfree(sib);
 
@@ -727,10 +818,12 @@ static void *delpos234_internal(tree234 *t, int index) {
 		    for (j = ki; j < 3 && n->kids[j+1]; j++) {
 			n->kids[j] = n->kids[j+1];
 			n->counts[j] = n->counts[j+1];
+			n->weights[j] = n->weights[j+1];
 			n->elems[j] = j<2 ? n->elems[j+1] : NULL;
 		    }
 		    n->kids[j] = NULL;
 		    n->counts[j] = 0;
+		    n->weights[j] = 0;
 		    if (j < 3) n->elems[j] = NULL;
 		    LOG(("  case 3b ki=%d\n", ki));
 
@@ -793,6 +886,8 @@ static void *delpos234_internal(tree234 *t, int index) {
 			    n->parent->kids[1] == n ? 1 :
 			    n->parent->kids[2] == n ? 2 : 3);
 		n->parent->counts[childnum]--;
+		if (t->weight)
+		    n->parent->weights[childnum] = weighnode234(n, t->weight);
 		n = n->parent;
 	    }
 	    return retval;	       /* finished! */
@@ -849,13 +944,16 @@ static void *delpos234_internal(tree234 *t, int index) {
 	    a->elems[1] = n->elems[ei];
 	    a->kids[2] = b->kids[0];
 	    a->counts[2] = b->counts[0];
+	    a->weights[2] = b->weights[0];
 	    if (a->kids[2]) a->kids[2]->parent = a;
 	    a->elems[2] = b->elems[0];
 	    a->kids[3] = b->kids[1];
 	    a->counts[3] = b->counts[1];
+	    a->weights[3] = b->weights[1];
 	    if (a->kids[3]) a->kids[3]->parent = a;
 	    sfree(b);
 	    n->counts[ei] = countnode234(a);
+	    if (t->weight) n->weights[ei] = weighnode234(a, t->weight);
 	    /*
 	     * That's built the big node in a, and destroyed b. Now
 	     * remove the reference to b (and e) in n.
@@ -864,10 +962,12 @@ static void *delpos234_internal(tree234 *t, int index) {
 		n->elems[j] = n->elems[j+1];
 		n->kids[j+1] = n->kids[j+2];
 		n->counts[j+1] = n->counts[j+2];
+		n->weights[j+1] = n->weights[j+2];
 	    }
 	    n->elems[j] = NULL;
 	    n->kids[j+1] = NULL;
 	    n->counts[j+1] = 0;
+	    n->weights[j+1] = 0;
             /*
              * It's possible, in this case, that we've just removed
              * the only element in the root of the tree. If so,
@@ -898,6 +998,187 @@ void *del234(tree234 *t, void *e) {
     if (!findrelpos234(t, e, NULL, REL234_EQ, &index))
 	return NULL;		       /* it wasn't in there anyway */
     return delpos234_internal(t, index); /* it's there; delete it. */
+}
+
+/*
+ * Return the total weight of all elements in the tree.
+ */
+int totalweight234(tree234 *t) {
+    if (!t->root || !t->weight)
+	return 0;
+    return weighnode234(t->root, t->weight);
+}
+
+/*
+ * Look up the element at a given weighted index.  Returns the element
+ * whose cumulative weight range contains `weight_index', and sets
+ * *offset to the remainder within that element's weight.
+ */
+void *index234_by_weight(tree234 *t, int weight_index, int *offset) {
+    node234 *n;
+
+    if (!t->root || !t->weight)
+	return NULL;
+    if (weight_index < 0 || weight_index >= totalweight234(t))
+	return NULL;
+
+    n = t->root;
+    while (n) {
+	if (weight_index < n->weights[0]) {
+	    n = n->kids[0];
+	} else if (weight_index -= n->weights[0],
+		   weight_index < t->weight(n->elems[0])) {
+	    if (offset) *offset = weight_index;
+	    return n->elems[0];
+	} else if (weight_index -= t->weight(n->elems[0]),
+		   weight_index < n->weights[1]) {
+	    n = n->kids[1];
+	} else if (n->elems[1] != NULL &&
+		   (weight_index -= n->weights[1],
+		    weight_index < t->weight(n->elems[1]))) {
+	    if (offset) *offset = weight_index;
+	    return n->elems[1];
+	} else if (n->elems[1] != NULL &&
+		   (weight_index -= t->weight(n->elems[1]),
+		    weight_index < n->weights[2])) {
+	    n = n->kids[2];
+	} else if (n->elems[2] != NULL &&
+		   (weight_index -= n->weights[2],
+		    weight_index < t->weight(n->elems[2]))) {
+	    if (offset) *offset = weight_index;
+	    return n->elems[2];
+	} else if (n->elems[2] != NULL) {
+	    weight_index -= t->weight(n->elems[2]);
+	    n = n->kids[3];
+	} else if (n->elems[1] != NULL) {
+	    /* elems[2] is NULL, descend into kids[2] */
+	    n = n->kids[2];
+	} else {
+	    /* elems[1] is NULL, try kids[1] */
+	    n = n->kids[1];
+	}
+    }
+    return NULL;
+}
+
+/*
+ * Find the cumulative weight of all elements before `e' in the tree.
+ * Returns -1 if the element is not found.
+ */
+int weight_pos234(tree234 *t, void *e) {
+    node234 *n;
+    int pos = 0;
+    cmpfn234 cmp;
+
+    if (!t->root || !t->cmp || !t->weight)
+	return -1;
+
+    cmp = t->cmp;
+    n = t->root;
+    while (n) {
+	int c = cmp(e, n->elems[0]);
+	if (c < 0) {
+	    n = n->kids[0];
+	} else if (c == 0) {
+	    pos += n->weights[0];
+	    return pos;
+	} else {
+	    pos += n->weights[0] + t->weight(n->elems[0]);
+	    if (n->elems[1] == NULL) {
+		n = n->kids[1];
+	    } else {
+		int c2 = cmp(e, n->elems[1]);
+		if (c2 < 0) {
+		    n = n->kids[1];
+		} else if (c2 == 0) {
+		    pos += n->weights[1];
+		    return pos;
+		} else {
+		    pos += n->weights[1] + t->weight(n->elems[1]);
+		    if (n->elems[2] == NULL) {
+			n = n->kids[2];
+		    } else {
+			int c3 = cmp(e, n->elems[2]);
+			if (c3 < 0) {
+			    n = n->kids[2];
+			} else if (c3 == 0) {
+			    pos += n->weights[2];
+			    return pos;
+			} else {
+			    pos += n->weights[2] + t->weight(n->elems[2]);
+			    n = n->kids[3];
+			}
+		    }
+		}
+	    }
+	}
+    }
+    return -1;  /* not found */
+}
+
+/*
+ * Notify the tree that an element's weight has changed by `delta'.
+ * Finds the element via cmp, then walks from the containing node up
+ * to the root, adjusting the ancestor weights[childindex] entries.
+ *
+ * weights[i] stores the total weight of subtree kids[i].  The element
+ * itself sits in elems[k] of a node and its weight is returned by the
+ * callback - it is NOT stored in any weights[] slot.  But every
+ * ancestor's weights[] entry for the subtree branch containing this
+ * node DOES include the element's weight in its aggregate, so those
+ * all need adjusting by delta.
+ */
+void update_weight234(tree234 *t, void *e, int delta) {
+    node234 *n;
+    cmpfn234 cmp;
+
+    if (!t->root || !t->cmp || !t->weight || delta == 0)
+	return;
+
+    cmp = t->cmp;
+    n = t->root;
+    while (n) {
+	int c, childnum;
+	c = cmp(e, n->elems[0]);
+	if (c < 0) {
+	    childnum = 0;
+	} else if (c == 0) {
+	    /* Found it - walk up to root adjusting weights */
+	    while (n->parent) {
+		childnum = (n->parent->kids[0] == n ? 0 :
+			    n->parent->kids[1] == n ? 1 :
+			    n->parent->kids[2] == n ? 2 : 3);
+		n->parent->weights[childnum] += delta;
+		n = n->parent;
+	    }
+	    return;
+	} else if (n->elems[1] == NULL || (c = cmp(e, n->elems[1])) < 0) {
+	    childnum = 1;
+	} else if (c == 0) {
+	    while (n->parent) {
+		childnum = (n->parent->kids[0] == n ? 0 :
+			    n->parent->kids[1] == n ? 1 :
+			    n->parent->kids[2] == n ? 2 : 3);
+		n->parent->weights[childnum] += delta;
+		n = n->parent;
+	    }
+	    return;
+	} else if (n->elems[2] == NULL || (c = cmp(e, n->elems[2])) < 0) {
+	    childnum = 2;
+	} else if (c == 0) {
+	    while (n->parent) {
+		childnum = (n->parent->kids[0] == n ? 0 :
+			    n->parent->kids[1] == n ? 1 :
+			    n->parent->kids[2] == n ? 2 : 3);
+		n->parent->weights[childnum] += delta;
+		n = n->parent;
+	    }
+	    return;
+	} else {
+	    childnum = 3;
+	}
+	n = n->kids[childnum];
+    }
 }
 
 #ifdef TEST

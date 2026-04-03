@@ -36,11 +36,48 @@ typedef struct tree234_Tag tree234;
 typedef int (*cmpfn234)(void *, void *);
 
 /*
+ * Callback to get the "weight" of an element for the augmented
+ * line_counts.  If non-NULL, the tree maintains parallel per-subtree
+ * sums of element weights alongside the standard element counts.
+ * This enables index234_by_weight() for O(log n) weighted lookup.
+ */
+typedef int (*weightfn234)(void *);
+
+/*
  * Create a 2-3-4 tree. If `cmp' is NULL, the tree is unsorted, and
  * lookups by key will fail: you can only look things up by numeric
  * index, and you have to use addpos234() and delpos234().
+ *
+ * If `weight' is non-NULL, the tree maintains augmented per-subtree
+ * weight sums for O(log n) weighted positional access.
  */
 tree234 *newtree234(cmpfn234 cmp);
+tree234 *newtree234_weighted(cmpfn234 cmp, weightfn234 weight);
+
+/*
+ * Look up element by weighted position.  Returns the element whose
+ * cumulative weight range contains `weight_index', and sets *offset
+ * to the remainder (how far into the element's weight the index falls).
+ * Returns NULL if weight_index is out of range.
+ */
+void *index234_by_weight(tree234 *t, int weight_index, int *offset);
+
+/*
+ * Get the cumulative weight of all elements before `e' in the tree.
+ * Returns -1 if the element is not found.
+ */
+int weight_pos234(tree234 *t, void *e);
+
+/*
+ * Get total weight of all elements in the tree.
+ */
+int totalweight234(tree234 *t);
+
+/*
+ * Notify the tree that an element's weight has changed by `delta'.
+ * Propagates the change up from the element to the root.
+ */
+void update_weight234(tree234 *t, void *e, int delta);
 
 /*
  * Free a 2-3-4 tree (not including freeing the elements).
