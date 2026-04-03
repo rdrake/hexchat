@@ -2518,6 +2518,14 @@ fe_set_batch_mode (session *sess, gboolean on)
 		return;
 
 	buf = sess->res->buffer;
+
+	if (on)
+	{
+		/* Save scroll anchor before batch modifies the buffer */
+		if (buf->xtext && buf->xtext->buffer == buf)
+			gtk_xtext_save_scroll_anchor (buf, &buf->batch_anchor);
+	}
+
 	buf->batch_mode = on ? 1 : 0;
 
 	if (!on)
@@ -2537,6 +2545,10 @@ fe_set_batch_mode (session *sess, gboolean on)
 		gdouble page = gtk_adjustment_get_page_size (adj);
 		gdouble upper;
 
+		/* Invalidate pagetop cache — batch inserts and pruning
+		 * change the linked list and line counts. */
+		buf->pagetop_ent = NULL;
+
 		if (buf->virtual_mode && buf->virt_db && buf->virt_channel)
 		{
 			int db_total = scrollback_count (buf->virt_db, buf->virt_channel);
@@ -2551,32 +2563,18 @@ fe_set_batch_mode (session *sess, gboolean on)
 					buf->num_lines = buf->lines_before_mat + buf->lines_mat;
 			}
 
-			/* Enforce materialization window — chathistory batches using
-			 * insert_sorted accumulate entries beyond the 500 limit.
-			 * Prune from head (oldest) since user is at the bottom. */
+			/* Enforce materialization window — viewport-aware pruning
+			 * evicts from whichever end is furthest from the viewport. */
 			gtk_xtext_enforce_mat_window (buf);
 		}
 
 		upper = buf->num_lines > 0 ? buf->num_lines : 1;
-		gdouble value;
 
-		if (was_down)
-		{
-			value = upper - page;
-			if (value < 0) value = 0;
-			buf->scrollbar_down = TRUE;
-		}
-		else
-		{
-			value = buf->old_value;
-			if (value > upper - page) value = upper - page;
-			if (value < 0) value = 0;
-		}
+		/* Recalculate line counts after pruning */
+		gtk_xtext_calc_lines (buf, FALSE);
 
-		g_signal_handler_block (adj, buf->xtext->vc_signal_tag);
-		gtk_adjustment_configure (adj, value, 0, upper, 1, page, page);
-		g_signal_handler_unblock (adj, buf->xtext->vc_signal_tag);
-		buf->old_value = value;
+		/* Restore scroll position from the anchor saved at batch start */
+		gtk_xtext_restore_scroll_anchor (buf, &buf->batch_anchor);
 
 		gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
 	}

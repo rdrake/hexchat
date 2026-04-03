@@ -5415,15 +5415,38 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 	int lines = 0;
 	int count = 0;
 
-	/* Walk materialized entries using ENT_DISPLAY_LINES.
-	 * recompute_sublines = TRUE on resize (Pango re-measurement needed).
-	 * The single-liner fast path in lines_taken skips Pango for most entries.
-	 * recompute_sublines = FALSE during scroll (sublines already correct
-	 * from materialization — just sum cached values, very cheap). */
+	/* Walk materialized entries.
+	 * recompute_sublines = TRUE on resize: invalidate stale entries but
+	 * keep their cached display_lines as an estimate (GTK4-style lazy
+	 * validation — actual Pango recompute deferred to render/access time).
+	 * recompute_sublines = FALSE during scroll: just sum cached values. */
 	for (ent = buf->text_first; ent; ent = ent->next)
 	{
-		if (recompute_sublines)
-			gtk_xtext_lines_taken (buf, ent);
+		if (recompute_sublines && ent->sublines_width != buf->window_width)
+		{
+			/* Never computed (sublines_width=0): must do full Pango */
+			if (ent->sublines_width == 0 || !ent->sublines)
+			{
+				gtk_xtext_lines_taken (buf, ent);
+			}
+			else
+			{
+				int win_width = buf->window_width - MARGIN;
+
+				/* Single-liners that still fit: update stamp, no Pango */
+				if (!ent->sublines->next &&
+				    win_width >= ent->indent + ent->str_width &&
+				    !(ent->stripped_str && memchr (ent->stripped_str, '\n', ent->stripped_len)))
+				{
+					ent->sublines_width = buf->window_width;
+					ent->display_lines = 1 + ent->extra_lines_above
+						+ ent->extra_lines_below + (ent->collapsible ? 1 : 0);
+				}
+				/* Multi-liners: leave display_lines at old value (close enough
+				 * for scrollbar), leave sublines_width stale (triggers lazy
+				 * recompute when accessed for rendering). */
+			}
+		}
 		lines += ent->display_lines;
 		count++;
 	}
@@ -5823,6 +5846,18 @@ top_down:
 
 	while (ent)
 	{
+		/* Lazy reflow: recompute stale sublines before rendering */
+		if (ent->sublines_width != xtext->buffer->window_width)
+		{
+			int old_dl = ent->display_lines;
+			gtk_xtext_lines_taken (xtext->buffer, ent);
+			if (ent->display_lines != old_dl)
+			{
+				xtext->buffer->lines_mat += ent->display_lines - old_dl;
+				xtext->buffer->num_lines += ent->display_lines - old_dl;
+			}
+		}
+
 		gtk_xtext_reset (xtext, FALSE);
 		/* Phase 4: state-based rendering */
 		if (ent->state == XTEXT_STATE_REDACTED || ent->state == XTEXT_STATE_REDACTED_PROMPT)
@@ -5872,8 +5907,8 @@ top_down:
 		}
 	}
 
-	line = (xtext->fontsize * line) - xtext->pixel_offset;
 
+	line = (xtext->fontsize * line) - xtext->pixel_offset;
 
 	/* fill any space below the last line with our background GC */
 	xtext_draw_bg (xtext, 0, line, width + MARGIN, height - line);
@@ -8775,14 +8810,36 @@ gtk_xtext_set_max_lines (GtkXText *xtext, int max_lines)
 void
 gtk_xtext_enforce_mat_window (xtext_buffer *buf)
 {
+	int viewport_center;
+
 	if (!buf || !buf->virtual_mode)
 		return;
-	if (buf->mat_count > VIRT_MAT_WINDOW)
+	if (buf->mat_count <= VIRT_MAT_WINDOW)
+		return;
+
+	/* Find viewport center relative to materialized window.
+	 * Evict from whichever end is furthest from the viewport. */
+	if (buf->xtext && buf->xtext->adj)
 	{
-		while (buf->mat_count > VIRT_MAT_WINDOW)
-			gtk_xtext_remove_top (buf);
-		buf->pagetop_ent = NULL;
+		gdouble val = gtk_adjustment_get_value (buf->xtext->adj);
+		gdouble page = gtk_adjustment_get_page_size (buf->xtext->adj);
+		viewport_center = (int)(val + page / 2.0) - buf->lines_before_mat;
 	}
+	else
+	{
+		viewport_center = buf->lines_mat;  /* assume bottom */
+	}
+
+	while (buf->mat_count > VIRT_MAT_WINDOW)
+	{
+		/* If viewport is in the bottom half, evict from head.
+		 * If viewport is in the top half, evict from tail. */
+		if (viewport_center > buf->lines_mat / 2)
+			gtk_xtext_remove_top (buf);
+		else
+			gtk_xtext_remove_bottom (buf);
+	}
+	buf->pagetop_ent = NULL;
 }
 
 void
