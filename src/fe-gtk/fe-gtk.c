@@ -2559,16 +2559,19 @@ fe_set_batch_mode (session *sess, gboolean on)
 					buf->num_lines = buf->lines_before_mat + BUF_LINES_MAT (buf);
 			}
 
-			/* Enforce materialization window — viewport-aware pruning
-			 * evicts from whichever end is furthest from the viewport. */
-			gtk_xtext_enforce_mat_window (buf);
 		}
 
-		/* Recalculate line counts after pruning */
+		/* Recalculate line counts and restore scroll position BEFORE
+		 * pruning.  enforce_mat_window uses the viewport center to decide
+		 * which end to evict from; if we prune first the viewport is based
+		 * on the pre-restore position, causing bottom entries to be evicted
+		 * that are needed to fill the page after restore. */
 		gtk_xtext_calc_lines (buf, FALSE);
-
-		/* Restore scroll position from the anchor saved at batch start */
 		gtk_xtext_restore_scroll_anchor (buf, &buf->batch_anchor);
+
+		/* Now prune with the correct viewport position */
+		if (HAS_VIRT_DB (buf))
+			gtk_xtext_enforce_mat_window (buf);
 
 		gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
 	}
