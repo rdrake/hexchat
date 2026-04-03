@@ -3955,6 +3955,8 @@ mg_switch_tab_cb (chanview *cv, chan *ch, int tag, gpointer ud)
 				mg_unpopulate (current_tab);
 			mg_populate (sess);
 			chathistory_notify_tab_switch (sess);
+			/* Reset scroll-to-top backoff for the new tab */
+			fe_reset_scroll_top_backoff (sess);
 		}
 	} else if (old != active_tab)
 	{

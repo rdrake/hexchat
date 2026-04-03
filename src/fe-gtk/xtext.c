@@ -738,16 +738,25 @@ static gboolean
 gtk_xtext_scroll_top_timeout (gpointer data)
 {
 	GtkXText *xtext = GTK_XTEXT (data);
+	gdouble value;
 
 	xtext->scroll_top_debounce_tag = 0;
+
+	/* Verify we're still near the top of the current buffer.
+	 * Buffer switches change the adjustment, so the original
+	 * scroll-to-top condition may no longer hold. */
+	value = gtk_adjustment_get_value (xtext->adj);
+	if (value > 1.0)
+		return G_SOURCE_REMOVE;
 
 	/* Fire the callback if set */
 	if (xtext->scroll_to_top_cb)
 	{
 		xtext->scroll_to_top_cb (xtext, xtext->scroll_to_top_userdata);
 
-		/* Exponential backoff: double the delay for next time, max 8 seconds */
-		xtext->scroll_top_backoff_ms = MIN (xtext->scroll_top_backoff_ms * 2, 8000);
+		/* Short backoff to coalesce rapid scroll events, but don't
+		 * escalate aggressively — the user is actively scrolling. */
+		xtext->scroll_top_backoff_ms = MIN (xtext->scroll_top_backoff_ms + 250, 2000);
 	}
 
 	return G_SOURCE_REMOVE;
@@ -784,9 +793,11 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 				gtk_xtext_scroll_top_timeout,
 				xtext);
 		}
-		else if (value > 1.0 && xtext->scroll_top_debounce_tag)
+		else if (value > page_size && xtext->scroll_top_debounce_tag)
 		{
-			/* User scrolled away from top - cancel pending request */
+			/* User scrolled well away from top - cancel pending request.
+			 * Use page_size as threshold to avoid false cancels from
+			 * buffer switches or small position adjustments. */
 			g_source_remove (xtext->scroll_top_debounce_tag);
 			xtext->scroll_top_debounce_tag = 0;
 		}
@@ -859,7 +870,7 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 					xtext->scroll_top_debounce_tag = 0;
 				}
 				xtext->scroll_to_top_cb (xtext, xtext->scroll_to_top_userdata);
-				xtext->scroll_top_backoff_ms = MIN (xtext->scroll_top_backoff_ms * 2, 8000);
+				xtext->scroll_top_backoff_ms = MIN (xtext->scroll_top_backoff_ms + 250, 2000);
 			}
 		}
 
@@ -5883,8 +5894,10 @@ top_down:
 
 	while (ent)
 	{
-		/* Lazy reflow: recompute stale sublines before rendering */
-		if (ent->sublines_width != xtext->buffer->window_width)
+		/* Lazy reflow: recompute stale sublines before rendering (virtual mode only).
+		 * Non-virtual buffers have sublines always current from calc_lines. */
+		if (xtext->buffer->virtual_mode &&
+		    ent->sublines_width != xtext->buffer->window_width)
 		{
 			int old_dl = ent->display_lines;
 			gtk_xtext_lines_taken (xtext->buffer, ent);
