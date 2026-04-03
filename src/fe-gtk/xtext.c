@@ -744,9 +744,10 @@ gtk_xtext_scroll_top_timeout (gpointer data)
 
 	/* Verify we're still near the top of the current buffer.
 	 * Buffer switches change the adjustment, so the original
-	 * scroll-to-top condition may no longer hold. */
+	 * scroll-to-top condition may no longer hold.
+	 * Account for lines_before_mat offset on DB-backed buffers. */
 	value = gtk_adjustment_get_value (xtext->adj);
-	if (value > 1.0)
+	if (value > xtext->buffer->lines_before_mat + 1.0)
 		return G_SOURCE_REMOVE;
 
 	/* Fire the callback if set */
@@ -781,25 +782,31 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 		else
 			xtext->buffer->scrollbar_down = FALSE;
 
-		/* Detect scroll-to-top for chathistory loading. */
-		if (value <= 1.0 && xtext->scroll_to_top_cb && upper > page_size)
+		/* Detect scroll-to-top for chathistory loading.
+		 * For DB-backed buffers, the scrollbar minimum is lines_before_mat
+		 * (not 0), so check relative to that offset. */
 		{
-			/* Cancel existing debounce timer and start a new one */
-			if (xtext->scroll_top_debounce_tag)
-				g_source_remove (xtext->scroll_top_debounce_tag);
+			double top_threshold = xtext->buffer->lines_before_mat + 1.0;
+			if (value <= top_threshold && !xtext->buffer->scrollbar_down
+			    && xtext->scroll_to_top_cb && upper > page_size)
+			{
+				/* Cancel existing debounce timer and start a new one */
+				if (xtext->scroll_top_debounce_tag)
+					g_source_remove (xtext->scroll_top_debounce_tag);
 
-			xtext->scroll_top_debounce_tag = g_timeout_add (
-				xtext->scroll_top_backoff_ms,
-				gtk_xtext_scroll_top_timeout,
-				xtext);
-		}
-		else if (value > page_size && xtext->scroll_top_debounce_tag)
-		{
-			/* User scrolled well away from top - cancel pending request.
-			 * Use page_size as threshold to avoid false cancels from
-			 * buffer switches or small position adjustments. */
-			g_source_remove (xtext->scroll_top_debounce_tag);
-			xtext->scroll_top_debounce_tag = 0;
+				xtext->scroll_top_debounce_tag = g_timeout_add (
+					xtext->scroll_top_backoff_ms,
+					gtk_xtext_scroll_top_timeout,
+					xtext);
+			}
+			else if (value > top_threshold + page_size && xtext->scroll_top_debounce_tag)
+			{
+				/* User scrolled well away from top - cancel pending request.
+				 * Use page_size as threshold to avoid false cancels from
+				 * buffer switches or small position adjustments. */
+				g_source_remove (xtext->scroll_top_debounce_tag);
+				xtext->scroll_top_debounce_tag = 0;
+			}
 		}
 
 		/* Virtual scrollback (Phase 3+5): ensure entries around viewport are loaded.
