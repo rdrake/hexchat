@@ -1108,8 +1108,25 @@ gtk_xtext_resize_cb (gpointer data)
 
 	xtext->resize_tag = 0;
 
-	/* Reflow lines and restore scroll position.  The anchor was saved
-	 * from the top of the viewport in size_allocate. */
+	/* Full Pango recompute — corrects lazy estimates from the fast resize
+	 * path.  Flush stale entries so calc_lines sees them as needing reflow. */
+	if (xtext->buffer->virtual_mode)
+	{
+		textentry *e;
+		for (e = xtext->buffer->text_first; e; e = e->next)
+		{
+			if (e->sublines_width != 0 &&
+			    e->sublines_width != xtext->buffer->window_width)
+			{
+				int old_dl = e->display_lines;
+				gtk_xtext_lines_taken (xtext->buffer, e);
+				if (e->display_lines != old_dl && xtext->buffer->entry_tree)
+					update_weight234 (xtext->buffer->entry_tree, e,
+					                  e->display_lines - old_dl);
+			}
+		}
+	}
+
 	gtk_xtext_calc_lines (xtext->buffer, FALSE);
 	gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
 
@@ -1200,6 +1217,12 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 			gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
 			gtk_xtext_adjustment_set (xtext->buffer, FALSE);
 			gtk_widget_queue_draw (widget);
+
+			/* Schedule deferred full recompute to correct lazy estimates.
+			 * The immediate calc_lines uses stale display_lines for
+			 * off-screen multi-liners; the deferred pass fixes them. */
+			xtext->resize_tag = g_timeout_add (RESIZE_TIMEOUT,
+			                                    gtk_xtext_resize_cb, xtext);
 		}
 		else
 		{
