@@ -338,6 +338,120 @@ static gboolean gtk_xtext_scroll (GtkEventControllerScroll *controller, double d
 } while(0)
 
 /* ======================================= */
+/* ======== DISPLAY LINE CACHE ========== */
+/* ======================================= */
+
+static xtext_display_cache *
+display_cache_new (int max_entries)
+{
+	xtext_display_cache *cache = g_new0 (xtext_display_cache, 1);
+	cache->by_id = g_hash_table_new (g_int64_hash, g_int64_equal);
+	g_queue_init (&cache->lru_order);
+	cache->max_entries = max_entries;
+	return cache;
+}
+
+static void
+display_cache_free (xtext_display_cache *cache)
+{
+	GList *l;
+
+	if (!cache)
+		return;
+
+	/* Free all entry_id keys stored in the queue */
+	for (l = cache->lru_order.head; l; l = l->next)
+		g_free (l->data);	/* free the guint64* key */
+	g_queue_clear (&cache->lru_order);
+	g_hash_table_destroy (cache->by_id);
+	g_free (cache);
+}
+
+/* Find entry by id in the buffer (for eviction).
+ * Uses the entries_by_id hash table for O(1) lookup. */
+static textentry *
+display_cache_find_entry (xtext_buffer *buf, guint64 entry_id)
+{
+	if (buf->entries_by_id)
+		return g_hash_table_lookup (buf->entries_by_id, GSIZE_TO_POINTER (entry_id));
+	return NULL;
+}
+
+/* Evict the least-recently-used entry's sublines */
+static void
+display_cache_evict_lru (xtext_display_cache *cache, xtext_buffer *buf)
+{
+	guint64 *evict_id;
+	textentry *ent;
+
+	if (g_queue_is_empty (&cache->lru_order))
+		return;
+
+	evict_id = g_queue_pop_tail (&cache->lru_order);
+	g_hash_table_remove (cache->by_id, evict_id);
+
+	/* Free the evicted entry's sublines */
+	ent = display_cache_find_entry (buf, *evict_id);
+	if (ent && ent->sublines)
+	{
+		g_slist_free (ent->sublines);
+		ent->sublines = NULL;
+		ent->sublines_width = 0;
+	}
+	g_free (evict_id);
+}
+
+/* Touch an entry — mark as recently used, evict LRU if over capacity */
+static void
+display_cache_touch (xtext_display_cache *cache, xtext_buffer *buf, guint64 entry_id)
+{
+	GList *node;
+	guint64 *key;
+
+	if (!cache)
+		return;
+
+	node = g_hash_table_lookup (cache->by_id, &entry_id);
+	if (node)
+	{
+		/* Already in cache — move to head (MRU) */
+		g_queue_unlink (&cache->lru_order, node);
+		g_queue_push_head_link (&cache->lru_order, node);
+		return;
+	}
+
+	/* Not in cache — add to head */
+	key = g_new (guint64, 1);
+	*key = entry_id;
+	g_queue_push_head (&cache->lru_order, key);
+	node = cache->lru_order.head;
+	g_hash_table_insert (cache->by_id, key, node);
+
+	/* Evict LRU if over capacity */
+	while (g_queue_get_length (&cache->lru_order) > (guint)cache->max_entries)
+		display_cache_evict_lru (cache, buf);
+}
+
+/* Remove an entry from the cache (entry being destroyed) */
+static void
+display_cache_remove (xtext_display_cache *cache, guint64 entry_id)
+{
+	GList *node;
+
+	if (!cache)
+		return;
+
+	node = g_hash_table_lookup (cache->by_id, &entry_id);
+	if (node)
+	{
+		guint64 *key = node->data;
+		g_hash_table_remove (cache->by_id, key);
+		g_queue_delete_link (&cache->lru_order, node);
+		g_free (key);
+	}
+}
+
+/* ======================================= */
 /* ============ PANGO BACKEND ============ */
 /* ======================================= */
 
@@ -1126,24 +1240,10 @@ gtk_xtext_resize_cb (gpointer data)
 
 	xtext->resize_tag = 0;
 
-	/* Full Pango recompute — corrects lazy estimates from the fast resize
-	 * path.  Flush stale entries so calc_lines sees them as needing reflow. */
-	{
-		textentry *e;
-		for (e = xtext->buffer->text_first; e; e = e->next)
-		{
-			if (e->sublines_width != 0 &&
-			    e->sublines_width != xtext->buffer->window_width)
-			{
-				int old_dl = e->display_lines;
-				gtk_xtext_lines_taken (xtext->buffer, e);
-				if (e->display_lines != old_dl && xtext->buffer->entry_tree)
-					update_weight234 (xtext->buffer->entry_tree, e,
-					                  e->display_lines - old_dl);
-			}
-		}
-	}
-
+	/* calc_lines stamps single-liners (no Pango) and leaves multi-liners
+	 * with stale display_lines as estimates.  The lazy reflow in render_ents
+	 * corrects them on demand when scrolled into view.  No O(n) Pango walk
+	 * needed — the display cache manages sublines lifecycle. */
 	gtk_xtext_calc_lines (xtext->buffer, FALSE);
 	gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
 
@@ -5522,9 +5622,15 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 					ent->display_lines = 1 + ent->extra_lines_above
 						+ ent->extra_lines_below + (ent->collapsible ? 1 : 0);
 				}
-				/* Multi-liners: leave display_lines at old value (close enough
-				 * for scrollbar), leave sublines_width stale (triggers lazy
-				 * recompute when accessed for rendering). */
+				/* Multi-liners: free stale sublines to reclaim memory.
+				 * display_lines stays as estimate; recomputed on render. */
+				else
+				{
+					display_cache_remove (buf->display_cache, ent->entry_id);
+					g_slist_free (ent->sublines);
+					ent->sublines = NULL;
+					ent->sublines_width = 0;
+				}
 			}
 
 			/* Keep tree weight in sync whenever display_lines changes */
@@ -5884,6 +5990,10 @@ top_down:
 					update_weight234 (xtext->buffer->entry_tree, ent, delta);
 			}
 		}
+
+		/* Mark this entry as recently rendered — LRU cache will evict
+		 * cold entries' sublines to bound memory. */
+		display_cache_touch (xtext->buffer->display_cache, xtext->buffer, ent->entry_id);
 
 		gtk_xtext_reset (xtext, FALSE);
 		/* Phase 4: state-based rendering */
@@ -6623,6 +6733,9 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 		g_hash_table_remove (buffer->entries_by_msgid, ent->msgid);
 	if (buffer->entries_by_id)
 		g_hash_table_remove (buffer->entries_by_id, GSIZE_TO_POINTER (ent->entry_id));
+
+	/* Remove from display cache */
+	display_cache_remove (buffer->display_cache, ent->entry_id);
 
 	/* Remove from B-tree */
 	if (buffer->entry_tree)
@@ -9290,6 +9403,9 @@ gtk_xtext_buffer_new (GtkXText *xtext)
 	 * Uses timestamp comparator for sorted insertion. */
 	buf->entry_tree = newtree234_weighted (entry_stamp_cmp, entry_weight_cb);
 
+	/* LRU display cache — manages sublines lifecycle for bounded memory */
+	buf->display_cache = display_cache_new (DISPLAY_CACHE_SIZE);
+
 	return buf;
 }
 
@@ -9354,6 +9470,9 @@ gtk_xtext_buffer_free (xtext_buffer *buf)
 	/* Free the B-tree (entries already freed above, tree just has pointers) */
 	if (buf->entry_tree)
 		freetree234 (buf->entry_tree);
+
+	/* Free the display line cache */
+	display_cache_free (buf->display_cache);
 
 	/* Virtual scrollback (Phase 2) */
 	g_free (buf->virt_channel);

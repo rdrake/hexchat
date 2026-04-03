@@ -136,6 +136,17 @@ typedef struct xtext_scroll_anchor {
 	gboolean anchor_to_bottom; /* Special: always show newest (ignores entry_id) */
 } xtext_scroll_anchor;
 
+/* LRU tracker for display line cache.  Manages which entries keep computed
+ * sublines in memory.  Entries outside the LRU window have their sublines
+ * freed (set to NULL), triggering lazy Pango recompute on next render. */
+typedef struct {
+	GHashTable *by_id;		/* guint64 entry_id → GList* node in lru_order */
+	GQueue lru_order;		/* entry_ids, MRU at head, LRU at tail */
+	int max_entries;		/* capacity */
+} xtext_display_cache;
+
+#define DISPLAY_CACHE_SIZE 200	/* ~4x typical viewport */
+
 typedef struct {
 	GtkXText *xtext;					/* attached to this widget */
 
@@ -143,6 +154,7 @@ typedef struct {
 	textentry *text_first;
 	textentry *text_last;
 	tree234 *entry_tree;			/* counted B-tree for O(log n) positional access */
+	xtext_display_cache *display_cache;	/* LRU tracker for sublines lifecycle */
 
 	guint64 last_ent_start_id;	  /* this basically describes the last rendered */
 	guint64 last_ent_end_id;	  /* selection (entry_ids, 0 = not set). */
