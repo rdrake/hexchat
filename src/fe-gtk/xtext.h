@@ -23,8 +23,18 @@
 #include <gtk/gtk.h>
 #include "gtk-helpers.h"
 #include "xtext-render.h"   /* ATTR_*, XTEXT_*, format span types, rendering functions */
+#include "tree234.h"
 
 #define VIRT_MAT_WINDOW 500				/* virtual scrollback materialization window (entries) */
+
+/* Tree-derived buffer metrics (O(1) — read from root node aggregate data).
+ * These replace the manually-tracked lines_mat and mat_count fields. */
+#define BUF_LINES_MAT(buf) (totalweight234((buf)->entry_tree))
+#define BUF_MAT_COUNT(buf) (count234((buf)->entry_tree))
+
+/* TRUE when buffer has SQLite-backed scrollback (DB paging, ensure_range).
+ * Rendering optimizations (lazy reflow, bottom-up) apply to ALL buffers. */
+#define HAS_VIRT_DB(buf) ((buf)->virt_db != NULL)
 
 #define GTK_TYPE_XTEXT              (gtk_xtext_get_type ())
 #define GTK_XTEXT(object)           (G_TYPE_CHECK_INSTANCE_CAST ((object), GTK_TYPE_XTEXT, GtkXText))
@@ -132,7 +142,7 @@ typedef struct {
 	gfloat old_value;					/* last known adj->value */
 	textentry *text_first;
 	textentry *text_last;
-	struct tree234_Tag *entry_tree;	/* counted B-tree for O(log n) positional access */
+	tree234 *entry_tree;			/* counted B-tree for O(log n) positional access */
 
 	guint64 last_ent_start_id;	  /* this basically describes the last rendered */
 	guint64 last_ent_end_id;	  /* selection (entry_ids, 0 = not set). */
@@ -182,8 +192,7 @@ typedef struct {
 	guint64 next_entry_id;			/* monotonic counter for generating entry IDs */
 	guint64 current_group_id;		/* non-zero during multiline output; entries inherit this */
 
-	/* Virtual scrollback (Phase 2) */
-	unsigned int virtual_mode:1;	/* TRUE when paging from SQLite */
+	/* DB-backed scrollback */
 	unsigned int batch_mode:1;	/* TRUE during bulk insert — suppress per-entry renders */
 	xtext_scroll_anchor batch_anchor;	/* scroll anchor saved at batch start */
 	textentry *insert_hint;			/* cursor for sorted batch inserts (cleared at batch end) */
@@ -193,11 +202,9 @@ typedef struct {
 
 	int total_entries;				/* total messages in DB for this channel */
 	int mat_first_index;			/* 0-based index of text_first in total order */
-	int mat_count;					/* entries currently in linked list */
 
 	double avg_lines_per_entry;		/* running average (uses ENT_DISPLAY_LINES) */
 	int lines_before_mat;			/* estimated lines above text_first */
-	int lines_mat;					/* actual display lines in materialized entries */
 
 	guint64 sel_pin_start_id;		/* entry_id pinned by selection (0=none) */
 	guint64 sel_pin_end_id;

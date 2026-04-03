@@ -806,11 +806,11 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 		 * Phase 5: only trigger when approaching the materialization boundary
 		 * (within 1 page of the edge).  Scrolling within the safe interior of the
 		 * materialized window does no DB work at all. */
-		if (xtext->buffer->virtual_mode && xtext->buffer->avg_lines_per_entry > 0)
+		if (HAS_VIRT_DB (xtext->buffer) && xtext->buffer->avg_lines_per_entry > 0)
 		{
 			int scroll_line = (int) value;
 			int mat_top = xtext->buffer->lines_before_mat;
-			int mat_bot = mat_top + xtext->buffer->lines_mat;
+			int mat_bot = mat_top + BUF_LINES_MAT (xtext->buffer);
 			int margin = (int) page_size;  /* 1 page buffer before triggering */
 
 			/* Only load if viewport is within margin of mat boundary (or outside it).
@@ -819,12 +819,12 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			 * causes harmful head eviction that drifts lines_before_mat. */
 			{
 				int entries_after = xtext->buffer->total_entries -
-					xtext->buffer->mat_first_index - xtext->buffer->mat_count;
+					xtext->buffer->mat_first_index - BUF_MAT_COUNT (xtext->buffer);
 				gboolean near_top = (scroll_line < mat_top + margin);
 				gboolean near_bot = (entries_after > 0 &&
 					scroll_line + (int) page_size > mat_bot - margin);
 
-				if (near_top || near_bot || xtext->buffer->mat_count == 0)
+				if (near_top || near_bot || BUF_MAT_COUNT (xtext->buffer) == 0)
 				{
 					int idx;
 
@@ -1121,7 +1121,6 @@ gtk_xtext_resize_cb (gpointer data)
 
 	/* Full Pango recompute — corrects lazy estimates from the fast resize
 	 * path.  Flush stale entries so calc_lines sees them as needing reflow. */
-	if (xtext->buffer->virtual_mode)
 	{
 		textentry *e;
 		for (e = xtext->buffer->text_first; e; e = e->next)
@@ -1215,34 +1214,24 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 
 		gtk_xtext_save_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
 
-		if (xtext->buffer->virtual_mode)
+		/* All buffers: immediate lazy calc_lines (single-liner fast path
+		 * skips Pango for most entries) + deferred full recompute to
+		 * correct stale multi-liner estimates. */
+		if (xtext->resize_tag)
 		{
-			/* Virtual mode: ~500 materialized entries. Single-liner fast path
-			 * skips Pango for most entries; only multi-liners need recompute. */
-			if (xtext->resize_tag)
-			{
-				g_source_remove (xtext->resize_tag);
-				xtext->resize_tag = 0;
-			}
-			gtk_xtext_calc_lines (xtext->buffer, FALSE);
-			gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
-			gtk_xtext_adjustment_set (xtext->buffer, FALSE);
-			gtk_widget_queue_draw (widget);
+			g_source_remove (xtext->resize_tag);
+			xtext->resize_tag = 0;
+		}
+		gtk_xtext_calc_lines (xtext->buffer, FALSE);
+		gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
+		gtk_xtext_adjustment_set (xtext->buffer, FALSE);
+		gtk_widget_queue_draw (widget);
 
-			/* Schedule deferred full recompute to correct lazy estimates.
-			 * The immediate calc_lines uses stale display_lines for
-			 * off-screen multi-liners; the deferred pass fixes them. */
-			xtext->resize_tag = g_timeout_add (RESIZE_TIMEOUT,
-			                                    gtk_xtext_resize_cb, xtext);
-		}
-		else
-		{
-			/* Non-virtual: potentially thousands of entries.
-			 * Throttle expensive line recalculation during rapid resize. */
-			if (xtext->resize_tag)
-				g_source_remove (xtext->resize_tag);
-			xtext->resize_tag = g_timeout_add (RESIZE_TIMEOUT, gtk_xtext_resize_cb, xtext);
-		}
+		/* Schedule deferred full recompute to correct lazy estimates.
+		 * The immediate calc_lines uses stale display_lines for
+		 * off-screen multi-liners; the deferred pass fixes them. */
+		xtext->resize_tag = g_timeout_add (RESIZE_TIMEOUT,
+		                                    gtk_xtext_resize_cb, xtext);
 	}
 	else
 	{
@@ -1460,9 +1449,8 @@ gtk_xtext_find_char (GtkXText * xtext, int x, int y, int *off, int *out_of_bound
 	/* Don't return an entry for hover/click in empty space below content */
 	{
 		int abs_line = line + (int)gtk_adjustment_get_value (xtext->adj);
-		int content_lines = xtext->buffer->virtual_mode
-			? xtext->buffer->lines_before_mat + xtext->buffer->lines_mat
-			: xtext->buffer->num_lines;
+		int content_lines = xtext->buffer->lines_before_mat
+			+ totalweight234 (xtext->buffer->entry_tree);
 		if (abs_line >= content_lines)
 			return NULL;
 	}
@@ -3020,7 +3008,7 @@ gtk_xtext_click_reply_context (GtkXText *xtext, textentry *ent)
 		return;
 
 	/* Virtual scrollback: if target is evicted, try to materialize it from DB */
-	if (!target && xtext->buffer->virtual_mode &&
+	if (!target && HAS_VIRT_DB (xtext->buffer) &&
 	    ent->reply->target_msgid && xtext->buffer->virt_db)
 	{
 		scrollback_db *db = (scrollback_db *) xtext->buffer->virt_db;
@@ -5357,7 +5345,7 @@ gtk_xtext_save (GtkXText * xtext, int fh)
 	char *buf;
 
 	/* Virtual mode: stream all messages from DB in batches */
-	if (xtext->buffer->virtual_mode && xtext->buffer->virt_db &&
+	if (HAS_VIRT_DB (xtext->buffer) &&
 	    xtext->buffer->virt_channel)
 	{
 		int total = scrollback_count (xtext->buffer->virt_db,
@@ -5507,6 +5495,8 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 	{
 		if (recompute_sublines && ent->sublines_width != buf->window_width)
 		{
+			int old_dl = ent->display_lines;
+
 			/* Never computed (sublines_width=0): must do full Pango */
 			if (ent->sublines_width == 0 || !ent->sublines)
 			{
@@ -5529,13 +5519,18 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 				 * for scrollbar), leave sublines_width stale (triggers lazy
 				 * recompute when accessed for rendering). */
 			}
+
+			/* Keep tree weight in sync whenever display_lines changes */
+			if (ent->display_lines != old_dl && buf->entry_tree)
+				update_weight234 (buf->entry_tree, ent, ent->display_lines - old_dl);
 		}
 		lines += ent->display_lines;
 		count++;
 	}
 
-	buf->lines_mat = lines;
-	buf->mat_count = count;
+	/* lines_mat and mat_count are now derived from the tree via
+	 * BUF_LINES_MAT / BUF_MAT_COUNT macros. The loop's 'lines' and 'count'
+	 * are used below for avg computation and should match tree values. */
 
 	/* Update running average */
 	if (count > 0)
@@ -5556,13 +5551,13 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 	if (buf->lines_before_mat < 0)
 		buf->lines_before_mat = 0;
 	{
-		int entries_after = buf->total_entries - buf->mat_first_index - buf->mat_count;
+		int entries_after = buf->total_entries - buf->mat_first_index - BUF_MAT_COUNT (buf);
 		int lines_after;
 		if (entries_after < 0)
 			entries_after = 0;
 		lines_after = (entries_after == 0) ? 0
 			: (int)(entries_after * buf->avg_lines_per_entry);
-		buf->num_lines = buf->lines_before_mat + buf->lines_mat + lines_after;
+		buf->num_lines = buf->lines_before_mat + BUF_LINES_MAT (buf) + lines_after;
 	}
 
 	if (buf->num_lines < 1)
@@ -5581,46 +5576,18 @@ gtk_xtext_calc_lines_virtual (xtext_buffer *buf, int fire_signal)
 void
 gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal)
 {
-	textentry *ent;
-	int width;
-	int height;
-	int lines;
-
-	if (buf->virtual_mode)
-	{
-		/* Block value-changed during recompute to prevent adjustment_changed
-		 * from clearing scrollbar_down (the old value < new upper after Pango
-		 * remeasurement increases num_lines). */
-		gboolean was_down = buf->scrollbar_down;
-		if (buf->xtext->vc_signal_tag)
-			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
-		gtk_xtext_calc_lines_virtual (buf, fire_signal);
-		if (buf->xtext->vc_signal_tag)
-			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
-		if (was_down)
-			buf->scrollbar_down = TRUE;
-		return;
-	}
-
-	height = gtk_widget_get_height (GTK_WIDGET (buf->xtext));
-	width = buf->window_width;
-	width -= MARGIN;
-
-	if (width < 30 || height < buf->xtext->fontsize || width < buf->indent + 30)
-		return;
-
-	lines = 0;
-	ent = buf->text_first;
-	while (ent)
-	{
-		gtk_xtext_lines_taken (buf, ent);	/* recompute sublines */
-		lines += ENT_DISPLAY_LINES (ent);
-		ent = ent->next;
-	}
-
-	buf->pagetop_ent = NULL;
-	buf->num_lines = lines;
-	gtk_xtext_adjustment_set (buf, fire_signal);
+	/* All buffers use the lazy-reflow path (GTK4-style).  Block
+	 * value-changed during recompute to prevent adjustment_changed
+	 * from clearing scrollbar_down (the old value < new upper after
+	 * Pango remeasurement increases num_lines). */
+	gboolean was_down = buf->scrollbar_down;
+	if (buf->xtext->vc_signal_tag)
+		g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+	gtk_xtext_calc_lines_virtual (buf, fire_signal);
+	if (buf->xtext->vc_signal_tag)
+		g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+	if (was_down)
+		buf->scrollbar_down = TRUE;
 }
 
 /* find the n-th line in the linked list, this includes wrap calculations */
@@ -5631,14 +5598,15 @@ gtk_xtext_nth (GtkXText *xtext, int line, int *subline)
 	textentry *ent;
 	int offset;
 
-	/* Virtual scrollback: adjust line to be relative to the materialized window. */
-	if (xtext->buffer->virtual_mode)
+	/* Adjust line to be relative to the materialized window.
+	 * For non-DB buffers lines_before_mat is 0, making this a no-op. */
 	{
+		int lm = BUF_LINES_MAT (xtext->buffer);
 		line -= xtext->buffer->lines_before_mat;
 		if (line < 0)
 			line = 0;
-		if (xtext->buffer->lines_mat > 0 && line >= xtext->buffer->lines_mat)
-			line = xtext->buffer->lines_mat - 1;
+		if (lm > 0 && line >= lm)
+			line = lm - 1;
 	}
 
 	/* O(log n) lookup via the counted B-tree */
@@ -5815,7 +5783,7 @@ gtk_xtext_render_page (GtkXText * xtext)
 	}
 
 	line = 0;
-	if (xtext->buffer->virtual_mode && xtext->buffer->scrollbar_down
+	if (xtext->buffer->scrollbar_down
 		&& xtext->buffer->text_last
 		&& xtext->buffer->num_lines > gtk_adjustment_get_page_size (xtext->adj))
 	{
@@ -5894,17 +5862,16 @@ top_down:
 
 	while (ent)
 	{
-		/* Lazy reflow: recompute stale sublines before rendering (virtual mode only).
-		 * Non-virtual buffers have sublines always current from calc_lines. */
-		if (xtext->buffer->virtual_mode &&
-		    ent->sublines_width != xtext->buffer->window_width)
+		/* Lazy reflow: recompute stale sublines before rendering.
+		 * calc_lines uses the lazy path for all buffers, so stale entries
+		 * (multi-liners with old sublines_width) get reflowed here on demand. */
+		if (ent->sublines_width != xtext->buffer->window_width)
 		{
 			int old_dl = ent->display_lines;
 			gtk_xtext_lines_taken (xtext->buffer, ent);
 			if (ent->display_lines != old_dl)
 			{
 				int delta = ent->display_lines - old_dl;
-				xtext->buffer->lines_mat += delta;
 				xtext->buffer->num_lines += delta;
 				if (xtext->buffer->entry_tree)
 					update_weight234 (xtext->buffer->entry_tree, ent, delta);
@@ -6715,12 +6682,10 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 	if (!ent)
 		return;
 
-	/* Virtual scrollback (Phase 3): evicting from linked list, not deleting from DB */
-	if (buffer->virtual_mode)
+	/* DB-backed: advance mat_first_index (entry survives in DB) */
+	if (HAS_VIRT_DB (buffer))
 	{
-		buffer->lines_mat -= ENT_DISPLAY_LINES (ent);
 		buffer->mat_first_index++;
-		buffer->mat_count--;
 	}
 
 	{
@@ -6787,11 +6752,6 @@ gtk_xtext_remove_bottom (xtext_buffer *buffer)
 	{
 		int ent_lines = ENT_DISPLAY_LINES (ent);
 		buffer->num_lines -= ent_lines;
-		if (buffer->virtual_mode)
-		{
-			buffer->lines_mat -= ent_lines;
-			buffer->mat_count--;
-		}
 	}
 	buffer->text_last = ent->prev;
 	if (buffer->text_last)
@@ -6882,15 +6842,13 @@ gtk_xtext_clear (xtext_buffer *buf, int lines)
 			buf->entry_tree = newtree234_weighted (entry_stamp_cmp, entry_weight_cb);
 		}
 
-		/* Virtual mode: clear the DB and reset all virtual counters */
-		if (buf->virtual_mode && buf->virt_db && buf->virt_channel)
+		/* DB-backed: clear the database and reset virtual counters */
+		if (buf->virt_db && buf->virt_channel)
 		{
 			scrollback_clear (buf->virt_db, buf->virt_channel);
 			buf->total_entries = 0;
 			buf->mat_first_index = 0;
-			buf->mat_count = 0;
 			buf->lines_before_mat = 0;
-			buf->lines_mat = 0;
 		}
 	}
 
@@ -7324,7 +7282,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 	xtext_buffer *buf = xtext->buffer;
 	GList *gl;
 
-	if (buf->text_first == NULL && !(buf->virtual_mode && buf->virt_db))
+	if (buf->text_first == NULL && !HAS_VIRT_DB (buf))
 	{
 		return NULL;
 	}
@@ -7369,7 +7327,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 			}
 
 			/* Virtual mode: search entire DB */
-			if (buf->virtual_mode && buf->virt_db && buf->virt_channel)
+			if (HAS_VIRT_DB (buf) && buf->virt_channel)
 			{
 				gtk_xtext_search_virt_scan (buf);
 			}
@@ -7511,7 +7469,7 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 		textentry *hint = ent;
 
 		buf->pagetop_ent = NULL;
-		value = buf->virtual_mode ? buf->lines_before_mat : 0;
+		value = buf->lines_before_mat;
 		for (ent = buf->text_first;
 			  ent && ent != hint; ent = ent->next)
 		{
@@ -7704,8 +7662,6 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 		{
 			int dl = ENT_DISPLAY_LINES (ent);
 			buf->num_lines += dl;
-			if (buf->virtual_mode)
-				buf->lines_mat += dl;
 		}
 	}
 	else
@@ -7718,15 +7674,12 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	if (buf->entry_tree)
 		add234 (buf->entry_tree, ent);
 
-	/* Virtual scrollback (Phase 3): new entry appended at the end.
-	 * Always increment total_entries — every materialized entry is real,
-	 * whether DB-backed or not (system messages, non-DB sessions).
+	/* DB-backed: track total entries (for scrollbar estimation).
 	 * Duplicate inflation from chathistory batches is corrected by the
 	 * DB sync in fe_set_batch_mode at batch end. */
-	if (buf->virtual_mode)
+	if (HAS_VIRT_DB (buf))
 	{
 		buf->total_entries++;
-		buf->mat_count++;
 	}
 
 	/* Local auto-advance: move marker to newest unread message when window is
@@ -7747,8 +7700,8 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	 * is the normal working set.  ensure_range handles scrolling eviction. */
 	if (buf->xtext->max_lines > 2)
 	{
-		int limit = buf->virtual_mode ? VIRT_MAT_WINDOW : buf->xtext->max_lines;
-		if (buf->mat_count > limit || (!buf->virtual_mode && buf->num_lines > limit))
+		int limit = HAS_VIRT_DB (buf) ? VIRT_MAT_WINDOW : buf->xtext->max_lines;
+		if (BUF_MAT_COUNT (buf) > limit || (!HAS_VIRT_DB (buf) && buf->num_lines > limit))
 			gtk_xtext_remove_top (buf);
 	}
 
@@ -7892,7 +7845,7 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 			if (buf->entry_tree)
 				update_weight234 (buf->entry_tree, ent->next, 1);
 			buf->num_lines++;
-			if (buf->virtual_mode) buf->lines_mat++;
+			/* tree weight already updated by update_weight234 above */
 		}
 		else if (!is_boundary && was_boundary)
 		{
@@ -7902,7 +7855,7 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 			if (buf->entry_tree)
 				update_weight234 (buf->entry_tree, ent->next, -1);
 			buf->num_lines--;
-			if (buf->virtual_mode) buf->lines_mat--;
+			/* tree weight already updated by update_weight234 above */
 		}
 	}
 
@@ -7939,11 +7892,10 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	if (buf->entry_tree)
 		add234 (buf->entry_tree, ent);
 
-	if (buf->virtual_mode)
+	/* DB-backed: track total entries and materialization index */
+	if (HAS_VIRT_DB (buf))
 	{
-		buf->lines_mat += new_lines;
 		buf->total_entries++;
-		buf->mat_count++;
 		/* Prepending at head shifts the materialized window down */
 		if (buf->mat_first_index > 0)
 			buf->mat_first_index--;
@@ -7965,11 +7917,11 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	/* Don't update marker_pos for historical entries - they're old */
 	/* marker_pos should stay where it was */
 
-	/* In virtual mode, use the materialization window size for pruning. */
+	/* Prune if exceeding limit */
 	if (buf->xtext->max_lines > 2)
 	{
-		int limit = buf->virtual_mode ? VIRT_MAT_WINDOW : buf->xtext->max_lines;
-		if (buf->mat_count > limit || (!buf->virtual_mode && buf->num_lines > limit))
+		int limit = HAS_VIRT_DB (buf) ? VIRT_MAT_WINDOW : buf->xtext->max_lines;
+		if (BUF_MAT_COUNT (buf) > limit || (!HAS_VIRT_DB (buf) && buf->num_lines > limit))
 			gtk_xtext_remove_bottom (buf);
 	}
 
@@ -8170,7 +8122,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 			if (buf->entry_tree)
 				update_weight234 (buf->entry_tree, ent->next, 1);
 			buf->num_lines++;
-			if (buf->virtual_mode) buf->lines_mat++;
+			/* tree weight already updated by update_weight234 above */
 		}
 		else if (!is_boundary && was_boundary)
 		{
@@ -8180,7 +8132,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 			if (buf->entry_tree)
 				update_weight234 (buf->entry_tree, ent->next, -1);
 			buf->num_lines--;
-			if (buf->virtual_mode) buf->lines_mat--;
+			/* tree weight already updated by update_weight234 above */
 		}
 	}
 
@@ -8224,15 +8176,10 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		buf->insert_hint_lines = lines_before_insert + new_lines;
 	}
 
-	/* Virtual mode bookkeeping */
-	if (buf->virtual_mode)
+	/* DB-backed bookkeeping */
+	if (HAS_VIRT_DB (buf))
 	{
-		/* lines_mat must track the actual total of ENT_DISPLAY_LINES for
-		 * materialized entries, including the new entry and any day boundary
-		 * changes on its neighbor (already reflected in num_lines±1 above). */
-		buf->lines_mat += new_lines;
 		buf->total_entries++;
-		buf->mat_count++;
 		/* If inserted at head, the materialized window shifted down */
 		if (ent == buf->text_first)
 			buf->mat_first_index = (buf->mat_first_index > 0) ? buf->mat_first_index - 1 : 0;
@@ -8240,7 +8187,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		/* Enforce materialization window for non-batch inserts.
 		 * During batch_mode, pruning is deferred to fe_set_batch_mode. */
 		if (!buf->batch_mode && buf->xtext->max_lines > 2 &&
-		    buf->mat_count > VIRT_MAT_WINDOW)
+		    BUF_MAT_COUNT (buf) > VIRT_MAT_WINDOW)
 		{
 			gtk_xtext_remove_top (buf);
 		}
@@ -8703,7 +8650,7 @@ gtk_xtext_lastlog (xtext_buffer *out, xtext_buffer *search_area)
 	GList *gl;
 
 	/* Virtual mode: search entire DB history */
-	if (search_area->virtual_mode && search_area->virt_db &&
+	if (HAS_VIRT_DB (search_area) &&
 	    search_area->virt_channel)
 	{
 		int total = scrollback_count (search_area->virt_db,
@@ -8800,7 +8747,7 @@ void
 gtk_xtext_foreach (xtext_buffer *buf, GtkXTextForeach func, void *data)
 {
 	/* Virtual mode: stream all messages from DB */
-	if (buf->virtual_mode && buf->virt_db && buf->virt_channel)
+	if (HAS_VIRT_DB (buf) && buf->virt_channel)
 	{
 		int total = scrollback_count (buf->virt_db, buf->virt_channel);
 		int offset = 0;
@@ -8904,9 +8851,9 @@ gtk_xtext_enforce_mat_window (xtext_buffer *buf)
 {
 	int viewport_center;
 
-	if (!buf || !buf->virtual_mode)
+	if (!buf || !buf->virt_db)
 		return;
-	if (buf->mat_count <= VIRT_MAT_WINDOW)
+	if (BUF_MAT_COUNT (buf) <= VIRT_MAT_WINDOW)
 		return;
 
 	/* Find viewport center relative to materialized window.
@@ -8919,14 +8866,14 @@ gtk_xtext_enforce_mat_window (xtext_buffer *buf)
 	}
 	else
 	{
-		viewport_center = buf->lines_mat;  /* assume bottom */
+		viewport_center = BUF_LINES_MAT (buf);  /* assume bottom */
 	}
 
-	while (buf->mat_count > VIRT_MAT_WINDOW)
+	while (BUF_MAT_COUNT (buf) > VIRT_MAT_WINDOW)
 	{
 		/* If viewport is in the bottom half, evict from head.
 		 * If viewport is in the top half, evict from tail. */
-		if (viewport_center > buf->lines_mat / 2)
+		if (viewport_center > BUF_LINES_MAT (buf) / 2)
 			gtk_xtext_remove_top (buf);
 		else
 			gtk_xtext_remove_bottom (buf);
@@ -9415,29 +9362,22 @@ void
 gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
                                int total_entries, gint64 max_rowid)
 {
-	buf->virtual_mode = TRUE;
 	buf->virt_db = db;
 	buf->virt_channel = g_strdup (channel);
 	buf->total_entries = total_entries;
 
-	/* Count loaded entries and compute avg_lines_per_entry from real data.
+	/* Compute avg_lines_per_entry from loaded data.
 	 * This avoids the hardcoded 1.5 estimate which causes flicker on channels
-	 * where the actual average differs significantly. */
+	 * where the actual average differs significantly.
+	 * Entry count and line totals come from the tree (already populated). */
 	{
-		textentry *ent;
-		int count = 0;
-		int total_lines = 0;
-		for (ent = buf->text_first; ent; ent = ent->next)
-		{
-			total_lines += ENT_DISPLAY_LINES (ent);
-			count++;
-		}
-		buf->mat_count = count;
+		int count = BUF_MAT_COUNT (buf);
+		int total_lines = BUF_LINES_MAT (buf);
 		buf->avg_lines_per_entry = (count > 0) ? (double)total_lines / count : 1.5;
 	}
 
 	/* Loaded entries are the newest — they start at this index */
-	buf->mat_first_index = total_entries - buf->mat_count;
+	buf->mat_first_index = total_entries - BUF_MAT_COUNT (buf);
 	if (buf->mat_first_index < 0)
 		buf->mat_first_index = 0;
 
@@ -9632,7 +9572,7 @@ gtk_xtext_virt_materialize_msg (xtext_buffer *buf, scrollback_msg *msg)
 }
 
 /* Virtual scrollback (Phase 3): evict an entry from head or tail.
- * Unlinks it from the list and frees it. Does NOT update mat_count/mat_first_index. */
+ * Unlinks it from the list and frees it. Does NOT update mat_first_index. */
 
 static void
 gtk_xtext_virt_evict_head (xtext_buffer *buf)
@@ -9693,10 +9633,10 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 	int old_mat_count, old_mat_first;
 	scrollback_db *db;
 
-	if (!buf->virtual_mode || !buf->virt_db || !buf->virt_channel)
+	if (!buf->virt_db || !buf->virt_channel)
 		return;
 
-	old_mat_count = buf->mat_count;
+	old_mat_count = BUF_MAT_COUNT (buf);
 	old_mat_first = buf->mat_first_index;
 
 	db = (scrollback_db *) buf->virt_db;
@@ -9713,7 +9653,7 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 		return;
 
 	mat_start = buf->mat_first_index;
-	mat_end = buf->mat_first_index + buf->mat_count - 1;
+	mat_end = buf->mat_first_index + BUF_MAT_COUNT (buf) - 1;
 
 	/* Prepend: load entries before current materialized window.
 	 * Build a local chain (oldest→newest) then splice at head. */
@@ -9759,7 +9699,6 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 		}
 
 		buf->mat_first_index = want_start;
-		buf->mat_count += loaded;
 		scrollback_msg_list_free (msgs);
 
 		/* Fix day boundaries for newly prepended entries and the join point */
@@ -9803,7 +9742,7 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 	}
 
 	/* Append: load entries after current materialized window */
-	if (want_end > mat_end && buf->mat_count > 0)
+	if (want_end > mat_end && BUF_MAT_COUNT (buf) > 0)
 	{
 		int count = want_end - mat_end;
 		GSList *msgs = scrollback_load_range (db, buf->virt_channel, mat_end + 1, count);
@@ -9840,10 +9779,9 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 			loaded++;
 		}
 
-		buf->mat_count += loaded;
 		scrollback_msg_list_free (msgs);
 	}
-	else if (want_end > mat_end && buf->mat_count == 0)
+	else if (want_end > mat_end && BUF_MAT_COUNT (buf) == 0)
 	{
 		/* Nothing materialized yet — initial load */
 		int count = want_end - want_start + 1;
@@ -9880,20 +9818,19 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 					update_weight234 (buf->entry_tree, ent, 1);
 			}
 
-			buf->mat_count++;
 		}
 
 		scrollback_msg_list_free (msgs);
 	}
 
 	/* Evict from head if too far behind desired window.
-	 * Only evict when mat_count exceeds the materialization window size.
+	 * Only evict when BUF_MAT_COUNT exceeds the materialization window size.
 	 * During active selection, pins prevent eviction of selected entries,
-	 * allowing mat_count to grow up to max_lines. */
+	 * allowing count to grow up to max_lines. */
 	{
 		int max = VIRT_MAT_WINDOW;
 		while (buf->mat_first_index < want_start - VIRT_PAGE_SIZE &&
-		       buf->mat_count > max)
+		       BUF_MAT_COUNT (buf) > max)
 	{
 		/* Don't evict selection-pinned entries */
 		if (buf->text_first && buf->sel_pin_start_id != 0 &&
@@ -9910,7 +9847,6 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 				buf->lines_before_mat++;
 		}
 		buf->mat_first_index++;
-		buf->mat_count--;
 	}
 	}
 
@@ -9925,7 +9861,7 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 	 * skip the recompute entirely.  This prevents a convergence loop where
 	 * each recompute shifts avg_lines_per_entry slightly, changing num_lines,
 	 * which triggers another adjustment_changed → ensure_range cycle. */
-	if (buf->mat_count != old_mat_count || buf->mat_first_index != old_mat_first)
+	if (BUF_MAT_COUNT (buf) != old_mat_count || buf->mat_first_index != old_mat_first)
 	{
 		if (buf->xtext && buf->xtext->vc_signal_tag)
 		{
@@ -9952,7 +9888,7 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 gboolean
 gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
 {
-	if (!buf->virtual_mode || !buf->text_first || stamp <= 0)
+	if (!HAS_VIRT_DB (buf) || !buf->text_first || stamp <= 0)
 		return FALSE;
 
 	/* Only skip if entry is strictly older than everything materialized
@@ -9961,7 +9897,7 @@ gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
 	 * content is visible to the user as it arrives. */
 	if (stamp >= buf->text_first->stamp)
 		return FALSE;
-	if (buf->mat_count < VIRT_MAT_WINDOW)
+	if (BUF_MAT_COUNT (buf) < VIRT_MAT_WINDOW)
 		return FALSE;
 
 	buf->total_entries++;
@@ -10616,8 +10552,7 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 	target_line = gtk_xtext_entry_get_line (buf, ent);
 	if (target_line < 0)
 		return;  /* Entry not found (shouldn't happen) */
-	if (buf->virtual_mode)
-		target_line += buf->lines_before_mat;
+	target_line += buf->lines_before_mat;
 
 	/* Add subline offset, clamped to the entry's current subline count
 	 * (wrap points may have changed after reflow at a new width) */

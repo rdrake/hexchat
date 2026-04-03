@@ -2545,7 +2545,7 @@ fe_set_batch_mode (session *sess, gboolean on)
 		 * change the linked list and line counts. */
 		buf->pagetop_ent = NULL;
 
-		if (buf->virtual_mode && buf->virt_db && buf->virt_channel)
+		if (HAS_VIRT_DB (buf) && buf->virt_channel)
 		{
 			int db_total = scrollback_count (buf->virt_db, buf->virt_channel);
 			if (db_total != buf->total_entries)
@@ -2555,8 +2555,8 @@ fe_set_batch_mode (session *sess, gboolean on)
 				/* Adjust num_lines by the same delta — the excess was
 				 * phantom entries that inflated the estimate. */
 				buf->num_lines -= (int)(delta * buf->avg_lines_per_entry);
-				if (buf->num_lines < buf->lines_before_mat + buf->lines_mat)
-					buf->num_lines = buf->lines_before_mat + buf->lines_mat;
+				if (buf->num_lines < buf->lines_before_mat + BUF_LINES_MAT (buf))
+					buf->num_lines = buf->lines_before_mat + BUF_LINES_MAT (buf);
 			}
 
 			/* Enforce materialization window — viewport-aware pruning
