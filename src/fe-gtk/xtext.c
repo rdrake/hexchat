@@ -6248,6 +6248,33 @@ top_down:
 
 	line = (xtext->fontsize * line) - xtext->pixel_offset;
 
+	/* Diagnostic: detect blank space at bottom */
+	{
+		int text_area_h = height;
+		if (xtext->status_strip_visible)
+			text_area_h -= (xtext->fontsize * 2 / 3 + 4);
+		if (line < text_area_h - xtext->fontsize &&
+		    xtext->buffer->num_lines > gtk_adjustment_get_page_size (xtext->adj))
+		{
+			FILE *f = fopen ("c:\\tmp\\xtext_debug.log", "a");
+			if (f)
+			{
+				fprintf (f, "blank %dpx line=%d text_h=%d num_lines=%d "
+				         "page=%.0f val=%.1f upper=%.0f lbm=%d mat=%d sb_down=%d pix_off=%d\n",
+				         text_area_h - line, line, text_area_h,
+				         xtext->buffer->num_lines,
+				         gtk_adjustment_get_page_size (xtext->adj),
+				         gtk_adjustment_get_value (xtext->adj),
+				         gtk_adjustment_get_upper (xtext->adj),
+				         xtext->buffer->lines_before_mat,
+				         BUF_LINES_MAT (xtext->buffer),
+				         xtext->buffer->scrollbar_down,
+				         xtext->pixel_offset);
+				fclose (f);
+			}
+		}
+	}
+
 	/* fill any space below the last line with our background GC */
 	xtext_draw_bg (xtext, 0, line, width + MARGIN, height - line);
 
