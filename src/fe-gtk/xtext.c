@@ -920,10 +920,16 @@ gtk_xtext_scroll_top_timeout (gpointer data)
 	/* Verify we're still near the top of the current buffer.
 	 * Buffer switches change the adjustment, so the original
 	 * scroll-to-top condition may no longer hold.
-	 * Account for lines_before_mat offset on DB-backed buffers. */
+	 * Check if the viewport includes the first materialized entry
+	 * (within one page of it), which is stable across ensure_range
+	 * anchor restores that shift the absolute adjustment value. */
 	value = gtk_adjustment_get_value (xtext->adj);
-	if (value > xtext->buffer->lines_before_mat + 1.0)
-		return G_SOURCE_REMOVE;
+	{
+		double top_of_mat = xtext->buffer->lines_before_mat;
+		double page = gtk_adjustment_get_page_size (xtext->adj);
+		if (value > top_of_mat + page)
+			return G_SOURCE_REMOVE;
+	}
 
 	/* Fire the callback if set */
 	if (xtext->scroll_to_top_cb)
@@ -1051,19 +1057,19 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 				}
 			}
 
-			/* ensure_range may have corrected lines_before_mat (e.g., clamped
-			 * to 0 when mat_first_index reached 0), adjusting the adj value.
-			 * Re-read so old_value picks up the correction at the bottom. */
+			/* Re-read value after ensure_range + anchor restore, which may
+			 * have shifted it.  Needed for old_value update at bottom. */
 			value = gtk_adjustment_get_value (xtext->adj);
 
-			/* Re-check scroll-to-top after ensure_range.  In virtual mode,
-			 * once mat_first_index reaches 0 and the user scrolls to value 0,
-			 * we're at the true top of the DB — fire the callback immediately
-			 * (no debounce needed, the DB is exhausted and only the server
-			 * can provide more history). */
-			if (value <= 1.0 && xtext->scroll_to_top_cb &&
-			    gtk_adjustment_get_upper (xtext->adj) > page_size &&
-			    xtext->buffer->mat_first_index == 0)
+			/* Re-check scroll-to-top after ensure_range.  When mat_first_index
+			 * reaches 0, the DB is exhausted and only the server can provide
+			 * more history.  Use a full page threshold since anchor restore
+			 * may have shifted value away from 0. */
+			{
+				double top_of_mat = xtext->buffer->lines_before_mat;
+				if (value <= top_of_mat + page_size && xtext->scroll_to_top_cb &&
+				    gtk_adjustment_get_upper (xtext->adj) > page_size &&
+				    xtext->buffer->mat_first_index == 0)
 			{
 				if (xtext->scroll_top_debounce_tag)
 				{
@@ -1072,6 +1078,7 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 				}
 				xtext->scroll_to_top_cb (xtext, xtext->scroll_to_top_userdata);
 				xtext->scroll_top_backoff_ms = MIN (xtext->scroll_top_backoff_ms + 250, 2000);
+			}
 			}
 		}
 

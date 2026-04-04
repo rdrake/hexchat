@@ -1224,8 +1224,13 @@ finish_batch_processing (chathistory_chunk_state *chunk)
 	fe_set_batch_mode (sess, FALSE);
 	chathistory_request_complete (sess);
 
-	/* Update oldest_msgid for scroll-to-load pagination */
-	if (chunk->batch_oldest_msgid && chunk->msg_count > 0)
+	/* Update oldest_msgid for scroll-to-load pagination.
+	 * Always update if the batch had messages, even if all were duplicates
+	 * (msg_count == 0).  The batch's oldest msgid is a valid pagination
+	 * cursor regardless of whether the messages were already known from
+	 * scrollback DB.  Without this, BEFORE requests loop with the same
+	 * reference when the overlap region is entirely in the local DB. */
+	if (chunk->batch_oldest_msgid && chunk->raw_count > 0)
 	{
 		g_free (sess->oldest_msgid);
 		sess->oldest_msgid = g_strdup (chunk->batch_oldest_msgid);
@@ -1330,10 +1335,13 @@ finish_batch_processing (chathistory_chunk_state *chunk)
 		}
 	}
 
-	/* All messages were duplicates — stop fetching */
+	/* All messages were duplicates — stop background fetching but don't
+	 * mark history as exhausted.  During catch-up, the overlap between
+	 * local DB and server history can produce all-dupe batches that don't
+	 * mean the server has no more history.  The oldest_msgid update above
+	 * ensures the next request uses a new cursor past the overlap. */
 	if (chunk->raw_count > 0 && chunk->msg_count == 0)
 	{
-		sess->history_exhausted = TRUE;
 		sess->background_history_active = FALSE;
 	}
 
