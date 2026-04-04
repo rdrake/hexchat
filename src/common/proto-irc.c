@@ -82,18 +82,6 @@ irc_nickserv (server *serv, char *cmd, char *arg1, char *arg2, char *arg3)
 		default: /* This may not work but at least it tries something when using /id or /ghost cmd */
 			tcp_sendf (serv, "NICKSERV %s %s%s%s\r\n", cmd, arg1, arg2, arg3);
 			break;
-#if 0
-		case LOGIN_MSG_NS:
-			tcp_sendf (serv, "PRIVMSG NS :%s %s%s%s\r\n", cmd, arg1, arg2, arg3);
-			break;
-		case LOGIN_NS:
-			tcp_sendf (serv, "NS %s %s%s%s\r\n", cmd, arg1, arg2, arg3);
-			break;
-		case LOGIN_AUTH:
-			/* why couldn't QuakeNet implement one of the existing ones? */
-			tcp_sendf (serv, "AUTH %s %s\r\n", arg1, arg2);
-			break;
-#endif
 	}
 }
 
@@ -105,11 +93,6 @@ irc_ns_identify (server *serv, char *pass)
 		case LOGIN_CHALLENGEAUTH:
 			tcp_sendf (serv, "PRIVMSG %s :CHALLENGE\r\n", CHALLENGEAUTH_NICK);	/* request a challenge from Q */
 			break;
-#if 0
-		case LOGIN_AUTH:
-			irc_nickserv (serv, "", serv->nick, pass, "");
-			break;
-#endif
 		default:
 			irc_nickserv (serv, "IDENTIFY", pass, "", "");
 	}
@@ -756,13 +739,6 @@ process_numeric (session * sess, int n,
 		inbound_topictime (serv, word[4], word[5], atol (STRIP_COLON(word, word_eol, 6)), tags_data);
 		break;
 
-#if 0
-	case 338:  /* Undernet Real user@host, Real IP */
-		EMIT_SIGNAL_TIMESTAMP (XP_TE_WHOIS_REALHOST, sess, word[4], word[5], word[6], 
-									  (word_eol[7][0]==':') ? word_eol[7]+1 : word_eol[7],
-									  0, tags_data->timestamp);
-		break;
-#endif
 
 	case 341:						  /* INVITE ACK */
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_UINVITE, sess, word[4], STRIP_COLON(word, word_eol, 5),
@@ -2525,7 +2501,6 @@ proto_fill_her_up (server *serv)
 	serv->p_mode = irc_mode;
 	serv->p_user_list = irc_user_list;
 	serv->p_away_status = irc_away_status;
-	/*serv->p_get_ip = irc_get_ip;*/
 	serv->p_whois = irc_user_whois;
 	serv->p_get_ip = irc_user_list;
 	serv->p_get_ip_uh = irc_userhost;

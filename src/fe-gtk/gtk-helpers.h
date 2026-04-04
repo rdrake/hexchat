@@ -632,6 +632,7 @@ hc_column_view_add_column (GtkColumnView *view,
                            const char *title,
                            GCallback setup_cb,
                            GCallback bind_cb,
+                           GCallback unbind_cb,
                            gpointer user_data)
 {
 	GtkListItemFactory *factory;
@@ -642,9 +643,12 @@ hc_column_view_add_column (GtkColumnView *view,
 		g_signal_connect (factory, "setup", setup_cb, user_data);
 	if (bind_cb)
 		g_signal_connect (factory, "bind", bind_cb, user_data);
+	if (unbind_cb)
+		g_signal_connect (factory, "unbind", unbind_cb, user_data);
 
 	column = gtk_column_view_column_new (title, factory);
 	gtk_column_view_append_column (view, column);
+	g_object_unref (column);	/* view holds its own ref */
 
 	return column;
 }

@@ -47,13 +47,6 @@
 #include "scram.h"
 #endif
 
-#ifdef __EMX__						  /* for o/s 2 */
-#define OFLAGS O_BINARY
-#define g_ascii_strcasecmp stricmp
-#define g_ascii_strncasecmp strnicmp
-#define PATH_MAX MAXPATHLEN
-#define FILEPATH_LEN_MAX MAXPATHLEN
-#endif
 
 /* force a 32bit CMP.L */
 #define WORDL(c0, c1, c2, c3) (guint32)(c0 | (c1 << 8) | (c2 << 16) | (c3 << 24))

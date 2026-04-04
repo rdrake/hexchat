@@ -1555,7 +1555,6 @@ exec_check_process (struct session *sess)
 	}
 }
 
-#ifndef __EMX__
 static int
 cmd_execs (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
@@ -1651,7 +1650,6 @@ cmd_execw (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 
 	return TRUE;
 }
-#endif /* !__EMX__ */
 
 /* convert ANSI escape color codes to mIRC codes */
 
@@ -1905,21 +1903,11 @@ cmd_exec (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			}
 		}
 
-#ifdef __EMX__						  /* if os/2 */
-		if (pipe (fds) < 0)
-		{
-			PrintText (sess, "Pipe create error\n");
-			return FALSE;
-		}
-		setmode (fds[0], O_BINARY);
-		setmode (fds[1], O_BINARY);
-#else
 		if (socketpair (PF_UNIX, SOCK_STREAM, 0, fds) == -1)
 		{
 			PrintText (sess, "socketpair(2) failed\n");
 			return FALSE;
 		}
-#endif
 		s = g_new0 (struct nbexec, 1);
 		s->myfd = fds[0];
 		s->tochannel = tochannel;
@@ -1984,27 +1972,6 @@ cmd_exec (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 
 #endif
 
-#if 0
-/* export config stub */
-static int
-cmd_exportconf (struct session *sess, char *tbuf, char *word[], char *word_eol[])
-{
-	/* this is pretty much the same as in hexchat_exit() */
-	save_config ();
-	if (prefs.save_pevents)
-	{
-		pevent_save (NULL);
-	}
-	sound_save ();
-	notify_save ();
-	ignore_save ();
-	free_sessions ();
-	chanopt_save_all ();
-
-	return TRUE;		/* success */
-	return FALSE;		/* fail */
-}
-#endif
 
 static int
 cmd_flushq (struct session *sess, char *tbuf, char *word[], char *word_eol[])
@@ -4851,18 +4818,11 @@ const struct commands xc_cmds[] = {
 #ifndef WIN32
 	{"EXEC", cmd_exec, 0, 0, 1,
 	 N_("EXEC [-o] <command>, runs the command. If -o flag is used then output is sent to current channel, else is printed to current text box")},
-#ifndef __EMX__
 	{"EXECCONT", cmd_execc, 0, 0, 1, N_("EXECCONT, sends the process SIGCONT")},
-#endif
 	{"EXECKILL", cmd_execk, 0, 0, 1,
 	 N_("EXECKILL [-9], kills a running exec in the current session. If -9 is given the process is SIGKILL'ed")},
-#ifndef __EMX__
 	{"EXECSTOP", cmd_execs, 0, 0, 1, N_("EXECSTOP, sends the process SIGSTOP")},
 	{"EXECWRITE", cmd_execw, 0, 0, 1, N_("EXECWRITE [-q|--], sends data to the processes stdin; use -q flag to quiet/suppress output at text box; use -- flag to stop interpreting arguments as flags, needed if -q itself would occur as data")},
-#endif
-#endif
-#if 0
-	{"EXPORTCONF", cmd_exportconf, 0, 0, 1, N_("EXPORTCONF, exports HexChat settings")},
 #endif
 	{"FLUSHQ", cmd_flushq, 0, 0, 1,
 	 N_("FLUSHQ, flushes the current server's send queue")},
@@ -5914,37 +5874,6 @@ handle_user_input (session *sess, char *text, int history, int nocommand)
 		return 1;
 	}
 
-#if 0 /* Who would remember all this? */
-	if (prefs.hex_input_command_char[0] == '/')
-	{
-		int i;
-		const char *unix_dirs [] = {
-			"/bin/",
-			"/boot/",
-			"/dev/",
-			"/etc/",
-			"/home/",
-			"/lib/",
-			"/lost+found/",
-			"/mnt/",
-			"/opt/",
-			"/proc/",
-			"/root/",
-			"/sbin/",
-			"/tmp/",
-			"/usr/",
-			"/var/",
-			"/gnome/",
-			NULL
-		};
-		for (i = 0; unix_dirs[i] != NULL; i++)
-			if (strncmp (text, unix_dirs[i], strlen (unix_dirs[i]))==0)
-			{
-				handle_say (sess, text, TRUE);
-				return 1;
-			}
-	}
-#endif
 
 	return handle_command (sess, text + 1, TRUE);
 }

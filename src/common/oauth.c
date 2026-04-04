@@ -402,7 +402,7 @@ oauth_generate_state(void)
 	state = g_malloc(33);
 	for (int i = 0; i < 16; i++)
 	{
-		sprintf(state + (i * 2), "%02x", random_bytes[i]);
+		g_snprintf(state + (i * 2), 3, "%02x", random_bytes[i]);
 	}
 	state[32] = '\0';
 

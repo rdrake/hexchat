@@ -290,7 +290,6 @@ ignore_columnview_new (GtkWidget *box, GListStore **store_out)
 	GListStore *store;
 	GtkWidget *view;
 	GtkColumnViewColumn *col;
-	GtkListItemFactory *factory;
 
 	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
@@ -305,78 +304,62 @@ ignore_columnview_new (GtkWidget *box, GListStore **store_out)
 	gtk_column_view_set_show_row_separators (GTK_COLUMN_VIEW (view), TRUE);
 
 	/* Add Mask column (editable) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (ignore_setup_mask_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (ignore_bind_mask_cb), NULL);
-	g_signal_connect (factory, "unbind", G_CALLBACK (ignore_unbind_mask_cb), NULL);
-	col = gtk_column_view_column_new (_("Mask"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Mask"),
+	                                 G_CALLBACK (ignore_setup_mask_cb),
+	                                 G_CALLBACK (ignore_bind_mask_cb),
+	                                 G_CALLBACK (ignore_unbind_mask_cb),
+	                                 NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add Channel column (toggle) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (ignore_setup_toggle_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (ignore_bind_toggle_cb), GINT_TO_POINTER (1));
-	g_signal_connect (factory, "unbind", G_CALLBACK (ignore_unbind_toggle_cb), NULL);
-	col = gtk_column_view_column_new (_("Channel"), factory);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
+	hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Channel"),
+	                           G_CALLBACK (ignore_setup_toggle_cb),
+	                           G_CALLBACK (ignore_bind_toggle_cb),
+	                           G_CALLBACK (ignore_unbind_toggle_cb),
+	                           GINT_TO_POINTER (1));
 
 	/* Add Private column (toggle) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (ignore_setup_toggle_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (ignore_bind_toggle_cb), GINT_TO_POINTER (2));
-	g_signal_connect (factory, "unbind", G_CALLBACK (ignore_unbind_toggle_cb), NULL);
-	col = gtk_column_view_column_new (_("Private"), factory);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
+	hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Private"),
+	                           G_CALLBACK (ignore_setup_toggle_cb),
+	                           G_CALLBACK (ignore_bind_toggle_cb),
+	                           G_CALLBACK (ignore_unbind_toggle_cb),
+	                           GINT_TO_POINTER (2));
 
 	/* Add Notice column (toggle) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (ignore_setup_toggle_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (ignore_bind_toggle_cb), GINT_TO_POINTER (3));
-	g_signal_connect (factory, "unbind", G_CALLBACK (ignore_unbind_toggle_cb), NULL);
-	col = gtk_column_view_column_new (_("Notice"), factory);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
+	hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Notice"),
+	                           G_CALLBACK (ignore_setup_toggle_cb),
+	                           G_CALLBACK (ignore_bind_toggle_cb),
+	                           G_CALLBACK (ignore_unbind_toggle_cb),
+	                           GINT_TO_POINTER (3));
 
 	/* Add CTCP column (toggle) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (ignore_setup_toggle_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (ignore_bind_toggle_cb), GINT_TO_POINTER (4));
-	g_signal_connect (factory, "unbind", G_CALLBACK (ignore_unbind_toggle_cb), NULL);
-	col = gtk_column_view_column_new (_("CTCP"), factory);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
+	hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("CTCP"),
+	                           G_CALLBACK (ignore_setup_toggle_cb),
+	                           G_CALLBACK (ignore_bind_toggle_cb),
+	                           G_CALLBACK (ignore_unbind_toggle_cb),
+	                           GINT_TO_POINTER (4));
 
 	/* Add DCC column (toggle) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (ignore_setup_toggle_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (ignore_bind_toggle_cb), GINT_TO_POINTER (5));
-	g_signal_connect (factory, "unbind", G_CALLBACK (ignore_unbind_toggle_cb), NULL);
-	col = gtk_column_view_column_new (_("DCC"), factory);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
+	hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("DCC"),
+	                           G_CALLBACK (ignore_setup_toggle_cb),
+	                           G_CALLBACK (ignore_bind_toggle_cb),
+	                           G_CALLBACK (ignore_unbind_toggle_cb),
+	                           GINT_TO_POINTER (5));
 
 	/* Add Invite column (toggle) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (ignore_setup_toggle_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (ignore_bind_toggle_cb), GINT_TO_POINTER (6));
-	g_signal_connect (factory, "unbind", G_CALLBACK (ignore_unbind_toggle_cb), NULL);
-	col = gtk_column_view_column_new (_("Invite"), factory);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
+	hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Invite"),
+	                           G_CALLBACK (ignore_setup_toggle_cb),
+	                           G_CALLBACK (ignore_bind_toggle_cb),
+	                           G_CALLBACK (ignore_unbind_toggle_cb),
+	                           GINT_TO_POINTER (6));
 
 	/* Add Unignore column (toggle) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (ignore_setup_toggle_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (ignore_bind_toggle_cb), GINT_TO_POINTER (7));
-	g_signal_connect (factory, "unbind", G_CALLBACK (ignore_unbind_toggle_cb), NULL);
-	col = gtk_column_view_column_new (_("Unignore"), factory);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
+	hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Unignore"),
+	                           G_CALLBACK (ignore_setup_toggle_cb),
+	                           G_CALLBACK (ignore_bind_toggle_cb),
+	                           G_CALLBACK (ignore_unbind_toggle_cb),
+	                           GINT_TO_POINTER (7));
 
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
 	gtk_widget_set_vexpand (scroll, TRUE);

@@ -159,12 +159,9 @@ on_app_startup (GApplication *app, gpointer user_data)
 	}
 
 #ifndef WIN32
-#ifndef __EMX__
-	/* OS/2 uses UID 0 all the time */
 	if (getuid () == 0)
 		fe_message (_("* Running IRC as root is stupid! You should\n"
 		              "  create a User Account and use that to login.\n"), FE_MSG_WARN|FE_MSG_WAIT);
-#endif
 #endif
 }
 

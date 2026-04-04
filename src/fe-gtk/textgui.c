@@ -822,25 +822,19 @@ pevent_columnview_new (void)
 	                  G_CALLBACK (pevent_selection_changed), NULL);
 
 	/* Add Event column (read-only) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (pevent_setup_event_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (pevent_bind_event_cb), NULL);
-	col = gtk_column_view_column_new (_("Event"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Event"),
+	                                  G_CALLBACK (pevent_setup_event_cb),
+	                                  G_CALLBACK (pevent_bind_event_cb), NULL, NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, FALSE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add Text column (editable) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (pevent_setup_text_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (pevent_bind_text_cb), NULL);
-	g_signal_connect (factory, "unbind", G_CALLBACK (pevent_unbind_text_cb), NULL);
-	col = gtk_column_view_column_new (_("Text"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Text"),
+	                                  G_CALLBACK (pevent_setup_text_cb),
+	                                  G_CALLBACK (pevent_bind_text_cb),
+	                                  G_CALLBACK (pevent_unbind_text_cb), NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
 
@@ -870,22 +864,16 @@ pevent_hlist_columnview_new (void)
 	gtk_widget_set_can_focus (view, FALSE);
 
 	/* Add $ Number column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (pevent_setup_number_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (pevent_bind_number_cb), NULL);
-	col = gtk_column_view_column_new (_("$ Number"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("$ Number"),
+	                                  G_CALLBACK (pevent_setup_number_cb),
+	                                  G_CALLBACK (pevent_bind_number_cb), NULL, NULL);
 	gtk_column_view_column_set_expand (col, FALSE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add Description column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (pevent_setup_desc_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (pevent_bind_desc_cb), NULL);
-	col = gtk_column_view_column_new (_("Description"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Description"),
+	                                  G_CALLBACK (pevent_setup_desc_cb),
+	                                  G_CALLBACK (pevent_bind_desc_cb), NULL, NULL);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
 

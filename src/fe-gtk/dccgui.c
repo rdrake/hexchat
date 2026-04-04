@@ -1125,7 +1125,6 @@ dcc_file_columnview_new (GtkWidget *vbox)
 	GtkWidget *scroll;
 	GtkWidget *view;
 	GtkColumnViewColumn *col;
-	GtkListItemFactory *factory;
 
 	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
@@ -1143,87 +1142,69 @@ dcc_file_columnview_new (GtkWidget *vbox)
 	dccfwin.sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (view));
 
 	/* Icon column (upload/download arrow) */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_file_setup_icon_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_file_bind_icon_cb), NULL);
-	col = gtk_column_view_column_new (NULL, factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), NULL,
+	                                 G_CALLBACK (dcc_file_setup_icon_cb),
+	                                 G_CALLBACK (dcc_file_bind_icon_cb),
+	                                 NULL, NULL);
 	gtk_column_view_column_set_fixed_width (col, 24);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Status column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_file_setup_text_cb), GINT_TO_POINTER (FALSE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_file_bind_status_cb), NULL);
-	col = gtk_column_view_column_new (_("Status"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Status"),
+	                                 G_CALLBACK (dcc_file_setup_text_cb),
+	                                 G_CALLBACK (dcc_file_bind_status_cb),
+	                                 NULL, GINT_TO_POINTER (FALSE));
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* File column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_file_setup_text_cb), GINT_TO_POINTER (FALSE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_file_bind_file_cb), NULL);
-	col = gtk_column_view_column_new (_("File"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("File"),
+	                                 G_CALLBACK (dcc_file_setup_text_cb),
+	                                 G_CALLBACK (dcc_file_bind_file_cb),
+	                                 NULL, GINT_TO_POINTER (FALSE));
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Size column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_file_setup_text_cb), GINT_TO_POINTER (TRUE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_file_bind_size_cb), NULL);
-	col = gtk_column_view_column_new (_("Size"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Size"),
+	                                 G_CALLBACK (dcc_file_setup_text_cb),
+	                                 G_CALLBACK (dcc_file_bind_size_cb),
+	                                 NULL, GINT_TO_POINTER (TRUE));
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Position column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_file_setup_text_cb), GINT_TO_POINTER (TRUE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_file_bind_pos_cb), NULL);
-	col = gtk_column_view_column_new (_("Position"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Position"),
+	                                 G_CALLBACK (dcc_file_setup_text_cb),
+	                                 G_CALLBACK (dcc_file_bind_pos_cb),
+	                                 NULL, GINT_TO_POINTER (TRUE));
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Percent column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_file_setup_text_cb), GINT_TO_POINTER (TRUE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_file_bind_perc_cb), NULL);
-	col = gtk_column_view_column_new ("%", factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), "%",
+	                                 G_CALLBACK (dcc_file_setup_text_cb),
+	                                 G_CALLBACK (dcc_file_bind_perc_cb),
+	                                 NULL, GINT_TO_POINTER (TRUE));
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Speed column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_file_setup_text_cb), GINT_TO_POINTER (TRUE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_file_bind_speed_cb), NULL);
-	col = gtk_column_view_column_new ("KB/s", factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), "KB/s",
+	                                 G_CALLBACK (dcc_file_setup_text_cb),
+	                                 G_CALLBACK (dcc_file_bind_speed_cb),
+	                                 NULL, GINT_TO_POINTER (TRUE));
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* ETA column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_file_setup_text_cb), GINT_TO_POINTER (FALSE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_file_bind_eta_cb), NULL);
-	col = gtk_column_view_column_new (_("ETA"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("ETA"),
+	                                 G_CALLBACK (dcc_file_setup_text_cb),
+	                                 G_CALLBACK (dcc_file_bind_eta_cb),
+	                                 NULL, GINT_TO_POINTER (FALSE));
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Nick column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_file_setup_text_cb), GINT_TO_POINTER (FALSE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_file_bind_nick_cb), NULL);
-	col = gtk_column_view_column_new (_("Nick"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Nick"),
+	                                 G_CALLBACK (dcc_file_setup_text_cb),
+	                                 G_CALLBACK (dcc_file_bind_nick_cb),
+	                                 NULL, GINT_TO_POINTER (FALSE));
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
 	gtk_widget_set_vexpand (scroll, TRUE);
@@ -1561,7 +1542,6 @@ dcc_chat_columnview_new (GtkWidget *vbox)
 	GtkWidget *scroll;
 	GtkWidget *view;
 	GtkColumnViewColumn *col;
-	GtkListItemFactory *factory;
 
 	scroll = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
@@ -1579,50 +1559,40 @@ dcc_chat_columnview_new (GtkWidget *vbox)
 	dcccwin.sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (view));
 
 	/* Status column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_chat_setup_text_cb), GINT_TO_POINTER (FALSE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_chat_bind_status_cb), NULL);
-	col = gtk_column_view_column_new (_("Status"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Status"),
+	                                 G_CALLBACK (dcc_chat_setup_text_cb),
+	                                 G_CALLBACK (dcc_chat_bind_status_cb),
+	                                 NULL, GINT_TO_POINTER (FALSE));
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Nick column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_chat_setup_text_cb), GINT_TO_POINTER (FALSE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_chat_bind_nick_cb), NULL);
-	col = gtk_column_view_column_new (_("Nick"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Nick"),
+	                                 G_CALLBACK (dcc_chat_setup_text_cb),
+	                                 G_CALLBACK (dcc_chat_bind_nick_cb),
+	                                 NULL, GINT_TO_POINTER (FALSE));
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Recv column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_chat_setup_text_cb), GINT_TO_POINTER (TRUE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_chat_bind_recv_cb), NULL);
-	col = gtk_column_view_column_new (_("Recv"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Recv"),
+	                                 G_CALLBACK (dcc_chat_setup_text_cb),
+	                                 G_CALLBACK (dcc_chat_bind_recv_cb),
+	                                 NULL, GINT_TO_POINTER (TRUE));
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Sent column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_chat_setup_text_cb), GINT_TO_POINTER (TRUE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_chat_bind_sent_cb), NULL);
-	col = gtk_column_view_column_new (_("Sent"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Sent"),
+	                                 G_CALLBACK (dcc_chat_setup_text_cb),
+	                                 G_CALLBACK (dcc_chat_bind_sent_cb),
+	                                 NULL, GINT_TO_POINTER (TRUE));
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Start Time column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (dcc_chat_setup_text_cb), GINT_TO_POINTER (FALSE));
-	g_signal_connect (factory, "bind", G_CALLBACK (dcc_chat_bind_start_cb), NULL);
-	col = gtk_column_view_column_new (_("Start Time"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Start Time"),
+	                                 G_CALLBACK (dcc_chat_setup_text_cb),
+	                                 G_CALLBACK (dcc_chat_bind_start_cb),
+	                                 NULL, GINT_TO_POINTER (FALSE));
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
 	gtk_widget_set_vexpand (scroll, TRUE);

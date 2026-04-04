@@ -2095,10 +2095,6 @@ server_connect (server *serv, char *hostname, int port, int no_login)
 	if (pipe (read_des) < 0)
 #endif
 		return;
-#ifdef __EMX__ /* os/2 */
-	setmode (read_des[0], O_BINARY);
-	setmode (read_des[1], O_BINARY);
-#endif
 	serv->childread = read_des[0];
 	serv->childwrite = read_des[1];
 

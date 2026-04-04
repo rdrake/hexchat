@@ -864,53 +864,41 @@ banlist_columnview_new (GtkWidget *box, banlist_info *banl)
 	                  G_CALLBACK (banlist_select_changed), banl);
 
 	/* Add Type column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (banlist_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (banlist_bind_type_cb), NULL);
-	col = gtk_column_view_column_new (_("Type"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Type"),
+	                                  G_CALLBACK (banlist_setup_cb),
+	                                  G_CALLBACK (banlist_bind_type_cb), NULL, NULL);
 	sorter = GTK_SORTER (gtk_custom_sorter_new (banlist_string_sort, GINT_TO_POINTER(0), NULL));
 	gtk_column_view_column_set_sorter (col, sorter);
 	g_object_unref (sorter);
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add Mask column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (banlist_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (banlist_bind_mask_cb), NULL);
-	col = gtk_column_view_column_new (_("Mask"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Mask"),
+	                                  G_CALLBACK (banlist_setup_cb),
+	                                  G_CALLBACK (banlist_bind_mask_cb), NULL, NULL);
 	sorter = GTK_SORTER (gtk_custom_sorter_new (banlist_string_sort, GINT_TO_POINTER(1), NULL));
 	gtk_column_view_column_set_sorter (col, sorter);
 	g_object_unref (sorter);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add From column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (banlist_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (banlist_bind_from_cb), NULL);
-	col = gtk_column_view_column_new (_("From"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("From"),
+	                                  G_CALLBACK (banlist_setup_cb),
+	                                  G_CALLBACK (banlist_bind_from_cb), NULL, NULL);
 	sorter = GTK_SORTER (gtk_custom_sorter_new (banlist_string_sort, GINT_TO_POINTER(2), NULL));
 	gtk_column_view_column_set_sorter (col, sorter);
 	g_object_unref (sorter);
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add Date column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (banlist_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (banlist_bind_date_cb), NULL);
-	col = gtk_column_view_column_new (_("Date"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Date"),
+	                                  G_CALLBACK (banlist_setup_cb),
+	                                  G_CALLBACK (banlist_bind_date_cb), NULL, NULL);
 	sorter = GTK_SORTER (gtk_custom_sorter_new (banlist_date_sort_gtk4, NULL, NULL));
 	gtk_column_view_column_set_sorter (col, sorter);
 	g_object_unref (sorter);
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add right-click gesture for context menu */
 	hc_add_click_gesture (view, G_CALLBACK (banlist_button_pressed), NULL, NULL);

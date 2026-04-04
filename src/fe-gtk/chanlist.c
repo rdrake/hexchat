@@ -1018,42 +1018,33 @@ chanlist_create_columnview (server *serv)
 		gtk_column_view_get_sorter (GTK_COLUMN_VIEW (view)));
 
 	/* Channel column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (chanlist_channel_setup_cb), serv);
-	g_signal_connect (factory, "bind", G_CALLBACK (chanlist_channel_bind_cb), serv);
-	column = gtk_column_view_column_new (_("Channel"), factory);
+	column = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Channel"),
+	                                     G_CALLBACK (chanlist_channel_setup_cb),
+	                                     G_CALLBACK (chanlist_channel_bind_cb), NULL, serv);
 	gtk_column_view_column_set_resizable (column, TRUE);
 	gtk_column_view_column_set_fixed_width (column, 150);
 	sorter = GTK_SORTER (gtk_custom_sorter_new (chanlist_channel_sorter_func, NULL, NULL));
 	gtk_column_view_column_set_sorter (column, sorter);
 	g_object_unref (sorter);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), column);
-	g_object_unref (column);
 
 	/* Users column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (chanlist_users_setup_cb), serv);
-	g_signal_connect (factory, "bind", G_CALLBACK (chanlist_users_bind_cb), serv);
-	column = gtk_column_view_column_new (_("Users"), factory);
+	column = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Users"),
+	                                     G_CALLBACK (chanlist_users_setup_cb),
+	                                     G_CALLBACK (chanlist_users_bind_cb), NULL, serv);
 	gtk_column_view_column_set_resizable (column, FALSE);
 	sorter = GTK_SORTER (gtk_custom_sorter_new (chanlist_users_sorter_func, NULL, NULL));
 	gtk_column_view_column_set_sorter (column, sorter);
 	g_object_unref (sorter);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), column);
-	g_object_unref (column);
 
 	/* Topic column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (chanlist_topic_setup_cb), serv);
-	g_signal_connect (factory, "bind", G_CALLBACK (chanlist_topic_bind_cb), serv);
-	column = gtk_column_view_column_new (_("Topic"), factory);
+	column = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Topic"),
+	                                     G_CALLBACK (chanlist_topic_setup_cb),
+	                                     G_CALLBACK (chanlist_topic_bind_cb), NULL, serv);
 	gtk_column_view_column_set_resizable (column, TRUE);
 	gtk_column_view_column_set_expand (column, TRUE);
 	sorter = GTK_SORTER (gtk_custom_sorter_new (chanlist_topic_sorter_func, NULL, NULL));
 	gtk_column_view_column_set_sorter (column, sorter);
 	g_object_unref (sorter);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), column);
-	g_object_unref (column);
 
 	return view;
 }

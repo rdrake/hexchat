@@ -429,26 +429,20 @@ editlist_columnview_new (GtkWidget *box, char *title1, char *title2, GListStore 
 	gtk_column_view_set_reorderable (GTK_COLUMN_VIEW (view), TRUE);
 
 	/* Add Name column with editable label */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (editlist_setup_name_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (editlist_bind_name_cb), NULL);
-	g_signal_connect (factory, "unbind", G_CALLBACK (editlist_unbind_cb), NULL);
-	col = gtk_column_view_column_new (title1, factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), title1,
+	                                  G_CALLBACK (editlist_setup_name_cb),
+	                                  G_CALLBACK (editlist_bind_name_cb),
+	                                  G_CALLBACK (editlist_unbind_cb), NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, FALSE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add Command column with editable label */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (editlist_setup_cmd_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (editlist_bind_cmd_cb), NULL);
-	g_signal_connect (factory, "unbind", G_CALLBACK (editlist_unbind_cb), NULL);
-	col = gtk_column_view_column_new (title2, factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), title2,
+	                                  G_CALLBACK (editlist_setup_cmd_cb),
+	                                  G_CALLBACK (editlist_bind_cmd_cb),
+	                                  G_CALLBACK (editlist_unbind_cb), NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add key controller for Shift+Up/Down row movement */
 	hc_add_key_controller (view, G_CALLBACK (editlist_keypress), NULL, NULL);

@@ -987,47 +987,35 @@ key_dialog_treeview_new (GtkWidget *box)
 	key_column_view = view;
 
 	/* Key column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (key_col_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (key_col_bind_cb), NULL);
-	col = gtk_column_view_column_new (_("Key"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Key"),
+	                                  G_CALLBACK (key_col_setup_cb),
+	                                  G_CALLBACK (key_col_bind_cb), NULL, NULL);
 	gtk_column_view_column_set_fixed_width (col, 200);
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Action column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (action_col_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (action_col_bind_cb), NULL);
-	g_signal_connect (factory, "unbind", G_CALLBACK (action_col_unbind_cb), NULL);
-	col = gtk_column_view_column_new (_("Action"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Action"),
+	                                  G_CALLBACK (action_col_setup_cb),
+	                                  G_CALLBACK (action_col_bind_cb),
+	                                  G_CALLBACK (action_col_unbind_cb), NULL);
 	gtk_column_view_column_set_fixed_width (col, 200);
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Data1 column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (data1_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (data1_bind_cb), NULL);
-	g_signal_connect (factory, "unbind", G_CALLBACK (data1_unbind_cb), NULL);
-	col = gtk_column_view_column_new (_("Data 1"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Data 1"),
+	                                  G_CALLBACK (data1_setup_cb),
+	                                  G_CALLBACK (data1_bind_cb),
+	                                  G_CALLBACK (data1_unbind_cb), NULL);
 	gtk_column_view_column_set_expand (col, TRUE);
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Data2 column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (data2_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (data2_bind_cb), NULL);
-	g_signal_connect (factory, "unbind", G_CALLBACK (data2_unbind_cb), NULL);
-	col = gtk_column_view_column_new (_("Data 2"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Data 2"),
+	                                  G_CALLBACK (data2_setup_cb),
+	                                  G_CALLBACK (data2_bind_cb),
+	                                  G_CALLBACK (data2_unbind_cb), NULL);
 	gtk_column_view_column_set_expand (col, TRUE);
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Key controller for Shift+Up/Down reordering */
 	hc_add_key_controller (view, G_CALLBACK (key_dialog_keypress), NULL, NULL);
@@ -1917,7 +1905,7 @@ key_action_tab_comp (GtkWidget *t, KEY_EVENT_PARAM, char *d1, char *d2,
 		}
 		else
 		{
-			strcpy(old_gcomp.data, ent);
+			g_strlcpy(old_gcomp.data, ent, sizeof(old_gcomp.data));
 			old_gcomp.elen = elen;
 
 			/* Get the first nick and put out the data for future nickcompletes */

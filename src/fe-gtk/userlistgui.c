@@ -951,7 +951,7 @@ userlist_create (GtkWidget *box)
 	/* Icon column — always created, visibility toggled by pref */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), NULL,
 		G_CALLBACK (userlist_icon_setup_cb),
-		G_CALLBACK (userlist_icon_bind_cb), NULL);
+		G_CALLBACK (userlist_icon_bind_cb), NULL, NULL);
 	gtk_column_view_column_set_fixed_width (col, 20);
 	gtk_column_view_column_set_visible (col, prefs.hex_gui_ulist_icons);
 	g_object_set_data (G_OBJECT (view), "icon-column", col);
@@ -959,13 +959,13 @@ userlist_create (GtkWidget *box)
 	/* Nick column — pass view as user_data so bind can check icon column visibility */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), NULL,
 		G_CALLBACK (userlist_nick_setup_cb),
-		G_CALLBACK (userlist_nick_bind_cb), view);
+		G_CALLBACK (userlist_nick_bind_cb), NULL, view);
 	gtk_column_view_column_set_expand (col, TRUE);
 
 	/* Host column - visibility toggled by pref */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), NULL,
 		G_CALLBACK (userlist_host_setup_cb),
-		G_CALLBACK (userlist_host_bind_cb), NULL);
+		G_CALLBACK (userlist_host_bind_cb), NULL, NULL);
 	gtk_column_view_column_set_expand (col, TRUE);
 	gtk_column_view_column_set_visible (col, prefs.hex_gui_ulist_show_hosts);
 	g_object_set_data (G_OBJECT (view), "host-column", col);

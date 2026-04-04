@@ -69,7 +69,6 @@ static GtkWidget *entry_nick1;
 static GtkWidget *entry_nick2;
 static GtkWidget *entry_nick3;
 static GtkWidget *entry_guser;
-/* static GtkWidget *entry_greal; */
 
 enum {
 		SERVER_TREE,
@@ -313,11 +312,6 @@ static int login_types_conf[] =
 	LOGIN_CHALLENGEAUTH,
 #endif
 	LOGIN_CUSTOM
-#if 0
-	LOGIN_NS,
-	LOGIN_MSG_NS,
-	LOGIN_AUTH,
-#endif
 };
 
 static const char *login_types[]=
@@ -340,11 +334,6 @@ static const char *login_types[]=
 	"Challenge Auth (username + password)",
 #endif
 	"Custom... (connect commands)",
-#if 0
-	"NickServ (/NS + password)",
-	"NickServ (/MSG NS + password)",
-	"AUTH (/AUTH nickname password)",
-#endif
 	NULL
 };
 
@@ -1111,8 +1100,6 @@ servlist_savegui (void)
 	if (hc_entry_get_text (entry_guser)[0] == 0)
 		return 1;
 
-	/* if (hc_entry_get_text (entry_greal)[0] == 0)
-		return 1; */
 
 	nick1 = hc_entry_get_text (entry_nick1);
 	nick2 = hc_entry_get_text (entry_nick2);
@@ -1128,7 +1115,6 @@ servlist_savegui (void)
 	sp = strchr (prefs.hex_irc_user_name, ' ');
 	if (sp)
 		sp[0] = 0;	/* spaces will break the login */
-	/* strcpy (prefs.hex_irc_real_name, hc_entry_get_text (entry_greal)); */
 	servlist_save ();
 	save_config (); /* For nicks stored in hexchat.conf */
 
@@ -2162,7 +2148,6 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 
 	/* Server Tree (GtkColumnView) */
 	{
-		GtkListItemFactory *factory;
 		GtkColumnViewColumn *col;
 		GtkSelectionModel *sel_model;
 
@@ -2171,14 +2156,12 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 		gtk_column_view_set_header_factory (GTK_COLUMN_VIEW (treeview_servers), NULL);
 		hc_column_view_hide_headers (GTK_COLUMN_VIEW (treeview_servers));
 
-		factory = gtk_signal_list_item_factory_new ();
-		g_signal_connect (factory, "setup", G_CALLBACK (servlist_server_setup_cb), NULL);
-		g_signal_connect (factory, "bind", G_CALLBACK (servlist_server_bind_cb), NULL);
-		g_signal_connect (factory, "unbind", G_CALLBACK (servlist_server_unbind_cb), NULL);
-		col = gtk_column_view_column_new (NULL, factory);
+		col = hc_column_view_add_column (GTK_COLUMN_VIEW (treeview_servers), NULL,
+									G_CALLBACK (servlist_server_setup_cb),
+									G_CALLBACK (servlist_server_bind_cb),
+									G_CALLBACK (servlist_server_unbind_cb),
+									NULL);
 		gtk_column_view_column_set_expand (col, TRUE);
-		gtk_column_view_append_column (GTK_COLUMN_VIEW (treeview_servers), col);
-		g_object_unref (col);
 
 		hc_add_key_controller (treeview_servers, G_CALLBACK (servlist_keypress_cb), NULL, notebook);
 		sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (treeview_servers));
@@ -2189,7 +2172,6 @@ gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow2), treeview_s
 
 	/* Channel Tree (GtkColumnView, two columns) */
 	{
-		GtkListItemFactory *factory;
 		GtkColumnViewColumn *col;
 		GtkSelectionModel *sel_model;
 
@@ -2197,24 +2179,20 @@ gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow2), treeview_s
 		edit_trees[CHANNEL_TREE] = treeview_channels = hc_column_view_new_simple (G_LIST_MODEL (chan_store), GTK_SELECTION_SINGLE);
 
 		/* Name column */
-		factory = gtk_signal_list_item_factory_new ();
-		g_signal_connect (factory, "setup", G_CALLBACK (servlist_chan_name_setup_cb), NULL);
-		g_signal_connect (factory, "bind", G_CALLBACK (servlist_chan_name_bind_cb), NULL);
-		g_signal_connect (factory, "unbind", G_CALLBACK (servlist_chan_name_unbind_cb), NULL);
-		col = gtk_column_view_column_new (_("Channel"), factory);
+		col = hc_column_view_add_column (GTK_COLUMN_VIEW (treeview_channels), _("Channel"),
+									G_CALLBACK (servlist_chan_name_setup_cb),
+									G_CALLBACK (servlist_chan_name_bind_cb),
+									G_CALLBACK (servlist_chan_name_unbind_cb),
+									NULL);
 		gtk_column_view_column_set_expand (col, TRUE);
-		gtk_column_view_append_column (GTK_COLUMN_VIEW (treeview_channels), col);
-		g_object_unref (col);
 
 		/* Key column */
-		factory = gtk_signal_list_item_factory_new ();
-		g_signal_connect (factory, "setup", G_CALLBACK (servlist_chan_key_setup_cb), NULL);
-		g_signal_connect (factory, "bind", G_CALLBACK (servlist_chan_key_bind_cb), NULL);
-		g_signal_connect (factory, "unbind", G_CALLBACK (servlist_chan_key_unbind_cb), NULL);
-		col = gtk_column_view_column_new (_("Key (Password)"), factory);
+		col = hc_column_view_add_column (GTK_COLUMN_VIEW (treeview_channels), _("Key (Password)"),
+									G_CALLBACK (servlist_chan_key_setup_cb),
+									G_CALLBACK (servlist_chan_key_bind_cb),
+									G_CALLBACK (servlist_chan_key_unbind_cb),
+									NULL);
 		gtk_column_view_column_set_expand (col, TRUE);
-		gtk_column_view_append_column (GTK_COLUMN_VIEW (treeview_channels), col);
-		g_object_unref (col);
 
 		hc_add_key_controller (treeview_channels, G_CALLBACK (servlist_keypress_cb), NULL, notebook);
 		sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (treeview_channels));
@@ -2224,7 +2202,6 @@ gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow4), treeview_c
 
 	/* Command Tree (GtkColumnView) */
 	{
-		GtkListItemFactory *factory;
 		GtkColumnViewColumn *col;
 		GtkSelectionModel *sel_model;
 
@@ -2233,14 +2210,12 @@ gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow4), treeview_c
 		gtk_column_view_set_header_factory (GTK_COLUMN_VIEW (treeview_commands), NULL);
 		hc_column_view_hide_headers (GTK_COLUMN_VIEW (treeview_commands));
 
-		factory = gtk_signal_list_item_factory_new ();
-		g_signal_connect (factory, "setup", G_CALLBACK (servlist_cmd_setup_cb), NULL);
-		g_signal_connect (factory, "bind", G_CALLBACK (servlist_cmd_bind_cb), NULL);
-		g_signal_connect (factory, "unbind", G_CALLBACK (servlist_cmd_unbind_cb), NULL);
-		col = gtk_column_view_column_new (NULL, factory);
+		col = hc_column_view_add_column (GTK_COLUMN_VIEW (treeview_commands), NULL,
+									G_CALLBACK (servlist_cmd_setup_cb),
+									G_CALLBACK (servlist_cmd_bind_cb),
+									G_CALLBACK (servlist_cmd_unbind_cb),
+									NULL);
 		gtk_column_view_column_set_expand (col, TRUE);
-		gtk_column_view_append_column (GTK_COLUMN_VIEW (treeview_commands), col);
-		g_object_unref (col);
 
 		hc_add_key_controller (treeview_commands, G_CALLBACK (servlist_keypress_cb), NULL, notebook);
 		sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (treeview_commands));
@@ -2384,7 +2359,6 @@ servlist_open_networks (void)
 	GtkWidget *label4;
 	GtkWidget *label5;
 	GtkWidget *label6;
-	/* GtkWidget *label7; */
 	GtkWidget *entry1;
 	GtkWidget *entry2;
 	GtkWidget *entry3;
@@ -2465,11 +2439,6 @@ servlist_open_networks (void)
 	gtk_widget_set_valign (label6, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table1), label6, 0, 3, 1, 1);
 
-	/* label7 = gtk_label_new_with_mnemonic (_("Rea_l name:"));
-	gtk_widget_show (label7);
-	gtk_widget_set_halign (label7, GTK_ALIGN_START);
-	gtk_widget_set_valign (label7, GTK_ALIGN_CENTER);
-	gtk_grid_attach (GTK_GRID (table1), label7, 0, 4, 1, 1); */
 
 	entry_nick1 = entry1 = gtk_entry_new ();
 	hc_entry_set_text (entry1, prefs.hex_irc_nick1);
@@ -2491,11 +2460,6 @@ servlist_open_networks (void)
 	gtk_widget_set_hexpand (entry4, TRUE);
 	gtk_grid_attach (GTK_GRID (table1), entry4, 1, 3, 1, 1);
 
-	/* entry_greal = entry5 = gtk_entry_new ();
-	hc_entry_set_text (entry5, prefs.hex_irc_real_name);
-	gtk_widget_show (entry5);
-	gtk_widget_set_hexpand (entry5, TRUE);
-	gtk_grid_attach (GTK_GRID (table1), entry5, 1, 4, 1, 1); */
 
 	vbox2 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_set_vexpand (vbox2, TRUE);
@@ -2520,7 +2484,6 @@ servlist_open_networks (void)
 
 	/* Networks Tree (GtkColumnView) */
 	{
-		GtkListItemFactory *factory;
 		GtkColumnViewColumn *col;
 
 		net_store = g_list_store_new (HC_TYPE_SERVLIST_NET_ITEM);
@@ -2528,14 +2491,12 @@ servlist_open_networks (void)
 		gtk_column_view_set_header_factory (GTK_COLUMN_VIEW (treeview_networks), NULL);
 		hc_column_view_hide_headers (GTK_COLUMN_VIEW (treeview_networks));
 
-		factory = gtk_signal_list_item_factory_new ();
-		g_signal_connect (factory, "setup", G_CALLBACK (servlist_net_setup_cb), NULL);
-		g_signal_connect (factory, "bind", G_CALLBACK (servlist_net_bind_cb), NULL);
-		g_signal_connect (factory, "unbind", G_CALLBACK (servlist_net_unbind_cb), NULL);
-		col = gtk_column_view_column_new (NULL, factory);
+		col = hc_column_view_add_column (GTK_COLUMN_VIEW (treeview_networks), NULL,
+									G_CALLBACK (servlist_net_setup_cb),
+									G_CALLBACK (servlist_net_bind_cb),
+									G_CALLBACK (servlist_net_unbind_cb),
+									NULL);
 		gtk_column_view_column_set_expand (col, TRUE);
-		gtk_column_view_append_column (GTK_COLUMN_VIEW (treeview_networks), col);
-		g_object_unref (col);
 
 		gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow3), treeview_networks);
 	}
@@ -2631,7 +2592,6 @@ servlist_open_networks (void)
 
 	gtk_label_set_mnemonic_widget (GTK_LABEL (label3), entry1);
 	gtk_label_set_mnemonic_widget (GTK_LABEL (label6), entry4);
-	/* gtk_label_set_mnemonic_widget (GTK_LABEL (label7), entry5); */
 
 	gtk_widget_grab_focus (networks_tree);
 	return servlist;

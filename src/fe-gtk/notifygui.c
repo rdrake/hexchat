@@ -229,41 +229,29 @@ notify_columnview_new (GtkWidget *box)
 	                  G_CALLBACK (notify_row_cb), NULL);
 
 	/* Add Name column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (notify_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (notify_bind_user_cb), NULL);
-	col = gtk_column_view_column_new (_("Name"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Name"),
+	                                  G_CALLBACK (notify_setup_cb),
+	                                  G_CALLBACK (notify_bind_user_cb), NULL, NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add Status column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (notify_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (notify_bind_status_cb), NULL);
-	col = gtk_column_view_column_new (_("Status"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Status"),
+	                                  G_CALLBACK (notify_setup_cb),
+	                                  G_CALLBACK (notify_bind_status_cb), NULL, NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add Network column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (notify_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (notify_bind_server_cb), NULL);
-	col = gtk_column_view_column_new (_("Network"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Network"),
+	                                  G_CALLBACK (notify_setup_cb),
+	                                  G_CALLBACK (notify_bind_server_cb), NULL, NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	/* Add Last Seen column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (notify_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (notify_bind_seen_cb), NULL);
-	col = gtk_column_view_column_new (_("Last Seen"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Last Seen"),
+	                                  G_CALLBACK (notify_setup_cb),
+	                                  G_CALLBACK (notify_bind_seen_cb), NULL, NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (view), col);
-	g_object_unref (col);
 
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
 	gtk_widget_set_vexpand (scroll, TRUE);

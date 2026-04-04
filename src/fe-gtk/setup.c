@@ -679,7 +679,7 @@ static const setting identd_settings[] =
 #define setup_get_int3(pr,off) *(((int *)pr)+off) 
 
 #define setup_set_int(pr,set,num) *((int *)pr+set->offset)=num
-#define setup_set_str(pr,set,str) strcpy(((char *)pr)+set->offset,str)
+#define setup_set_str(pr,set,str) g_strlcpy(((char *)pr)+set->offset,str,set->extra)
 
 
 static void
@@ -1869,22 +1869,16 @@ setup_create_sound_page (void)
 	sound_column_view = hc_column_view_new_simple (G_LIST_MODEL (sound_store), GTK_SELECTION_SINGLE);
 
 	/* Event name column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (setup_snd_event_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (setup_snd_event_bind_cb), NULL);
-	col = gtk_column_view_column_new (_("Event"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (sound_column_view), _("Event"),
+	                                  G_CALLBACK (setup_snd_event_setup_cb),
+	                                  G_CALLBACK (setup_snd_event_bind_cb), NULL, NULL);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (sound_column_view), col);
-	g_object_unref (col);
 
 	/* Sound file column */
-	factory = gtk_signal_list_item_factory_new ();
-	g_signal_connect (factory, "setup", G_CALLBACK (setup_snd_file_setup_cb), NULL);
-	g_signal_connect (factory, "bind", G_CALLBACK (setup_snd_file_bind_cb), NULL);
-	col = gtk_column_view_column_new (_("Sound file"), factory);
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (sound_column_view), _("Sound file"),
+	                                  G_CALLBACK (setup_snd_file_setup_cb),
+	                                  G_CALLBACK (setup_snd_file_bind_cb), NULL, NULL);
 	gtk_column_view_column_set_expand (col, TRUE);
-	gtk_column_view_append_column (GTK_COLUMN_VIEW (sound_column_view), col);
-	g_object_unref (col);
 
 	setup_snd_populate ();
 

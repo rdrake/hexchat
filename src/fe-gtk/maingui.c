@@ -357,24 +357,6 @@ mg_inputbox_cb (GtkWidget *igad, session_gui *gui)
 	g_free (cmd);
 }
 
-#if 0
-static gboolean
-has_key (char *modes)
-{
-	if (!modes)
-		return FALSE;
-	/* this is a crude check, but "-k" can't exist, so it works. */
-	while (*modes)
-	{
-		if (*modes == 'k')
-			return TRUE;
-		if (*modes == ' ')
-			return FALSE;
-		modes++;
-	}
-	return FALSE;
-}
-#endif
 
 void
 fe_set_title (session *sess)
@@ -2175,8 +2157,7 @@ mg_changui_destroy (session *sess)
 		/* avoid calling the "destroy" callback */
 		g_signal_handlers_disconnect_by_func (G_OBJECT (sess->gui->window),
 														  mg_topdestroy_cb, sess);
-		/*gtk_widget_destroy (sess->gui->window);*/
-		/* don't destroy until the new one is created. Not sure why, but */
+			/* don't destroy until the new one is created. Not sure why, but */
 		/* it fixes: Gdk-CRITICAL **: gdk_colormap_get_screen: */
 		/*           assertion `GDK_IS_COLORMAP (cmap)' failed */
 		ret = sess->gui->window;
@@ -2479,16 +2460,6 @@ mg_create_chanmodebuttons (session_gui *gui, GtkWidget *box)
 
 }
 
-/*static void
-mg_create_link_buttons (GtkWidget *box, gpointer userdata)
-{
-	gtkutil_button (box, "window-close", _("Close this tab/window"),
-						 mg_x_click_cb, userdata, 0);
-
-	if (!userdata)
-	gtkutil_button (box, "edit-redo", _("Attach/Detach this tab"),
-						 mg_link_cb, userdata, 0);
-}*/
 
 static void
 mg_dialog_button_cb (GtkWidget *wid, char *cmd)
@@ -4559,13 +4530,6 @@ mg_create_generic_tab (char *name, char *title, int force_toplevel,
 
 	mg_add_generic_tab (name, title, family, vbox);
 
-/*	if (link_buttons)
-	{
-		hbox = gtk_hbox_new (FALSE, 0);
-		gtk_box_append (GTK_BOX (vbox), hbox);
-		mg_create_link_buttons (hbox, ch);
-		gtk_widget_show (hbox);
-	}*/
 
 	return vbox;
 }

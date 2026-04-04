@@ -177,25 +177,25 @@ plugingui_columnview_new (GtkWidget *box)
 	/* Add columns */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Name"),
 	                                  G_CALLBACK (plugingui_setup_label_cb),
-	                                  G_CALLBACK (plugingui_bind_name_cb), NULL);
+	                                  G_CALLBACK (plugingui_bind_name_cb), NULL, NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, FALSE);
 
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Version"),
 	                                  G_CALLBACK (plugingui_setup_label_cb),
-	                                  G_CALLBACK (plugingui_bind_version_cb), NULL);
+	                                  G_CALLBACK (plugingui_bind_version_cb), NULL, NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, FALSE);
 
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("File"),
 	                                  G_CALLBACK (plugingui_setup_label_cb),
-	                                  G_CALLBACK (plugingui_bind_file_cb), NULL);
+	                                  G_CALLBACK (plugingui_bind_file_cb), NULL, NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, FALSE);
 
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Description"),
 	                                  G_CALLBACK (plugingui_setup_label_cb),
-	                                  G_CALLBACK (plugingui_bind_desc_cb), NULL);
+	                                  G_CALLBACK (plugingui_bind_desc_cb), NULL, NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, TRUE);
 
