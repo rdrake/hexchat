@@ -2537,7 +2537,7 @@ fe_set_batch_mode (session *sess, gboolean on)
 	{
 		/* Save scroll anchor before batch modifies the buffer */
 		if (buf->xtext && buf->xtext->buffer == buf)
-			gtk_xtext_save_scroll_anchor (buf, &buf->batch_anchor);
+			gtk_xtext_save_scroll_anchor_top (buf, &buf->batch_anchor);
 	}
 
 	buf->batch_mode = on ? 1 : 0;
@@ -2559,7 +2559,7 @@ fe_set_batch_mode (session *sess, gboolean on)
 			gtk_xtext_enforce_mat_window (buf);
 
 		gtk_xtext_calc_lines (buf, FALSE);
-		gtk_xtext_restore_scroll_anchor (buf, &buf->batch_anchor);
+		gtk_xtext_restore_scroll_anchor_top (buf, &buf->batch_anchor);
 
 		gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
 	}

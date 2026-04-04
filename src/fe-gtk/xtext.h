@@ -32,6 +32,12 @@
 #define BUF_LINES_MAT(buf) (totalweight234((buf)->entry_tree))
 #define BUF_MAT_COUNT(buf) (count234((buf)->entry_tree))
 
+/* Estimated lines above the materialized window.  Computed from
+ * mat_first_index and the running average — no stored field. */
+#define LINES_BEFORE_MAT(buf) \
+	((buf)->mat_first_index > 0 \
+	 ? (int)((buf)->mat_first_index * (buf)->avg_lines_per_entry) : 0)
+
 /* TRUE when buffer has SQLite-backed scrollback (DB paging, ensure_range).
  * Rendering optimizations (lazy reflow, bottom-up) apply to ALL buffers. */
 #define HAS_VIRT_DB(buf) ((buf)->virt_db != NULL)
@@ -174,7 +180,6 @@ typedef struct {
 
 	int last_pixel_pos;
 
-	int pagetop_line;
 	int pagetop_subline;
 	textentry *pagetop_ent;			/* what's at xtext->adj->value */
 
@@ -230,7 +235,6 @@ typedef struct {
 	int mat_first_index;			/* 0-based index of text_first in total order */
 
 	double avg_lines_per_entry;		/* running average (uses ENT_DISPLAY_LINES) */
-	int lines_before_mat;			/* estimated lines above text_first */
 
 	guint64 sel_pin_start_id;		/* entry_id pinned by selection (0=none) */
 	guint64 sel_pin_end_id;
@@ -582,6 +586,8 @@ int gtk_xtext_entry_get_left_len (textentry *ent);
  */
 void gtk_xtext_save_scroll_anchor (xtext_buffer *buf, xtext_scroll_anchor *anchor);
 void gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *anchor);
+void gtk_xtext_save_scroll_anchor_top (xtext_buffer *buf, xtext_scroll_anchor *anchor);
+void gtk_xtext_restore_scroll_anchor_top (xtext_buffer *buf, const xtext_scroll_anchor *anchor);
 
 /* Calculate line number for an entry (needed for scroll anchor restoration) */
 int gtk_xtext_entry_get_line (xtext_buffer *buf, textentry *ent);
