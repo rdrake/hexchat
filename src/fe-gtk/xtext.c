@@ -5331,14 +5331,39 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 			y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
 			if (!text_subline)
 			{
-				/* Get cached PangoLayoutLine for this text subline if available */
+				/* Get cached PangoLayoutLine for this text subline if available.
+				 * Skip for the first text subline (entline==1 after increment)
+				 * when auto_indent is on and entry has a nick — the cached layout
+				 * excludes the nick text, but the first subline's raw data includes
+				 * it.  Use the shared layout for the first subline so the nick
+				 * renders correctly. */
 				PangoLayoutLine *cached_pline = NULL;
 				if (cached_disp && cached_disp->layout)
 				{
-					int layout_line_idx = entline - 1;	/* entline was just incremented */
-					if (layout_line_idx < cached_disp->layout_n_lines)
-						cached_pline = pango_layout_get_line_readonly (
-							cached_disp->layout, layout_line_idx);
+					int text_subline_idx = entline - 1;	/* entline was just incremented */
+					gboolean has_nick = (cached_disp->layout_text_offset > 0);
+
+					/* The cached layout excludes the nick text.  The first text
+					 * subline includes the nick, so skip it.  Continuation sublines
+					 * map to cached layout lines with a -1 offset. */
+					if (has_nick)
+					{
+						if (text_subline_idx > 0)
+						{
+							int layout_line_idx = text_subline_idx - 1;
+							if (layout_line_idx < cached_disp->layout_n_lines)
+								cached_pline = pango_layout_get_line_readonly (
+									cached_disp->layout, layout_line_idx);
+						}
+						/* text_subline_idx == 0: first subline with nick, use shared layout */
+					}
+					else
+					{
+						/* No nick: layout covers full text, direct mapping */
+						if (text_subline_idx < cached_disp->layout_n_lines)
+							cached_pline = pango_layout_get_line_readonly (
+								cached_disp->layout, text_subline_idx);
+					}
 				}
 
 				if (!gtk_xtext_render_subline (xtext, y, ent, raw_offset, len,
