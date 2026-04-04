@@ -8083,20 +8083,20 @@ gtk_xtext_render_page_timeout (GtkXText * xtext)
 	return 0;
 }
 
-/* append a textentry to our linked list */
+/* Shared entry initialization — tab→space, stamp, widths, format parsing,
+ * entry ID, state/flags.  Caller must have already set ent->str, ent->str_len,
+ * ent->left_len, and ent->indent.  Does NOT touch ent->next/prev (linkage). */
 
 static void
-gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
+gtk_xtext_init_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 {
 	int i;
 
 	/* we don't like tabs */
-	i = 0;
-	while (i < ent->str_len)
+	for (i = 0; i < ent->str_len; i++)
 	{
 		if (ent->str[i] == '\t')
 			ent->str[i] = ' ';
-		i++;
 	}
 
 	ent->stamp = stamp;
@@ -8106,7 +8106,6 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	ent->str_width = gtk_xtext_text_width_ent (buf->xtext, ent);
 	ent->mark_start = -1;
 	ent->mark_end = -1;
-	ent->next = NULL;
 	ent->marks = NULL;
 
 	/* Parse format spans, stripped text, emoji placeholders */
@@ -8132,10 +8131,9 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 		ent->raw_to_stripped_map = r2s;
 	}
 
-	/* IRCv3 modernization: entry identification (Phase 1) */
-	ent->msgid = NULL;	/* Will be set later via gtk_xtext_set_msgid() if available */
-	/* Phase 4 virtual scrollback: use DB rowid as entry_id when available,
-	 * so eviction + rematerialization preserves the same ID */
+	/* Entry identification: use DB rowid when available so
+	 * eviction + rematerialization preserves the same ID. */
+	ent->msgid = NULL;
 	{
 		gboolean has_db_row = (buf->pending_db_rowid > 0);
 		if (has_db_row)
@@ -8151,26 +8149,67 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 		}
 		ent->has_db_row = has_db_row ? 1 : 0;
 	}
-	ent->group_id = buf->current_group_id;	/* non-zero for multiline batch entries */
+	ent->group_id = buf->current_group_id;
 	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
 
-	/* Phase 4: entry modification support */
+	/* Entry modification support */
 	ent->state = XTEXT_STATE_NORMAL;
 	ent->flags = 0;
 	ent->redaction = NULL;
 
 	if (ent->indent < MARGIN)
 		ent->indent = MARGIN;	  /* 2 pixels is the left margin */
+}
 
-	/* append to our linked list */
-	if (buf->text_last)
-		buf->text_last->next = ent;
-	else
+/* Position enum for link_entry */
+typedef enum {
+	LINK_TAIL,    /* append at end */
+	LINK_HEAD,    /* prepend at start */
+	LINK_BEFORE,  /* insert using pre-set ent->prev / ent->next */
+} xtext_link_position;
+
+/* Link an initialized entry into the buffer's doubly-linked list, compute
+ * day boundaries, sublines, auto-collapse, and add to B-tree.
+ * Returns the number of display lines added (for scroll adjustment). */
+
+static int
+gtk_xtext_link_entry (xtext_buffer *buf, textentry *ent, xtext_link_position pos)
+{
+	int new_lines;
+
+	/* Linked list insertion */
+	switch (pos)
+	{
+	case LINK_TAIL:
+		if (buf->text_last)
+			buf->text_last->next = ent;
+		else
+			buf->text_first = ent;
+		ent->prev = buf->text_last;
+		buf->text_last = ent;
+		break;
+	case LINK_HEAD:
+		if (buf->text_first)
+			buf->text_first->prev = ent;
+		else
+			buf->text_last = ent;
+		ent->next = buf->text_first;
 		buf->text_first = ent;
-	ent->prev = buf->text_last;
-	buf->text_last = ent;
+		break;
+	case LINK_BEFORE:
+		/* Caller has set ent->prev and ent->next; splice into list */
+		if (ent->prev)
+			ent->prev->next = ent;
+		else
+			buf->text_first = ent;
+		if (ent->next)
+			ent->next->prev = ent;
+		else
+			buf->text_last = ent;
+		break;
+	}
 
-	/* Day boundary detection */
+	/* Day boundary: check ent vs its predecessor */
 	if (prefs.hex_gui_day_separator && ent->prev && ent->stamp > 0 &&
 	    ent->prev->stamp > 0 && xtext_is_different_day (ent->prev->stamp, ent->stamp))
 	{
@@ -8178,6 +8217,32 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 		ent->extra_lines_above++;
 	}
 
+	/* Day boundary: update next entry's boundary based on new predecessor */
+	if (prefs.hex_gui_day_separator && ent->next && ent->next->stamp > 0 && ent->stamp > 0)
+	{
+		gboolean was_boundary = (ent->next->flags & TEXTENTRY_FLAG_DAY_BOUNDARY) != 0;
+		gboolean is_boundary = xtext_is_different_day (ent->stamp, ent->next->stamp);
+		if (is_boundary && !was_boundary)
+		{
+			ent->next->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
+			ent->next->extra_lines_above++;
+			ent->next->display_lines++;
+			if (buf->entry_tree)
+				update_weight234 (buf->entry_tree, ent->next, 1);
+			buf->num_lines++;
+		}
+		else if (!is_boundary && was_boundary)
+		{
+			ent->next->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
+			ent->next->extra_lines_above--;
+			ent->next->display_lines--;
+			if (buf->entry_tree)
+				update_weight234 (buf->entry_tree, ent->next, -1);
+			buf->num_lines--;
+		}
+	}
+
+	/* Subline computation */
 	ent->sublines = NULL;
 	if (buf->window_width > 0)
 	{
@@ -8207,20 +8272,30 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 			}
 		}
 
-		{
-			int dl = ENT_DISPLAY_LINES (ent);
-			buf->num_lines += dl;
-		}
+		new_lines = ENT_DISPLAY_LINES (ent);
 	}
 	else
 	{
-		ent->display_lines = 1 + ent->extra_lines_above;  /* placeholder — real count deferred to first allocation */
-		buf->num_lines += ent->display_lines;
+		/* Widget not yet sized — placeholder count, real wrap deferred */
+		ent->display_lines = 1 + ent->extra_lines_above;
+		new_lines = ent->display_lines;
 	}
+	buf->num_lines += new_lines;
 
 	/* Add to B-tree for O(log n) positional access */
 	if (buf->entry_tree)
 		add234 (buf->entry_tree, ent);
+
+	return new_lines;
+}
+
+/* append a textentry to our linked list */
+
+static void
+gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
+{
+	gtk_xtext_init_entry (buf, ent, stamp);
+	gtk_xtext_link_entry (buf, ent, LINK_TAIL);
 
 	/* DB-backed: track total entries (for scrollbar estimation).
 	 * Duplicate inflation from chathistory batches is corrected by the
@@ -8299,146 +8374,10 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 static void
 gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 {
-	int i;
 	int new_lines;
 
-	/* we don't like tabs */
-	i = 0;
-	while (i < ent->str_len)
-	{
-		if (ent->str[i] == '\t')
-			ent->str[i] = ' ';
-		i++;
-	}
-
-	ent->stamp = stamp;
-	if (stamp == 0)
-		ent->stamp = time (0);
-	ent->slp = NULL;
-	ent->str_width = gtk_xtext_text_width_ent (buf->xtext, ent);
-	ent->mark_start = -1;
-	ent->mark_end = -1;
-	ent->prev = NULL;
-	ent->marks = NULL;
-
-	/* Parse format spans, stripped text, emoji placeholders */
-	{
-		unsigned char *stripped;
-		int stripped_len, span_count, emoji_count;
-		xtext_fmt_span *spans;
-		xtext_emoji_info *emojis;
-		guint16 *r2s;
-
-		xtext_parse_formats (ent->str, ent->str_len,
-		                     &stripped, &stripped_len,
-		                     &spans, &span_count,
-		                     &emojis, &emoji_count,
-		                     &r2s,
-		                     buf->xtext->emoji_cache != NULL);
-		ent->stripped_str = stripped;
-		ent->stripped_len = (guint16) stripped_len;
-		ent->fmt_spans = spans;
-		ent->fmt_span_count = (guint16) span_count;
-		ent->emoji_list = emojis;
-		ent->emoji_count = (guint16) emoji_count;
-		ent->raw_to_stripped_map = r2s;
-	}
-
-	/* IRCv3 modernization: entry identification (Phase 1) */
-	ent->msgid = NULL;	/* Will be set later via gtk_xtext_set_msgid() if available */
-	{
-		gboolean has_db_row = (buf->pending_db_rowid > 0);
-		if (has_db_row)
-		{
-			ent->entry_id = (guint64) buf->pending_db_rowid;
-			buf->pending_db_rowid = 0;
-			if (ent->entry_id >= buf->next_entry_id)
-				buf->next_entry_id = ent->entry_id + 1;
-		}
-		else
-		{
-			ent->entry_id = buf->next_entry_id++;
-		}
-		ent->has_db_row = has_db_row ? 1 : 0;
-	}
-	ent->group_id = buf->current_group_id;
-	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
-
-	/* Phase 4: entry modification support */
-	ent->state = XTEXT_STATE_NORMAL;
-	ent->flags = 0;
-	ent->redaction = NULL;
-
-	if (ent->indent < MARGIN)
-		ent->indent = MARGIN;	  /* 2 pixels is the left margin */
-
-	/* prepend to our linked list */
-	if (buf->text_first)
-		buf->text_first->prev = ent;
-	else
-		buf->text_last = ent;
-	ent->next = buf->text_first;
-	buf->text_first = ent;
-
-	/* Day boundary: update next entry's boundary based on new predecessor */
-	if (prefs.hex_gui_day_separator && ent->next && ent->next->stamp > 0 && ent->stamp > 0)
-	{
-		gboolean was_boundary = (ent->next->flags & TEXTENTRY_FLAG_DAY_BOUNDARY) != 0;
-		gboolean is_boundary = xtext_is_different_day (ent->stamp, ent->next->stamp);
-		if (is_boundary && !was_boundary)
-		{
-			ent->next->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
-			ent->next->extra_lines_above++;
-			ent->next->display_lines++;
-			if (buf->entry_tree)
-				update_weight234 (buf->entry_tree, ent->next, 1);
-			buf->num_lines++;
-			/* tree weight already updated by update_weight234 above */
-		}
-		else if (!is_boundary && was_boundary)
-		{
-			ent->next->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
-			ent->next->extra_lines_above--;
-			ent->next->display_lines--;
-			if (buf->entry_tree)
-				update_weight234 (buf->entry_tree, ent->next, -1);
-			buf->num_lines--;
-			/* tree weight already updated by update_weight234 above */
-		}
-	}
-
-	ent->sublines = NULL;
-	gtk_xtext_lines_taken (buf, ent);
-
-	/* Auto-collapse multiline messages exceeding threshold */
-	if (prefs.hex_gui_collapse_multiline && ent->group_id != 0 && ent->sublines)
-	{
-		int sublines = g_slist_length (ent->sublines);
-		int threshold = prefs.hex_gui_collapse_threshold;
-		gboolean should_collapse = (sublines > threshold);
-
-		if (!should_collapse && prefs.hex_gui_collapse_page_divisor > 0 && buf->xtext)
-		{
-			int page_size = gtk_widget_get_height (GTK_WIDGET (buf->xtext)) / buf->xtext->fontsize;
-			int adaptive = page_size / prefs.hex_gui_collapse_page_divisor;
-			if (adaptive > 0 && sublines > adaptive)
-				should_collapse = TRUE;
-		}
-
-		if (should_collapse)
-		{
-			ent->collapsible = TRUE;
-			ent->collapsed = TRUE;
-			ent_update_display_lines (ent);
-		}
-	}
-
-	new_lines = ENT_DISPLAY_LINES (ent);
-	buf->num_lines += new_lines;
-
-	/* Add to B-tree for O(log n) positional access */
-	if (buf->entry_tree)
-		add234 (buf->entry_tree, ent);
+	gtk_xtext_init_entry (buf, ent, stamp);
+	new_lines = gtk_xtext_link_entry (buf, ent, LINK_HEAD);
 
 	/* DB-backed: track total entries and materialization index */
 	if (HAS_VIRT_DB (buf))
@@ -8508,81 +8447,12 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 static void
 gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 {
-	int i;
 	int new_lines;
 	int lines_before_insert = 0;
 	textentry *pos;
 	gboolean inserted_before_pagetop = FALSE;
 
-	/* we don't like tabs */
-	i = 0;
-	while (i < ent->str_len)
-	{
-		if (ent->str[i] == '\t')
-			ent->str[i] = ' ';
-		i++;
-	}
-
-	ent->stamp = stamp;
-	if (stamp == 0)
-		ent->stamp = time (0);
-	ent->slp = NULL;
-	ent->str_width = gtk_xtext_text_width_ent (buf->xtext, ent);
-	ent->mark_start = -1;
-	ent->mark_end = -1;
-	ent->marks = NULL;
-
-	/* Parse format spans, stripped text, emoji placeholders */
-	{
-		unsigned char *stripped;
-		int stripped_len, span_count, emoji_count;
-		xtext_fmt_span *spans;
-		xtext_emoji_info *emojis;
-		guint16 *r2s;
-
-		xtext_parse_formats (ent->str, ent->str_len,
-		                     &stripped, &stripped_len,
-		                     &spans, &span_count,
-		                     &emojis, &emoji_count,
-		                     &r2s,
-		                     buf->xtext->emoji_cache != NULL);
-		ent->stripped_str = stripped;
-		ent->stripped_len = (guint16) stripped_len;
-		ent->fmt_spans = spans;
-		ent->fmt_span_count = (guint16) span_count;
-		ent->emoji_list = emojis;
-		ent->emoji_count = (guint16) emoji_count;
-		ent->raw_to_stripped_map = r2s;
-	}
-
-	/* IRCv3 modernization: entry identification (Phase 1) */
-	ent->msgid = NULL;
-	if (buf->pending_db_rowid > 0)
-	{
-		gboolean has_db_row = (buf->pending_db_rowid > 0);
-		if (has_db_row)
-		{
-			ent->entry_id = (guint64) buf->pending_db_rowid;
-			buf->pending_db_rowid = 0;
-			if (ent->entry_id >= buf->next_entry_id)
-				buf->next_entry_id = ent->entry_id + 1;
-		}
-		else
-		{
-			ent->entry_id = buf->next_entry_id++;
-		}
-		ent->has_db_row = has_db_row ? 1 : 0;
-	}
-	ent->group_id = buf->current_group_id;
-	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
-
-	/* Phase 4: entry modification support */
-	ent->state = XTEXT_STATE_NORMAL;
-	ent->flags = 0;
-	ent->redaction = NULL;
-
-	if (ent->indent < MARGIN)
-		ent->indent = MARGIN;
+	gtk_xtext_init_entry (buf, ent, stamp);
 
 	/* Find insertion point - walk forward to find first entry with stamp > ent->stamp.
 	 * When insert_hint is set (sorted batch), start from the hint to avoid O(N²). */
@@ -8604,25 +8474,18 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		pos = pos->next;
 	}
 
-	/* Insert before pos (or at end if pos is NULL) */
+	/* Set prev/next for insertion point, then link into list */
 	if (pos == NULL)
 	{
-		/* Insert at end (append case) */
-		ent->next = NULL;
-		if (buf->text_last)
-			buf->text_last->next = ent;
-		else
-			buf->text_first = ent;
+		/* Insert at end */
 		ent->prev = buf->text_last;
-		buf->text_last = ent;
+		ent->next = NULL;
 	}
 	else if (pos == buf->text_first)
 	{
-		/* Insert at head (prepend case) */
+		/* Insert at head */
 		ent->prev = NULL;
 		ent->next = buf->text_first;
-		buf->text_first->prev = ent;
-		buf->text_first = ent;
 		inserted_before_pagetop = TRUE;
 	}
 	else
@@ -8630,92 +8493,24 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		/* Insert in middle */
 		ent->prev = pos->prev;
 		ent->next = pos;
-		pos->prev->next = ent;
-		pos->prev = ent;
+	}
 
-		/* Check if we inserted before the current view */
-		if (buf->pagetop_ent)
+	new_lines = gtk_xtext_link_entry (buf, ent, LINK_BEFORE);
+
+	/* Check if we inserted before the current view (middle case) */
+	if (!inserted_before_pagetop && pos != NULL && buf->pagetop_ent)
+	{
+		textentry *check = buf->text_first;
+		while (check && check != buf->pagetop_ent)
 		{
-			textentry *check = buf->text_first;
-			while (check && check != buf->pagetop_ent)
+			if (check == ent)
 			{
-				if (check == ent)
-				{
-					inserted_before_pagetop = TRUE;
-					break;
-				}
-				check = check->next;
+				inserted_before_pagetop = TRUE;
+				break;
 			}
+			check = check->next;
 		}
 	}
-
-	/* Day boundary: check ent vs its predecessor */
-	if (prefs.hex_gui_day_separator && ent->prev && ent->stamp > 0 &&
-	    ent->prev->stamp > 0 && xtext_is_different_day (ent->prev->stamp, ent->stamp))
-	{
-		ent->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
-		ent->extra_lines_above++;
-	}
-
-	/* Day boundary: update next entry's boundary based on new predecessor */
-	if (prefs.hex_gui_day_separator && ent->next && ent->next->stamp > 0 && ent->stamp > 0)
-	{
-		gboolean was_boundary = (ent->next->flags & TEXTENTRY_FLAG_DAY_BOUNDARY) != 0;
-		gboolean is_boundary = xtext_is_different_day (ent->stamp, ent->next->stamp);
-		if (is_boundary && !was_boundary)
-		{
-			ent->next->flags |= TEXTENTRY_FLAG_DAY_BOUNDARY;
-			ent->next->extra_lines_above++;
-			ent->next->display_lines++;
-			if (buf->entry_tree)
-				update_weight234 (buf->entry_tree, ent->next, 1);
-			buf->num_lines++;
-			/* tree weight already updated by update_weight234 above */
-		}
-		else if (!is_boundary && was_boundary)
-		{
-			ent->next->flags &= ~TEXTENTRY_FLAG_DAY_BOUNDARY;
-			ent->next->extra_lines_above--;
-			ent->next->display_lines--;
-			if (buf->entry_tree)
-				update_weight234 (buf->entry_tree, ent->next, -1);
-			buf->num_lines--;
-			/* tree weight already updated by update_weight234 above */
-		}
-	}
-
-	ent->sublines = NULL;
-	gtk_xtext_lines_taken (buf, ent);
-
-	/* Auto-collapse multiline messages exceeding threshold */
-	if (prefs.hex_gui_collapse_multiline && ent->group_id != 0 && ent->sublines)
-	{
-		int sublines = g_slist_length (ent->sublines);
-		int threshold = prefs.hex_gui_collapse_threshold;
-		gboolean should_collapse = (sublines > threshold);
-
-		if (!should_collapse && prefs.hex_gui_collapse_page_divisor > 0 && buf->xtext)
-		{
-			int page_size = gtk_widget_get_height (GTK_WIDGET (buf->xtext)) / buf->xtext->fontsize;
-			int adaptive = page_size / prefs.hex_gui_collapse_page_divisor;
-			if (adaptive > 0 && sublines > adaptive)
-				should_collapse = TRUE;
-		}
-
-		if (should_collapse)
-		{
-			ent->collapsible = TRUE;
-			ent->collapsed = TRUE;
-			ent_update_display_lines (ent);
-		}
-	}
-
-	new_lines = ENT_DISPLAY_LINES (ent);
-	buf->num_lines += new_lines;
-
-	/* Add to B-tree for O(log n) positional access */
-	if (buf->entry_tree)
-		add234 (buf->entry_tree, ent);
 
 	/* Update insert hint for next sorted insert in this batch */
 	if (buf->batch_mode)
@@ -10042,36 +9837,7 @@ gtk_xtext_virt_materialize_msg (xtext_buffer *buf, scrollback_msg *msg)
 		ent->left_len = -1;
 	}
 
-	/* Core fields */
-	ent->stamp = msg->timestamp;
-	ent->next = NULL;
-	ent->prev = NULL;
-	ent->slp = NULL;
-	ent->mark_start = -1;
-	ent->mark_end = -1;
-	ent->marks = NULL;
-	ent->state = XTEXT_STATE_NORMAL;
-	ent->flags = 0;
-	ent->redaction = NULL;
-	ent->reactions = NULL;
-	ent->reply = NULL;
-	ent->extra_lines_above = 0;
-	ent->extra_lines_below = 0;
-	ent->collapsed = 0;
-	ent->collapsible = 0;
-
-	/* We don't like tabs in the display string */
-	{
-		int i;
-		for (i = 0; i < ent->str_len; i++)
-			if (ent->str[i] == '\t')
-				ent->str[i] = ' ';
-	}
-
-	/* Compute text widths */
-	ent->str_width = gtk_xtext_text_width_ent (buf->xtext, ent);
-
-	/* Compute indent (mirror append_indent, but skip auto-adjust to avoid jitter) */
+	/* Compute indent before init (mirror append_indent, skip auto-adjust) */
 	if (left_len >= 0 && buf->xtext->auto_indent)
 	{
 		left_width = gtk_xtext_text_width (buf->xtext, (unsigned char *)msg->text, left_len);
@@ -10085,37 +9851,10 @@ gtk_xtext_virt_materialize_msg (xtext_buffer *buf, scrollback_msg *msg)
 	{
 		ent->indent = 0;
 	}
-	if (ent->indent < MARGIN)
-		ent->indent = MARGIN;
 
-	/* Parse format spans, stripped text, emoji placeholders */
-	{
-		unsigned char *stripped;
-		int stripped_len, span_count, emoji_count;
-		xtext_fmt_span *spans;
-		xtext_emoji_info *emojis;
-		guint16 *r2s;
-
-		xtext_parse_formats (ent->str, ent->str_len,
-		                     &stripped, &stripped_len,
-		                     &spans, &span_count,
-		                     &emojis, &emoji_count,
-		                     &r2s,
-		                     buf->xtext->emoji_cache != NULL);
-		ent->stripped_str = stripped;
-		ent->stripped_len = (guint16) stripped_len;
-		ent->fmt_spans = spans;
-		ent->fmt_span_count = (guint16) span_count;
-		ent->emoji_list = emojis;
-		ent->emoji_count = (guint16) emoji_count;
-		ent->raw_to_stripped_map = r2s;
-	}
-
-	/* Use DB rowid as entry_id for stability across materialization cycles */
-	ent->entry_id = (guint64) msg->id;
-	ent->group_id = 0;
-	ent->msgid = NULL;
-	g_hash_table_insert (buf->entries_by_id, GSIZE_TO_POINTER (ent->entry_id), ent);
+	/* Use DB rowid as entry_id via pending_db_rowid mechanism */
+	buf->pending_db_rowid = msg->id;
+	gtk_xtext_init_entry (buf, ent, msg->timestamp);
 
 	/* Register msgid if present */
 	if (msg->msgid && msg->msgid[0])
