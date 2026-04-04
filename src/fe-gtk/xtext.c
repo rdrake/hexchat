@@ -3675,12 +3675,14 @@ gtk_xtext_scroll (GtkEventControllerScroll *controller, double dx, double dy, gp
 	gdouble adj_lower = gtk_adjustment_get_lower (xtext->adj);
 	gdouble adj_page_size = gtk_adjustment_get_page_size (xtext->adj);
 
-	/* GTK4 DISCRETE mode: dy is 1.0 per wheel notch.  Scroll 3 lines per
-	 * notch — matches typical OS default.  The old code used page_increment/10
-	 * which varied with window height and could produce large jumps. */
+	/* GTK4 DISCRETE mode: dy is 1.0 per wheel notch.  Lines per notch is
+	 * user-configurable via /SET gui_scroll_lines (default 3). */
 	if (dy != 0)
 	{
-		new_value = adj_value + dy * 3;
+		int scroll_lines = prefs.hex_gui_scroll_lines;
+		if (scroll_lines < 1)
+			scroll_lines = 1;
+		new_value = adj_value + dy * scroll_lines;
 		if (new_value < adj_lower)
 			new_value = adj_lower;
 		if (new_value > (adj_upper - adj_page_size))

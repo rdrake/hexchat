@@ -138,6 +138,7 @@ struct hexchatprefs
 	/* unsigned int hex_gui_single; */
 	unsigned int hex_gui_slist_fav;
 	unsigned int hex_gui_slist_skip;
+	unsigned int hex_gui_scroll_lines;
 	unsigned int hex_gui_tab_chans;
 	unsigned int hex_gui_tab_dialogs;
 	unsigned int hex_gui_tab_dots;

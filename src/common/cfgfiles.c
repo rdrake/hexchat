@@ -454,6 +454,7 @@ const struct prefs vars[] =
 	{"gui_slist_fav", P_OFFINT (hex_gui_slist_fav), TYPE_BOOL},
 	{"gui_slist_select", P_OFFINT (hex_gui_slist_select), TYPE_INT},
 	{"gui_slist_skip", P_OFFINT (hex_gui_slist_skip), TYPE_BOOL},
+	{"gui_scroll_lines", P_OFFINT (hex_gui_scroll_lines), TYPE_INT},
 	{"gui_tab_chans", P_OFFINT (hex_gui_tab_chans), TYPE_BOOL},
 	{"gui_tab_dialogs", P_OFFINT (hex_gui_tab_dialogs), TYPE_BOOL},
 	{"gui_tab_dots", P_OFFINT (hex_gui_tab_dots), TYPE_BOOL},
@@ -801,6 +802,7 @@ load_default_config(void)
 	prefs.hex_gui_network_icons = 1;
 	prefs.hex_gui_quit_dialog = 1;
 	/* prefs.hex_gui_slist_skip = 1; */
+	prefs.hex_gui_scroll_lines = 3;
 	prefs.hex_gui_tab_chans = 1;
 	prefs.hex_gui_tab_dialogs = 1;
 	prefs.hex_gui_tab_icons = 1;
