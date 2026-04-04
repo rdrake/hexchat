@@ -90,6 +90,7 @@ static GtkWidgetClass *parent_class = NULL;
 /* Phase 4: entry modification support */
 #define TEXTENTRY_FLAG_SEPARATE_STR  0x01
 #define TEXTENTRY_FLAG_DAY_BOUNDARY  0x02
+#define TEXTENTRY_FLAG_EPHEMERAL     0x04  /* no DB row; pinned during eviction */
 
 typedef struct xtext_redaction_info {
 	char *original_content;		/* preserved text for audit/reveal */
@@ -7226,6 +7227,12 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 	if (!ent)
 		return;
 
+	/* Ephemeral entries have no DB row and can't be rematerialized.
+	 * Skip eviction — the entry stays pinned.  Callers use if-not-while
+	 * so this won't loop. */
+	if (ent->flags & TEXTENTRY_FLAG_EPHEMERAL)
+		return;
+
 	/* DB-backed: advance mat_first_index (entry survives in DB) */
 	if (HAS_VIRT_DB (buffer))
 	{
@@ -7292,6 +7299,10 @@ gtk_xtext_remove_bottom (xtext_buffer *buffer)
 
 	ent = buffer->text_last;
 	if (!ent)
+		return;
+
+	/* Ephemeral entries are pinned — can't be rematerialized from DB */
+	if (ent->flags & TEXTENTRY_FLAG_EPHEMERAL)
 		return;
 	{
 		int ent_lines = ENT_DISPLAY_LINES (ent);
@@ -8151,7 +8162,8 @@ gtk_xtext_init_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 
 	/* Entry modification support */
 	ent->state = XTEXT_STATE_NORMAL;
-	ent->flags = 0;
+	ent->flags = (!ent->has_db_row && HAS_VIRT_DB (buf))
+		? TEXTENTRY_FLAG_EPHEMERAL : 0;
 	ent->redaction = NULL;
 
 	if (ent->indent < MARGIN)
@@ -9197,12 +9209,18 @@ gtk_xtext_enforce_mat_window (xtext_buffer *buf)
 
 	while (BUF_MAT_COUNT (buf) > VIRT_MAT_WINDOW)
 	{
+		int old_count = BUF_MAT_COUNT (buf);
+
 		/* If viewport is in the bottom half, evict from head.
 		 * If viewport is in the top half, evict from tail. */
 		if (viewport_center > BUF_LINES_MAT (buf) / 2)
 			gtk_xtext_remove_top (buf);
 		else
 			gtk_xtext_remove_bottom (buf);
+
+		/* Break if eviction was blocked (e.g., ephemeral entries pinned) */
+		if (BUF_MAT_COUNT (buf) >= old_count)
+			break;
 	}
 	buf->pagetop_ent = NULL;
 }
@@ -9867,6 +9885,10 @@ gtk_xtext_virt_evict_head (xtext_buffer *buf)
 	if (!ent)
 		return;
 
+	/* Skip ephemeral entries — they can't be rematerialized from DB */
+	if (ent->flags & TEXTENTRY_FLAG_EPHEMERAL)
+		return;
+
 	buf->text_first = ent->next;
 	if (buf->text_first)
 	{
@@ -9892,6 +9914,10 @@ gtk_xtext_virt_evict_tail (xtext_buffer *buf)
 {
 	textentry *ent = buf->text_last;
 	if (!ent)
+		return;
+
+	/* Skip ephemeral entries — they can't be rematerialized from DB */
+	if (ent->flags & TEXTENTRY_FLAG_EPHEMERAL)
 		return;
 
 	buf->text_last = ent->prev;
@@ -10118,9 +10144,11 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 		while (buf->mat_first_index < want_start - VIRT_PAGE_SIZE &&
 		       BUF_MAT_COUNT (buf) > max)
 	{
-		/* Don't evict selection-pinned entries */
+		/* Don't evict pinned entries (selection or ephemeral) */
 		if (buf->text_first && buf->sel_pin_start_id != 0 &&
 		    buf->text_first->entry_id == buf->sel_pin_start_id)
+			break;
+		if (buf->text_first && (buf->text_first->flags & TEXTENTRY_FLAG_EPHEMERAL))
 			break;
 
 		{
