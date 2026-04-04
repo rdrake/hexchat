@@ -850,8 +850,7 @@ gtk_xtext_init (GtkXText * xtext)
 		                  G_CALLBACK (gtk_xtext_leave_notify), xtext);
 		gtk_widget_add_controller (GTK_WIDGET (xtext), motion_controller);
 
-		/* Scroll controller for mouse wheel — DISCRETE prevents smooth/kinetic
-		 * events where dy is a tiny fraction, which makes scrolling feel slow. */
+		/* Scroll controller for mouse wheel */
 		scroll_controller = gtk_event_controller_scroll_new (
 			GTK_EVENT_CONTROLLER_SCROLL_VERTICAL | GTK_EVENT_CONTROLLER_SCROLL_DISCRETE);
 		g_signal_connect (scroll_controller, "scroll",
@@ -3675,12 +3674,13 @@ gtk_xtext_scroll (GtkEventControllerScroll *controller, double dx, double dy, gp
 	gdouble adj_upper = gtk_adjustment_get_upper (xtext->adj);
 	gdouble adj_lower = gtk_adjustment_get_lower (xtext->adj);
 	gdouble adj_page_size = gtk_adjustment_get_page_size (xtext->adj);
-	gdouble adj_page_increment = gtk_adjustment_get_page_increment (xtext->adj);
 
-	/* GTK4: dy is negative for scroll up, positive for scroll down */
+	/* GTK4 DISCRETE mode: dy is 1.0 per wheel notch.  Scroll 3 lines per
+	 * notch — matches typical OS default.  The old code used page_increment/10
+	 * which varied with window height and could produce large jumps. */
 	if (dy != 0)
 	{
-		new_value = adj_value + dy * (adj_page_increment / 10);
+		new_value = adj_value + dy * 3;
 		if (new_value < adj_lower)
 			new_value = adj_lower;
 		if (new_value > (adj_upper - adj_page_size))
@@ -10418,33 +10418,53 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 	 * which triggers another adjustment_changed → ensure_range cycle. */
 	if (BUF_MAT_COUNT (buf) != old_mat_count || buf->mat_first_index != old_mat_first)
 	{
-		/* Use the anchor system to restore scroll position after
-		 * recalculating line counts.  The anchor resolves an entry by ID,
-		 * making it immune to lines_before_mat shifts that change the
-		 * meaning of raw adjustment values. */
-		xtext_scroll_anchor range_anchor;
-		gtk_xtext_save_scroll_anchor (buf, &range_anchor);
+		/* Anchor to the viewport TOP (not center) so small scrolls don't
+		 * get amplified into half-page jumps by center-based restore.
+		 * Resolve the top-of-viewport entry by ID before recalc changes
+		 * line numbers, then restore by computing its new absolute position. */
+		{
+			int top_subline = 0;
+			textentry *top_ent = NULL;
+			gdouble old_value = -1;
 
-		if (buf->xtext && buf->xtext->vc_signal_tag)
-		{
-			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
-			gtk_xtext_calc_lines_virtual_ex (buf, TRUE, FALSE);
-			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
-		}
-		else
-		{
-			gtk_xtext_calc_lines_virtual_ex (buf, FALSE, FALSE);
-		}
+			if (buf->xtext && buf->xtext->adj)
+			{
+				old_value = gtk_adjustment_get_value (buf->xtext->adj);
+				top_ent = gtk_xtext_nth (buf->xtext, (int)old_value, &top_subline);
+			}
 
-		if (buf->xtext && buf->xtext->vc_signal_tag)
-		{
-			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
-			gtk_xtext_restore_scroll_anchor (buf, &range_anchor);
-			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
-		}
-		else
-		{
-			gtk_xtext_restore_scroll_anchor (buf, &range_anchor);
+			if (buf->xtext && buf->xtext->vc_signal_tag)
+			{
+				g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+				gtk_xtext_calc_lines_virtual_ex (buf, TRUE, FALSE);
+				g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+			}
+			else
+			{
+				gtk_xtext_calc_lines_virtual_ex (buf, FALSE, FALSE);
+			}
+
+			/* Restore: find the top entry's new absolute line and set value */
+			if (top_ent && buf->xtext && buf->xtext->adj)
+			{
+				int new_line = gtk_xtext_entry_get_line (buf, top_ent);
+				if (new_line >= 0)
+				{
+					gdouble new_value = (gdouble)(new_line + buf->lines_before_mat + top_subline);
+					gdouble upper = gtk_adjustment_get_upper (buf->xtext->adj);
+					gdouble page = gtk_adjustment_get_page_size (buf->xtext->adj);
+					if (new_value > upper - page)
+						new_value = upper - page;
+					if (new_value < 0)
+						new_value = 0;
+
+					if (buf->xtext->vc_signal_tag)
+						g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+					gtk_adjustment_set_value (buf->xtext->adj, new_value);
+					if (buf->xtext->vc_signal_tag)
+						g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+				}
+			}
 		}
 	}
 }
