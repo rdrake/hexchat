@@ -774,6 +774,7 @@ skip_banner:
 		/* sends WHO #channel */
 		serv->p_user_list (sess->server, chan);
 		sess->doing_who = TRUE;
+		sess->done_away_check = TRUE;	/* prevent away_check timer from re-WHOing */
 	}
 }
 

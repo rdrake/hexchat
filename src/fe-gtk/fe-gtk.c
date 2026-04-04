@@ -1133,6 +1133,14 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 	 */
 	if (sess->history_request_is_before && sess->history_prepend_mode)
 	{
+		if (gtk_xtext_virt_skip_older (sess->res->buffer, stamp))
+			return;
+		if (gtk_xtext_virt_skip_newer (sess->res->buffer))
+		{
+			((xtext_buffer *)sess->res->buffer)->pending_db_rowid = 0;
+			return;
+		}
+
 		/* For prepend, track the entry at the head before we add */
 		first_new_entry = gtk_xtext_buffer_get_first (sess->res->buffer);
 
@@ -1163,6 +1171,11 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 		 * when the user scrolls there. */
 		if (gtk_xtext_virt_skip_older (sess->res->buffer, stamp))
 			return;
+		if (gtk_xtext_virt_skip_newer (sess->res->buffer))
+		{
+			((xtext_buffer *)sess->res->buffer)->pending_db_rowid = 0;
+			return;
+		}
 
 		PrintTextRawInsertSorted (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
 
@@ -1190,6 +1203,18 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 
 	/* Normal append path */
 
+	/* Virtual scrollback: if user is scrolled up and the materialization
+	 * window is full, skip materializing this entry.  It's already in
+	 * the DB (saved by PrintTextTimeStamp above); ensure_range will load
+	 * it when the user scrolls down.  This prevents remove_top eviction
+	 * from destabilizing the view while scrolled up. */
+	if (gtk_xtext_virt_skip_newer (sess->res->buffer))
+	{
+		/* Still need to clear pending_db_rowid — append_entry won't run */
+		((xtext_buffer *)sess->res->buffer)->pending_db_rowid = 0;
+		goto skip_materialize;
+	}
+
 	/* IRCv3 modernization: track first entry for msgid association (Phase 1)
 	 * Important: A single IRC message may create multiple xtext entries
 	 * (e.g., multiline batches, text with embedded newlines). We associate
@@ -1212,6 +1237,7 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 		                     sess->current_msgid);
 	}
 
+skip_materialize:
 	if (no_activity || !sess->gui->is_tab)
 		return;
 

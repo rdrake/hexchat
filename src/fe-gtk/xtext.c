@@ -6017,6 +6017,15 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 			buf->avg_lines_per_entry = 0.9 * buf->avg_lines_per_entry + 0.1 * new_avg;
 	}
 
+	/* Sync total_entries from DB to correct drift from duplicate inserts
+	 * (INSERT OR IGNORE rejects dupes but append_entry still increments). */
+	if (HAS_VIRT_DB (buf) && buf->virt_channel)
+	{
+		int db_total = scrollback_count (buf->virt_db, buf->virt_channel);
+		if (db_total != buf->total_entries)
+			buf->total_entries = db_total;
+	}
+
 	/* lines_before_mat is absorptive: adjusted by ensure_range prepend (-)
 	 * and eviction (+).  Never recompute from formula here — the avg is
 	 * inaccurate for mixed regions and causes huge scroll jumps.
@@ -10407,6 +10416,13 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 	 * which triggers another adjustment_changed → ensure_range cycle. */
 	if (BUF_MAT_COUNT (buf) != old_mat_count || buf->mat_first_index != old_mat_first)
 	{
+		/* Use the anchor system to restore scroll position after
+		 * recalculating line counts.  The anchor resolves an entry by ID,
+		 * making it immune to lines_before_mat shifts that change the
+		 * meaning of raw adjustment values. */
+		xtext_scroll_anchor range_anchor;
+		gtk_xtext_save_scroll_anchor (buf, &range_anchor);
+
 		if (buf->xtext && buf->xtext->vc_signal_tag)
 		{
 			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
@@ -10416,6 +10432,17 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 		else
 		{
 			gtk_xtext_calc_lines_virtual_ex (buf, FALSE, FALSE);
+		}
+
+		if (buf->xtext && buf->xtext->vc_signal_tag)
+		{
+			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
+			gtk_xtext_restore_scroll_anchor (buf, &range_anchor);
+			g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
+		}
+		else
+		{
+			gtk_xtext_restore_scroll_anchor (buf, &range_anchor);
 		}
 	}
 }
@@ -10476,6 +10503,56 @@ gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
 			g_signal_handler_unblock (adj, buf->xtext->vc_signal_tag);
 			buf->old_value = (gfloat) new_val;
 		}
+	}
+	return TRUE;
+}
+
+/* Virtual scrollback: check if a new tail entry should skip materialization.
+ * Returns TRUE if the user is scrolled up and the entry would land beyond
+ * the viewport, meaning it can live in the DB alone until the user scrolls
+ * down.  This prevents head eviction (remove_top) from destabilizing the
+ * view while scrolled up, which causes visible content jumps.
+ *
+ * Unlike virt_skip_older (which handles entries older than the mat window),
+ * this handles entries newer than the viewport.  The entry is already in
+ * the DB; we just update bookkeeping so ensure_range can load it later. */
+gboolean
+gtk_xtext_virt_skip_newer (xtext_buffer *buf)
+{
+	int est;
+	gdouble new_upper, page;
+	GtkAdjustment *adj;
+
+	if (!HAS_VIRT_DB (buf) || !buf->text_last)
+		return FALSE;
+
+	/* Only skip if user is scrolled up and the mat window is full.
+	 * When scrollbar_down is TRUE, the user expects to see new messages. */
+	if (buf->scrollbar_down)
+		return FALSE;
+	if (BUF_MAT_COUNT (buf) < VIRT_MAT_WINDOW)
+		return FALSE;
+
+	buf->total_entries++;
+
+	/* Grow num_lines and scrollbar upper so the user can scroll down
+	 * to reach this entry.  Do NOT adjust the scroll value — the
+	 * viewport should stay where it is. */
+	est = (int)(buf->avg_lines_per_entry + 0.5);
+	if (est < 1) est = 1;
+	buf->num_lines += est;
+
+	if (buf->xtext && buf->xtext->buffer == buf && !buf->batch_mode)
+	{
+		adj = buf->xtext->adj;
+		new_upper = buf->num_lines;
+		page = gtk_adjustment_get_page_size (adj);
+
+		g_signal_handler_block (adj, buf->xtext->vc_signal_tag);
+		gtk_adjustment_configure (adj,
+			gtk_adjustment_get_value (adj),	/* keep current position */
+			0, new_upper, 1, page, page);
+		g_signal_handler_unblock (adj, buf->xtext->vc_signal_tag);
 	}
 	return TRUE;
 }
