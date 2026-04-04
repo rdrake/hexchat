@@ -1135,11 +1135,6 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 	{
 		if (gtk_xtext_virt_skip_older (sess->res->buffer, stamp))
 			return;
-		if (gtk_xtext_virt_skip_newer (sess->res->buffer))
-		{
-			((xtext_buffer *)sess->res->buffer)->pending_db_rowid = 0;
-			return;
-		}
 
 		/* For prepend, track the entry at the head before we add */
 		first_new_entry = gtk_xtext_buffer_get_first (sess->res->buffer);
@@ -1171,11 +1166,6 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 		 * when the user scrolls there. */
 		if (gtk_xtext_virt_skip_older (sess->res->buffer, stamp))
 			return;
-		if (gtk_xtext_virt_skip_newer (sess->res->buffer))
-		{
-			((xtext_buffer *)sess->res->buffer)->pending_db_rowid = 0;
-			return;
-		}
 
 		PrintTextRawInsertSorted (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
 
