@@ -4001,7 +4001,8 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
                           int raw_offset, int raw_len,
                           int win_width, int indent, int line,
                           int left_only, int *x_size_ret,
-                          PangoLayoutLine *cached_pline)
+                          PangoLayoutLine *cached_pline,
+                          int cached_text_offset)
 {
 	int ret = 1;
 	int x;
@@ -4050,17 +4051,27 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 		}
 	}
 
-	/* --- Build PangoLayout with attributes --- */
-	PangoAttrList *attrs;
+	/* --- Get PangoLayoutLine and text width --- */
+	PangoAttrList *attrs = NULL;
 	int text_width;
+	gboolean using_cached = (cached_pline != NULL);
+	/* For index_to_x on cached layout lines, indices are relative to the
+	 * full layout text start (layout_text_offset), not sub_start.
+	 * idx_base is the stripped offset that maps to index 0 in the layout. */
+	int idx_base;
 
-	/* TODO Phase B: use cached_pline from per-entry PangoLayout to skip
-	 * this set_text/set_attributes/reshape.  Currently the shared layout
-	 * is still needed for emoji index_to_pos, selection, and search overlays.
-	 * Once those are migrated to per-entry layout, this becomes a cache hit. */
-	(void)cached_pline;
-
+	if (cached_pline)
 	{
+		/* Cache hit: use pre-shaped line from per-entry PangoLayout.
+		 * No set_text/set_attributes/reshape needed. */
+		pango_line = cached_pline;
+		pango_layout_line_get_extents (pango_line, NULL, &logical);
+		text_width = PANGO_PIXELS (logical.width);
+		idx_base = cached_text_offset;
+	}
+	else
+	{
+		/* Cache miss: build layout on the shared xtext->layout */
 		xtext_format_data fd = xtext_fdata_from_entry (ent);
 		attrs = xtext_build_attrlist (&fd, sub_start, sub_len,
 		                               xtext->palette,
@@ -4070,6 +4081,8 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 		pango_layout_set_text (xtext->layout,
 		                        (char *)(ent->stripped_str + sub_start), sub_len);
 		pango_layout_set_attributes (xtext->layout, attrs);
+
+		idx_base = sub_start;
 
 		pango_layout_get_extents (xtext->layout, NULL, &logical);
 		text_width = PANGO_PIXELS (logical.width);
@@ -4106,10 +4119,21 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 			if (em_off < sub_start || em_off >= sub_end)
 				continue;
 
-			/* Get position from Pango layout */
-			PangoRectangle pos;
-			pango_layout_index_to_pos (xtext->layout, em_off - sub_start, &pos);
-			int sprite_x = x + PANGO_PIXELS (pos.x);
+			/* Get x position from layout */
+			int sprite_x;
+			if (using_cached)
+			{
+				int x_pos;
+				pango_layout_line_index_to_x (pango_line,
+				                               em_off - idx_base, FALSE, &x_pos);
+				sprite_x = x + PANGO_PIXELS (x_pos);
+			}
+			else
+			{
+				PangoRectangle pos;
+				pango_layout_index_to_pos (xtext->layout, em_off - idx_base, &pos);
+				sprite_x = x + PANGO_PIXELS (pos.x);
+			}
 			int sprite_y = y - xtext->font->ascent;
 
 			cairo_surface_t *sprite = xtext_emoji_cache_get (
@@ -4145,17 +4169,35 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 				                                ent->str_len, mark_s);
 				int me = xtext_raw_to_stripped (ent->raw_to_stripped_map,
 				                                ent->str_len, mark_e);
-				int ms_local = ms - sub_start;
-				int me_local = me - sub_start;
+				int ms_local = ms - idx_base;
+				int me_local = me - idx_base;
+				int sub_extent = sub_end - idx_base;  /* length in layout coords */
 
-				/* Get pixel positions from Pango */
-				PangoRectangle r1, r2;
-				pango_layout_index_to_pos (xtext->layout, ms_local, &r1);
-				pango_layout_index_to_pos (xtext->layout, me_local, &r2);
-				int sel_x1 = x + PANGO_PIXELS (r1.x);
-				int sel_x2 = (me_local >= sub_len)
-				             ? x + text_width
-				             : x + PANGO_PIXELS (r2.x);
+				/* Get pixel positions */
+				int sel_x1, sel_x2;
+				if (using_cached)
+				{
+					int x1_pos, x2_pos;
+					pango_layout_line_index_to_x (pango_line, ms_local, FALSE, &x1_pos);
+					sel_x1 = x + PANGO_PIXELS (x1_pos);
+					if (me_local >= sub_extent)
+						sel_x2 = x + text_width;
+					else
+					{
+						pango_layout_line_index_to_x (pango_line, me_local, FALSE, &x2_pos);
+						sel_x2 = x + PANGO_PIXELS (x2_pos);
+					}
+				}
+				else
+				{
+					PangoRectangle r1, r2;
+					pango_layout_index_to_pos (xtext->layout, ms_local, &r1);
+					pango_layout_index_to_pos (xtext->layout, me_local, &r2);
+					sel_x1 = x + PANGO_PIXELS (r1.x);
+					sel_x2 = (me_local >= sub_extent)
+					         ? x + text_width
+					         : x + PANGO_PIXELS (r2.x);
+				}
 
 				/* Draw solid selection background */
 				GdkRGBA mark_bg = xtext->palette[XTEXT_MARK_BG];
@@ -4164,32 +4206,45 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 				                 sel_x2 - sel_x1, xtext->fontsize);
 				cairo_fill (xtext->cr);
 
-				/* Re-render text with MARK_FG, overriding per-span colors.
-				 * Build a new attrlist with a blanket foreground override so
-				 * colored text also gets the contrast selection FG. */
+				/* Re-render text within selection region using MARK_FG.
+				 * With cached layout: redraw same line with solid color + clip.
+				 * Without: build modified attrlist on shared layout. */
 				{
 					GdkRGBA mark_fg = xtext->palette[XTEXT_MARK_FG];
-					PangoAttrList *sel_attrs = pango_attr_list_copy (attrs);
-					PangoAttribute *fg_override = pango_attr_foreground_new (
-						(guint16)(mark_fg.red * 65535),
-						(guint16)(mark_fg.green * 65535),
-						(guint16)(mark_fg.blue * 65535));
-					fg_override->start_index = 0;
-					fg_override->end_index = (guint) sub_len;
-					pango_attr_list_change (sel_attrs, fg_override);
-
-					pango_layout_set_attributes (xtext->layout, sel_attrs);
 
 					cairo_save (xtext->cr);
 					cairo_rectangle (xtext->cr, sel_x1, y - xtext->font->ascent,
 					                 sel_x2 - sel_x1, xtext->fontsize);
 					cairo_clip (xtext->cr);
 
-					gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
-					pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
-					xtext_draw_layout_line (xtext, x, y, pango_line);
+					if (using_cached)
+					{
+						/* Cairo clip approach: redraw cached line with solid fg.
+						 * No Pango reshaping needed. */
+						gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+						xtext_draw_layout_line (xtext, x, y, pango_line);
+					}
+					else
+					{
+						/* Shared layout: override attributes for selection colors */
+						PangoAttrList *sel_attrs = pango_attr_list_copy (attrs);
+						PangoAttribute *fg_override = pango_attr_foreground_new (
+							(guint16)(mark_fg.red * 65535),
+							(guint16)(mark_fg.green * 65535),
+							(guint16)(mark_fg.blue * 65535));
+						fg_override->start_index = 0;
+						fg_override->end_index = (guint) sub_len;
+						pango_attr_list_change (sel_attrs, fg_override);
 
-					/* Redraw emoji sprites within selection */
+						pango_layout_set_attributes (xtext->layout, sel_attrs);
+						gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+						xtext_draw_layout_line (xtext, x, y,
+							pango_layout_get_lines_readonly (xtext->layout)->data);
+						pango_attr_list_unref (sel_attrs);
+						pango_layout_set_attributes (xtext->layout, attrs);
+					}
+
+					/* Redraw emoji sprites within selection (dimmed) */
 					for (int ei = 0; ei < ent->emoji_count; ei++)
 					{
 						xtext_emoji_info *em = &ent->emoji_list[ei];
@@ -4198,27 +4253,35 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 						if (em_off < sub_start || em_off >= sub_end)
 							continue;
 
-						PangoRectangle pos;
-						pango_layout_index_to_pos (xtext->layout,
-						                           em_off - sub_start, &pos);
-						int sprite_x = x + PANGO_PIXELS (pos.x);
-						int sprite_y = y - xtext->font->ascent;
-
-						cairo_surface_t *sprite = xtext_emoji_cache_get (
-							xtext->emoji_cache, em->filename);
-						if (sprite)
+						int sprite_x;
+						if (using_cached)
 						{
-							cairo_set_source_surface (xtext->cr, sprite,
-							                          sprite_x, sprite_y);
-							cairo_paint_with_alpha (xtext->cr, 0.6);
+							int x_pos;
+							pango_layout_line_index_to_x (pango_line,
+							                               em_off - idx_base, FALSE, &x_pos);
+							sprite_x = x + PANGO_PIXELS (x_pos);
+						}
+						else
+						{
+							PangoRectangle pos;
+							pango_layout_index_to_pos (xtext->layout,
+							                           em_off - idx_base, &pos);
+							sprite_x = x + PANGO_PIXELS (pos.x);
+						}
+						{
+							int sprite_y = y - xtext->font->ascent;
+							cairo_surface_t *sprite = xtext_emoji_cache_get (
+								xtext->emoji_cache, em->filename);
+							if (sprite)
+							{
+								cairo_set_source_surface (xtext->cr, sprite,
+								                          sprite_x, sprite_y);
+								cairo_paint_with_alpha (xtext->cr, 0.6);
+							}
 						}
 					}
 
 					cairo_restore (xtext->cr);
-					pango_attr_list_unref (sel_attrs);
-
-					/* Restore original attrs for subsequent use */
-					pango_layout_set_attributes (xtext->layout, attrs);
 				}
 			}
 		}
@@ -4254,17 +4317,35 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 				                                ent->str_len, m_start);
 				int me = xtext_raw_to_stripped (ent->raw_to_stripped_map,
 				                                ent->str_len, m_end);
-				int ms_local = ms - sub_start;
-				int me_local = me - sub_start;
+				int ms_local = ms - idx_base;
+				int me_local = me - idx_base;
+				int hl_extent = sub_end - idx_base;
 
-				/* Get pixel positions from Pango */
-				PangoRectangle r1, r2;
-				pango_layout_index_to_pos (xtext->layout, ms_local, &r1);
-				pango_layout_index_to_pos (xtext->layout, me_local, &r2);
-				int hl_x1 = x + PANGO_PIXELS (r1.x);
-				int hl_x2 = (me_local >= sub_len)
-				            ? x + text_width
-				            : x + PANGO_PIXELS (r2.x);
+				/* Get pixel positions */
+				int hl_x1, hl_x2;
+				if (using_cached)
+				{
+					int x1_pos, x2_pos;
+					pango_layout_line_index_to_x (pango_line, ms_local, FALSE, &x1_pos);
+					hl_x1 = x + PANGO_PIXELS (x1_pos);
+					if (me_local >= hl_extent)
+						hl_x2 = x + text_width;
+					else
+					{
+						pango_layout_line_index_to_x (pango_line, me_local, FALSE, &x2_pos);
+						hl_x2 = x + PANGO_PIXELS (x2_pos);
+					}
+				}
+				else
+				{
+					PangoRectangle r1, r2;
+					pango_layout_index_to_pos (xtext->layout, ms_local, &r1);
+					pango_layout_index_to_pos (xtext->layout, me_local, &r2);
+					hl_x1 = x + PANGO_PIXELS (r1.x);
+					hl_x2 = (me_local >= hl_extent)
+					         ? x + text_width
+					         : x + PANGO_PIXELS (r2.x);
+				}
 
 				cairo_save (xtext->cr);
 				cairo_rectangle (xtext->cr, hl_x1, y - xtext->font->ascent,
@@ -4276,36 +4357,39 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 					/* Current match: solid MARK_BG + text in MARK_FG */
 					GdkRGBA mark_bg = xtext->palette[XTEXT_MARK_BG];
 					GdkRGBA mark_fg = xtext->palette[XTEXT_MARK_FG];
-					PangoAttrList *hl_attrs;
-					PangoAttribute *fg_override;
 
 					gdk_cairo_set_source_rgba (xtext->cr, &mark_bg);
 					cairo_paint (xtext->cr);
 
-					hl_attrs = pango_attr_list_copy (attrs);
-					fg_override = pango_attr_foreground_new (
-						(guint16)(mark_fg.red * 65535),
-						(guint16)(mark_fg.green * 65535),
-						(guint16)(mark_fg.blue * 65535));
-					fg_override->start_index = 0;
-					fg_override->end_index = (guint) sub_len;
-					pango_attr_list_change (hl_attrs, fg_override);
-					pango_layout_set_attributes (xtext->layout, hl_attrs);
+					if (using_cached)
+					{
+						gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+						xtext_draw_layout_line (xtext, x, y, pango_line);
+					}
+					else
+					{
+						PangoAttrList *hl_attrs = pango_attr_list_copy (attrs);
+						PangoAttribute *fg_override = pango_attr_foreground_new (
+							(guint16)(mark_fg.red * 65535),
+							(guint16)(mark_fg.green * 65535),
+							(guint16)(mark_fg.blue * 65535));
+						fg_override->start_index = 0;
+						fg_override->end_index = (guint) sub_len;
+						pango_attr_list_change (hl_attrs, fg_override);
+						pango_layout_set_attributes (xtext->layout, hl_attrs);
 
-					gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
-					pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
-					xtext_draw_layout_line (xtext, x, y, pango_line);
-
-					pango_attr_list_unref (hl_attrs);
-					pango_layout_set_attributes (xtext->layout, attrs);
+						gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+						xtext_draw_layout_line (xtext, x, y,
+							pango_layout_get_lines_readonly (xtext->layout)->data);
+						pango_attr_list_unref (hl_attrs);
+						pango_layout_set_attributes (xtext->layout, attrs);
+					}
 				}
 				else
 				{
 					/* Other matches: solid BG + translucent tint + MARK_FG text */
 					GdkRGBA mark_fg = xtext->palette[XTEXT_MARK_FG];
 					GdkRGBA tint = xtext->palette[XTEXT_MARK_BG];
-					PangoAttrList *hl_attrs;
-					PangoAttribute *fg_override;
 					tint.alpha = 0.35f;
 
 					xtext_draw_bg (xtext, hl_x1, y - xtext->font->ascent,
@@ -4313,22 +4397,29 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 					gdk_cairo_set_source_rgba (xtext->cr, &tint);
 					cairo_paint (xtext->cr);
 
-					hl_attrs = pango_attr_list_copy (attrs);
-					fg_override = pango_attr_foreground_new (
-						(guint16)(mark_fg.red * 65535),
-						(guint16)(mark_fg.green * 65535),
-						(guint16)(mark_fg.blue * 65535));
-					fg_override->start_index = 0;
-					fg_override->end_index = (guint) sub_len;
-					pango_attr_list_change (hl_attrs, fg_override);
-					pango_layout_set_attributes (xtext->layout, hl_attrs);
+					if (using_cached)
+					{
+						gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+						xtext_draw_layout_line (xtext, x, y, pango_line);
+					}
+					else
+					{
+						PangoAttrList *hl_attrs = pango_attr_list_copy (attrs);
+						PangoAttribute *fg_override = pango_attr_foreground_new (
+							(guint16)(mark_fg.red * 65535),
+							(guint16)(mark_fg.green * 65535),
+							(guint16)(mark_fg.blue * 65535));
+						fg_override->start_index = 0;
+						fg_override->end_index = (guint) sub_len;
+						pango_attr_list_change (hl_attrs, fg_override);
+						pango_layout_set_attributes (xtext->layout, hl_attrs);
 
-					gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
-					pango_line = pango_layout_get_lines_readonly (xtext->layout)->data;
-					xtext_draw_layout_line (xtext, x, y, pango_line);
-
-					pango_attr_list_unref (hl_attrs);
-					pango_layout_set_attributes (xtext->layout, attrs);
+						gdk_cairo_set_source_rgba (xtext->cr, &mark_fg);
+						xtext_draw_layout_line (xtext, x, y,
+							pango_layout_get_lines_readonly (xtext->layout)->data);
+						pango_attr_list_unref (hl_attrs);
+						pango_layout_set_attributes (xtext->layout, attrs);
+					}
 				}
 
 				cairo_restore (xtext->cr);
@@ -4352,13 +4443,35 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 				                                ent->str_len, hl_start);
 				int he = xtext_raw_to_stripped (ent->raw_to_stripped_map,
 				                                ent->str_len, hl_end);
-				PangoRectangle r1, r2;
-				pango_layout_index_to_pos (xtext->layout, hs - sub_start, &r1);
-				pango_layout_index_to_pos (xtext->layout, he - sub_start, &r2);
-				int ul_x1 = x + PANGO_PIXELS (r1.x);
-				int ul_x2 = (he - sub_start >= sub_len)
-				            ? x + text_width
-				            : x + PANGO_PIXELS (r2.x);
+				int ul_x1, ul_x2;
+				{
+					int hs_idx = hs - idx_base;
+					int he_idx = he - idx_base;
+					int ul_ext = sub_end - idx_base;
+					if (using_cached)
+					{
+						int x1_pos, x2_pos;
+						pango_layout_line_index_to_x (pango_line, hs_idx, FALSE, &x1_pos);
+						ul_x1 = x + PANGO_PIXELS (x1_pos);
+						if (he_idx >= ul_ext)
+							ul_x2 = x + text_width;
+						else
+						{
+							pango_layout_line_index_to_x (pango_line, he_idx, FALSE, &x2_pos);
+							ul_x2 = x + PANGO_PIXELS (x2_pos);
+						}
+					}
+					else
+					{
+						PangoRectangle r1, r2;
+						pango_layout_index_to_pos (xtext->layout, hs_idx, &r1);
+						pango_layout_index_to_pos (xtext->layout, he_idx, &r2);
+						ul_x1 = x + PANGO_PIXELS (r1.x);
+						ul_x2 = (he_idx >= ul_ext)
+						         ? x + text_width
+						         : x + PANGO_PIXELS (r2.x);
+					}
+				}
 				int under_y = y + 1;
 
 				xtext_set_source_color (xtext, xtext->col_fore);
@@ -4384,10 +4497,12 @@ gtk_xtext_render_subline (GtkXText *xtext, int y, textentry *ent,
 		}
 	}
 
-	pango_attr_list_unref (attrs);
-
-	/* Reset layout attributes so we don't leak into other callers */
-	pango_layout_set_attributes (xtext->layout, NULL);
+	if (attrs)
+	{
+		pango_attr_list_unref (attrs);
+		/* Reset shared layout attributes so we don't leak into other callers */
+		pango_layout_set_attributes (xtext->layout, NULL);
+	}
 
 	if (x_size_ret)
 		*x_size_ret = x - indent;
@@ -5199,6 +5314,11 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 			? MIN(COLLAPSE_PREVIEW_LINES, (int)g_slist_length (ent->sublines))
 			: INT_MAX;
 
+		/* Look up cached PangoLayout for this entry */
+		xtext_line_display *cached_disp = display_cache_get (
+			xtext->buffer->display_cache, ent->entry_id,
+			xtext->buffer->window_width);
+
 		do
 		{
 			if (entline > 0)
@@ -5211,8 +5331,19 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 			y = (xtext->fontsize * line) + xtext->font->ascent - xtext->pixel_offset;
 			if (!text_subline)
 			{
+				/* Get cached PangoLayoutLine for this text subline if available */
+				PangoLayoutLine *cached_pline = NULL;
+				if (cached_disp && cached_disp->layout)
+				{
+					int layout_line_idx = entline - 1;	/* entline was just incremented */
+					if (layout_line_idx < cached_disp->layout_n_lines)
+						cached_pline = pango_layout_get_line_readonly (
+							cached_disp->layout, layout_line_idx);
+				}
+
 				if (!gtk_xtext_render_subline (xtext, y, ent, raw_offset, len,
-				                               win_width, indent, line, FALSE, NULL, NULL))
+				                               win_width, indent, line, FALSE, NULL, cached_pline,
+				                               cached_disp ? cached_disp->layout_text_offset : 0))
 				{
 					/* small optimization */
 					gtk_xtext_draw_marker (xtext, ent, y - xtext->fontsize * (taken + start_subline + 1));
