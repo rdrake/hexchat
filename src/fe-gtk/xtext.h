@@ -520,9 +520,17 @@ guint64 gtk_xtext_get_entry_id (textentry *ent);
 time_t gtk_xtext_entry_get_stamp (textentry *ent);
 const char *gtk_xtext_get_msgid (textentry *ent);
 
-/* Virtual scrollback: skip materialization for older/newer-than-viewport entries */
-gboolean gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp);
-gboolean gtk_xtext_virt_skip_newer (xtext_buffer *buf);
+/* Link position for entry insertion and materialization gating */
+typedef enum {
+	LINK_TAIL,    /* append at end */
+	LINK_HEAD,    /* prepend at start */
+	LINK_BEFORE,  /* insert using pre-set ent->prev / ent->next */
+} xtext_link_position;
+
+/* Virtual scrollback: decide whether to materialize an entry or leave it in DB.
+ * Returns TRUE to materialize, FALSE to skip (bookkeeping updated internally). */
+gboolean gtk_xtext_virt_should_materialize (xtext_buffer *buf, time_t stamp,
+                                            xtext_link_position dir);
 
 /* Entry accessors (textentry is opaque outside xtext.c) */
 textentry *gtk_xtext_buffer_get_last (xtext_buffer *buf);

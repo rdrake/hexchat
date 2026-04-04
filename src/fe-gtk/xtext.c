@@ -8161,13 +8161,6 @@ gtk_xtext_init_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		ent->indent = MARGIN;	  /* 2 pixels is the left margin */
 }
 
-/* Position enum for link_entry */
-typedef enum {
-	LINK_TAIL,    /* append at end */
-	LINK_HEAD,    /* prepend at start */
-	LINK_BEFORE,  /* insert using pre-set ent->prev / ent->next */
-} xtext_link_position;
-
 /* Link an initialized entry into the buffer's doubly-linked list, compute
  * day boundaries, sublines, auto-collapse, and add to B-tree.
  * Returns the number of display lines added (for scroll adjustment). */
@@ -8572,11 +8565,8 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	}
 
 	/* Schedule render if this buffer is active.
-	 * Skip when scrolled up and the insert is after the viewport — the user
-	 * can't see it and rendering mid-batch causes scroll jerkiness.
-	 * Also skip during batch_mode — caller will trigger one render when done. */
-	if (buf->xtext->buffer == buf && !buf->batch_mode &&
-	    (inserted_before_pagetop || buf->scrollbar_down))
+	 * Skip during batch_mode — caller will trigger one render when done. */
+	if (buf->xtext->buffer == buf && !buf->batch_mode)
 	{
 		if (!buf->xtext->add_io_tag)
 		{
@@ -10217,114 +10207,86 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 	}
 }
 
-/* Virtual scrollback: check if a chathistory entry should skip materialization.
- * Returns TRUE if the entry is older than the materialized window and was
- * accounted for in the virtual bookkeeping (total_entries, mat_first_index,
- * lines_before_mat).  The caller should NOT materialize the entry — it's
- * already in the DB and ensure_range will load it when the user scrolls there.
+/* Virtual scrollback: decide whether an entry should be materialized into
+ * the in-memory linked list, or left in the DB for ensure_range to load
+ * on demand.  Returns TRUE to materialize, FALSE to skip.
  *
- * This handles the index-shift problem: inserting an older entry into the DB
- * moves all existing entries' indices up by 1.  We compensate by incrementing
- * mat_first_index to track the same physical entries. */
-gboolean
-gtk_xtext_virt_skip_older (xtext_buffer *buf, time_t stamp)
-{
-	if (!HAS_VIRT_DB (buf) || !buf->text_first || stamp <= 0)
-		return FALSE;
-
-	/* Only skip if entry is strictly older than everything materialized
-	 * AND the materialization window is already full.  When there's room
-	 * (e.g., fresh channel during catch-up), materialize instead so
-	 * content is visible to the user as it arrives. */
-	if (stamp >= buf->text_first->stamp)
-		return FALSE;
-	if (BUF_MAT_COUNT (buf) < VIRT_MAT_WINDOW)
-		return FALSE;
-
-	buf->total_entries++;
-	buf->mat_first_index++;	/* existing indices shifted up by 1 in DB */
-
-	/* Grow lines_before_mat, num_lines, adj upper+value in lockstep.
-	 * Use gtk_adjustment_configure to set upper and value atomically —
-	 * this avoids intermediate states where GTK clamps value. */
-	{
-		int est = (int)(buf->avg_lines_per_entry + 0.5);
-		if (est < 1) est = 1;
-		buf->lines_before_mat += est;
-		buf->num_lines += est;
-
-		/* Keep pagetop_line in sync — it's stored as absolute (adj_value)
-		 * and adj_value is about to grow by est.  Without this, the
-		 * pagetop cache in gtk_xtext_nth converts a stale pagetop_line
-		 * to the wrong relative position and walks off the end of the
-		 * materialized window, returning NULL → blank view. */
-		if (buf->pagetop_ent)
-			buf->pagetop_line += est;
-
-		if (buf->xtext && buf->xtext->buffer == buf && !buf->batch_mode)
-		{
-			GtkAdjustment *adj = buf->xtext->adj;
-			gdouble new_val = gtk_adjustment_get_value (adj) + est;
-			gdouble new_upper = buf->num_lines;
-			gdouble page = gtk_adjustment_get_page_size (adj);
-
-			g_signal_handler_block (adj, buf->xtext->vc_signal_tag);
-			gtk_adjustment_configure (adj, new_val, 0, new_upper, 1, page, page);
-			g_signal_handler_unblock (adj, buf->xtext->vc_signal_tag);
-			buf->old_value = (gfloat) new_val;
-		}
-	}
-	return TRUE;
-}
-
-/* Virtual scrollback: check if a new tail entry should skip materialization.
- * Returns TRUE if the user is scrolled up and the entry would land beyond
- * the viewport, meaning it can live in the DB alone until the user scrolls
- * down.  This prevents head eviction (remove_top) from destabilizing the
- * view while scrolled up, which causes visible content jumps.
+ * When returning FALSE, performs the necessary bookkeeping (total_entries,
+ * mat_first_index, lines_before_mat, num_lines, adjustment) so the
+ * scrollbar reflects the entry's existence without it being in the list.
  *
- * Unlike virt_skip_older (which handles entries older than the mat window),
- * this handles entries newer than the viewport.  The entry is already in
- * the DB; we just update bookkeeping so ensure_range can load it later. */
+ * dir: LINK_TAIL  — live message appended at end
+ *      LINK_HEAD  — chathistory BEFORE prepended at start
+ *      LINK_BEFORE — chathistory AFTER / gap-fill inserted sorted */
 gboolean
-gtk_xtext_virt_skip_newer (xtext_buffer *buf)
+gtk_xtext_virt_should_materialize (xtext_buffer *buf, time_t stamp,
+                                   xtext_link_position dir)
 {
 	int est;
-	gdouble new_upper, page;
-	GtkAdjustment *adj;
 
-	if (!HAS_VIRT_DB (buf) || !buf->text_last)
-		return FALSE;
+	if (!HAS_VIRT_DB (buf))
+		return TRUE;
 
-	/* Only skip if user is scrolled up and the mat window is full.
-	 * When scrollbar_down is TRUE, the user expects to see new messages. */
-	if (buf->scrollbar_down)
-		return FALSE;
+	/* Mat window not full — always materialize so content is visible
+	 * as it arrives (e.g., fresh channel during catch-up). */
 	if (BUF_MAT_COUNT (buf) < VIRT_MAT_WINDOW)
-		return FALSE;
+		return TRUE;
 
-	buf->total_entries++;
+	if (dir == LINK_TAIL)
+	{
+		/* Live message at tail: materialize if user is following
+		 * (scrollbar at bottom), skip if scrolled up. */
+		if (!buf->text_last || buf->scrollbar_down)
+			return TRUE;
+	}
+	else
+	{
+		/* HEAD or SORTED: materialize if the entry falls within or
+		 * adjacent to the materialized time range.  Skip only if
+		 * strictly older than the entire mat window. */
+		if (!buf->text_first || stamp <= 0 || stamp >= buf->text_first->stamp)
+			return TRUE;
+	}
 
-	/* Grow num_lines and scrollbar upper so the user can scroll down
-	 * to reach this entry.  Do NOT adjust the scroll value — the
-	 * viewport should stay where it is. */
+	/* --- Skip materialization — update bookkeeping --- */
+
 	est = (int)(buf->avg_lines_per_entry + 0.5);
 	if (est < 1) est = 1;
+
+	buf->total_entries++;
 	buf->num_lines += est;
 
+	if (dir != LINK_TAIL)
+	{
+		/* Older entry shifts all DB indices up by 1 */
+		buf->mat_first_index++;
+		buf->lines_before_mat += est;
+
+		/* Keep pagetop_line in sync — it's stored as absolute (adj value)
+		 * and the value is about to grow by est.  Without this, the
+		 * pagetop cache walks off the end → blank view. */
+		if (buf->pagetop_ent)
+			buf->pagetop_line += est;
+	}
+
+	/* Update scrollbar atomically via configure.
+	 * For TAIL (new msg while scrolled up): grow upper, keep value.
+	 * For HEAD/SORTED (older entry): grow upper AND value in lockstep. */
 	if (buf->xtext && buf->xtext->buffer == buf && !buf->batch_mode)
 	{
-		adj = buf->xtext->adj;
-		new_upper = buf->num_lines;
-		page = gtk_adjustment_get_page_size (adj);
+		GtkAdjustment *adj = buf->xtext->adj;
+		gdouble cur_val = gtk_adjustment_get_value (adj);
+		gdouble new_val = (dir == LINK_TAIL) ? cur_val : cur_val + est;
+		gdouble new_upper = buf->num_lines;
+		gdouble page = gtk_adjustment_get_page_size (adj);
 
 		g_signal_handler_block (adj, buf->xtext->vc_signal_tag);
-		gtk_adjustment_configure (adj,
-			gtk_adjustment_get_value (adj),	/* keep current position */
-			0, new_upper, 1, page, page);
+		gtk_adjustment_configure (adj, new_val, 0, new_upper, 1, page, page);
 		g_signal_handler_unblock (adj, buf->xtext->vc_signal_tag);
+		buf->old_value = (gfloat) new_val;
 	}
-	return TRUE;
+
+	return FALSE;
 }
 
 /* IRCv3 modernization: entry lookup functions (Phase 1) */
