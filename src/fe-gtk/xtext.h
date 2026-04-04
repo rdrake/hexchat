@@ -182,6 +182,7 @@ typedef struct {
 
 	int num_lines;
 	int indent;						  /* position of separator (pixels) from left */
+	int last_indent;				  /* indent value when sublines were last computed */
 
 	guint64 marker_pos_id;				/* entry_id of first unread message (0 = not set) */
 	marker_reset_reason marker_state;

@@ -9778,12 +9778,14 @@ gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 
 	if (render)
 	{
-		/* did the window change size since this buffer was last shown? */
-		if (buf->window_width != w)
+		/* did the window change size or indent since this buffer was last shown? */
+		if (buf->window_width != w || buf->last_indent != buf->indent)
 		{
+			gboolean width_changed = (buf->window_width != w);
+			buf->last_indent = buf->indent;
 			buf->window_width = w;
 			buf->window_height = h;
-			gtk_xtext_calc_lines (buf, FALSE);
+			gtk_xtext_recalc_widths (buf, width_changed);
 			if (buf->scrollbar_down)
 				gtk_adjustment_set_value (xtext->adj, gtk_adjustment_get_upper (xtext->adj) -
 												  gtk_adjustment_get_page_size (xtext->adj));
