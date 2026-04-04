@@ -6026,19 +6026,16 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 			buf->avg_lines_per_entry = 0.9 * buf->avg_lines_per_entry + 0.1 * new_avg;
 	}
 
-	/* Sync total_entries from DB to correct drift from duplicate inserts
-	 * (INSERT OR IGNORE rejects dupes but append_entry still increments). */
+	/* DB-authoritative: total_entries comes from the database, not
+	 * incremental counting.  This eliminates drift from INSERT OR IGNORE
+	 * rejecting duplicates while insert functions no longer increment. */
 	if (HAS_VIRT_DB (buf) && buf->virt_channel)
 	{
 		int db_total = scrollback_count (buf->virt_db, buf->virt_channel);
-		if (db_total != buf->total_entries)
-			buf->total_entries = db_total;
+		buf->total_entries = db_total;
 	}
 
-	/* lines_before_mat is absorptive: adjusted by ensure_range prepend (-)
-	 * and eviction (+).  Never recompute from formula here — the avg is
-	 * inaccurate for mixed regions and causes huge scroll jumps.
-	 * Clamp to 0 when mat_first_index == 0 (no entries above). */
+	/* Clamp lines_before_mat */
 	if (buf->mat_first_index == 0)
 		buf->lines_before_mat = 0;
 	if (buf->lines_before_mat < 0)
@@ -8290,13 +8287,9 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	gtk_xtext_init_entry (buf, ent, stamp);
 	gtk_xtext_link_entry (buf, ent, LINK_TAIL);
 
-	/* DB-backed: track total entries (for scrollbar estimation).
-	 * Duplicate inflation from chathistory batches is corrected by the
-	 * DB sync in fe_set_batch_mode at batch end. */
+	/* Approximate total_entries between DB syncs (calc_lines corrects drift) */
 	if (HAS_VIRT_DB (buf))
-	{
 		buf->total_entries++;
-	}
 
 	/* Local auto-advance: move marker to newest unread message when window is
 	 * unfocused.  Suppressed when server controls the marker (draft/read-marker). */
@@ -8372,11 +8365,10 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	gtk_xtext_init_entry (buf, ent, stamp);
 	new_lines = gtk_xtext_link_entry (buf, ent, LINK_HEAD);
 
-	/* DB-backed: track total entries and materialization index */
+	/* DB-backed bookkeeping */
 	if (HAS_VIRT_DB (buf))
 	{
 		buf->total_entries++;
-		/* Prepending at head shifts the materialized window down */
 		if (buf->mat_first_index > 0)
 			buf->mat_first_index--;
 	}
@@ -8516,6 +8508,7 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	if (HAS_VIRT_DB (buf))
 	{
 		buf->total_entries++;
+
 		/* If inserted at head, the materialized window shifted down */
 		if (ent == buf->text_first)
 			buf->mat_first_index = (buf->mat_first_index > 0) ? buf->mat_first_index - 1 : 0;

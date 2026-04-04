@@ -2548,35 +2548,13 @@ fe_set_batch_mode (session *sess, gboolean on)
 		buf->insert_hint_lines = 0;
 	}
 
-	/* When batch ends, sync total_entries from DB (authoritative) and
-	 * recalculate num_lines.  In-memory total_entries can drift if
-	 * duplicate messages are rejected by INSERT OR IGNORE but
-	 * append_entry still increments the counter. */
+	/* When batch ends, enforce the materialization window, recalculate
+	 * line counts (total_entries synced from DB by calc_lines), restore
+	 * scroll position, and redraw. */
 	if (!on && buf->xtext && buf->xtext->buffer == buf)
 	{
-		/* Invalidate pagetop cache — batch inserts and pruning
-		 * change the linked list and line counts. */
 		buf->pagetop_ent = NULL;
 
-		if (HAS_VIRT_DB (buf) && buf->virt_channel)
-		{
-			int db_total = scrollback_count (buf->virt_db, buf->virt_channel);
-			if (db_total != buf->total_entries)
-			{
-				int delta = buf->total_entries - db_total;
-				buf->total_entries = db_total;
-				/* Adjust num_lines by the same delta — the excess was
-				 * phantom entries that inflated the estimate. */
-				buf->num_lines -= (int)(delta * buf->avg_lines_per_entry);
-				if (buf->num_lines < buf->lines_before_mat + BUF_LINES_MAT (buf))
-					buf->num_lines = buf->lines_before_mat + BUF_LINES_MAT (buf);
-			}
-
-		}
-
-		/* Enforce materialization window first — evict excess entries.
-		 * Then recalculate line counts (so num_lines reflects the
-		 * post-eviction state) and restore scroll position. */
 		if (HAS_VIRT_DB (buf))
 			gtk_xtext_enforce_mat_window (buf);
 
