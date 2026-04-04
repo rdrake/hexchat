@@ -5345,25 +5345,34 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 
 					/* The cached layout excludes the nick text.  The first text
 					 * subline includes the nick, so skip it.  Continuation sublines
-					 * map to cached layout lines with a -1 offset. */
+					 * map to cached layout lines with a -1 offset.
+					 *
+					 * For no-nick entries where ent->indent != buf->indent, the
+					 * layout was wrapped at ent->indent but continuation sublines
+					 * render at buf->indent — width mismatch.  Only use the cached
+					 * layout when indents match (single-line or same indent). */
 					if (has_nick)
 					{
 						if (text_subline_idx > 0)
 						{
-							int layout_line_idx = text_subline_idx - 1;
-							if (layout_line_idx < cached_disp->layout_n_lines)
+							/* Layout lines map directly to text sublines — the nick
+							 * is excluded from the layout text but doesn't add a
+							 * layout line.  Subline 1 = layout line 1, etc. */
+							if (text_subline_idx < cached_disp->layout_n_lines)
 								cached_pline = pango_layout_get_line_readonly (
-									cached_disp->layout, layout_line_idx);
+									cached_disp->layout, text_subline_idx);
 						}
 						/* text_subline_idx == 0: first subline with nick, use shared layout */
 					}
-					else
+					else if (ent->indent == xtext->buffer->indent ||
+					         cached_disp->layout_n_lines <= 1)
 					{
-						/* No nick: layout covers full text, direct mapping */
+						/* No nick, same indent (or single line): direct mapping */
 						if (text_subline_idx < cached_disp->layout_n_lines)
 							cached_pline = pango_layout_get_line_readonly (
 								cached_disp->layout, text_subline_idx);
 					}
+					/* else: no-nick entry with indent mismatch and wrapping, skip cache */
 				}
 
 				if (!gtk_xtext_render_subline (xtext, y, ent, raw_offset, len,
@@ -5805,7 +5814,11 @@ gtk_xtext_lines_taken (xtext_buffer *buf, textentry * ent)
 		GSList *sublines_rev = NULL;
 		int cum_stripped;
 
-		/* Determine layout text range and available width */
+		/* Determine layout text range and available width.
+		 * For nick entries: layout covers message text only (after nick),
+		 * wrapped at buf->indent width (continuation indent).
+		 * For no-nick entries: layout covers full text, wrapped at
+		 * ent->indent width (same indent for all lines). */
 		if (buf->xtext->auto_indent && ent->left_len > 0 && ent->raw_to_stripped_map)
 		{
 			text_start = xtext_raw_to_stripped (ent->raw_to_stripped_map,
