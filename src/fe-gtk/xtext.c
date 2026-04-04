@@ -9934,6 +9934,13 @@ gtk_xtext_virt_materialize_msg (xtext_buffer *buf, scrollback_msg *msg)
 	if (!msg->text || !msg->text[0] || !buf->xtext)
 		return NULL;
 
+	/* Skip if this DB entry is already materialized — prevents duplicates
+	 * when ensure_range is called with overlapping ranges during rapid
+	 * thumb scrolling. */
+	if (msg->id > 0 && buf->entries_by_id &&
+	    g_hash_table_lookup (buf->entries_by_id, GSIZE_TO_POINTER ((guint64)msg->id)))
+		return NULL;
+
 	text_len = (int)strlen (msg->text);
 
 	/* Find the \t separator between nick and message text */
