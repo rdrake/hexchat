@@ -1891,6 +1891,7 @@ batch_info_new (const char *id, const char *type, char *word[],
 	batch->id = g_strdup (id);
 	batch->type = g_strdup (type);
 	batch->started = time (NULL);
+	batch->server_time = tags_data->timestamp;  /* server-time from BATCH START */
 
 	/* Copy outer batch reference if this batch is nested */
 	if (tags_data->batch_id)
@@ -2139,13 +2140,14 @@ collapse_multiline_to_parent (batch_info *batch, batch_info *parent)
 		return;
 	}
 
-	/* Create a batch_message with the combined text */
+	/* Create a batch_message with the combined text.
+	 * Per IRCv3 multiline spec, msgid and server-time belong on the
+	 * BATCH START line, not on individual PRIVMSGs inside the batch. */
 	result = g_new0 (batch_message, 1);
 	result->prefix = g_strdup (first_msg->prefix);
 	result->command = g_strdup ("PRIVMSG");
-	result->timestamp = first_msg->timestamp;
-	if (first_msg->msgid)
-		result->msgid = g_strdup (first_msg->msgid);
+	result->timestamp = batch->server_time ? batch->server_time : first_msg->timestamp;
+	result->msgid = g_strdup (batch->msgid ? batch->msgid : first_msg->msgid);
 
 	/* Copy tags from first message */
 	if (first_msg->tags)

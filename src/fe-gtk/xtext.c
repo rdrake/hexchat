@@ -1027,7 +1027,8 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			 * causes harmful head eviction that drifts lines_before_mat. */
 			{
 				int entries_after = xtext->buffer->total_entries -
-					xtext->buffer->mat_first_index - BUF_MAT_COUNT (xtext->buffer);
+					xtext->buffer->mat_first_index -
+					(BUF_MAT_COUNT (xtext->buffer) - xtext->buffer->ephemeral_count);
 				gboolean near_top = (scroll_line < mat_top + margin);
 				gboolean near_bot = (entries_after > 0 &&
 					scroll_line + (int) page_size > mat_bot - margin);
@@ -1641,21 +1642,60 @@ gtk_xtext_find_char (GtkXText * xtext, int x, int y, int *off, int *out_of_bound
 
 	line = (y + xtext->pixel_offset) / xtext->fontsize;
 
-	/* Don't return an entry for hover/click in empty space below content */
+	/* Walk from pagetop_ent when available — guarantees agreement with
+	 * render_ents, which walks the same linked list.  The B-tree path
+	 * (gtk_xtext_nth) can disagree when extra_lines_above/below create
+	 * fractional weight mismatches. */
+	if (xtext->buffer->pagetop_ent)
 	{
+		int remaining = line;
+		int ent_lines;
+
+		ent = xtext->buffer->pagetop_ent;
+		subline = xtext->buffer->pagetop_subline;
+
+		/* Advance past the remaining sublines of the starting entry */
+		ent_lines = ENT_DISPLAY_LINES (ent) - subline;
+		if (remaining < ent_lines)
+		{
+			subline += remaining;
+			goto found;
+		}
+		remaining -= ent_lines;
+
+		/* Walk forward through entries */
+		for (ent = ent->next; ent; ent = ent->next)
+		{
+			ent_lines = ENT_DISPLAY_LINES (ent);
+			if (remaining < ent_lines)
+			{
+				subline = remaining;
+				goto found;
+			}
+			remaining -= ent_lines;
+		}
+		return NULL;  /* past end of buffer */
+
+	found:
+		if (off)
+			*off = gtk_xtext_find_x (xtext, x, ent, subline, line, &outofbounds);
+	}
+	else
+	{
+		/* Fallback: B-tree lookup (pagetop not yet set, e.g., first render) */
 		int abs_line = line + (int)gtk_adjustment_get_value (xtext->adj);
 		int content_lines = LINES_BEFORE_MAT (xtext->buffer)
 			+ totalweight234 (xtext->buffer->entry_tree);
 		if (abs_line >= content_lines)
 			return NULL;
+
+		ent = gtk_xtext_nth (xtext, abs_line, &subline);
+		if (!ent)
+			return NULL;
+
+		if (off)
+			*off = gtk_xtext_find_x (xtext, x, ent, subline, line, &outofbounds);
 	}
-
-	ent = gtk_xtext_nth (xtext, line + (int)gtk_adjustment_get_value (xtext->adj), &subline);
-	if (!ent)
-		return NULL;
-
-	if (off)
-		*off = gtk_xtext_find_x (xtext, x, ent, subline, line, &outofbounds);
 	if (out_of_bounds)
 		*out_of_bounds = outofbounds;
 
@@ -6036,8 +6076,14 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 		buf->total_entries = db_total;
 	}
 
+	/* Clamp lines_before_mat */
+	if (buf->mat_first_index == 0)
+		buf->lines_before_mat = 0;
+	if (buf->lines_before_mat < 0)
+		buf->lines_before_mat = 0;
 	{
-		int entries_after = buf->total_entries - buf->mat_first_index - BUF_MAT_COUNT (buf);
+		int db_mat = BUF_MAT_COUNT (buf) - buf->ephemeral_count;
+		int entries_after = buf->total_entries - buf->mat_first_index - db_mat;
 		int lines_after;
 		if (entries_after < 0)
 			entries_after = 0;
@@ -7160,6 +7206,9 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 	if (buffer->entry_tree)
 		del234 (buffer->entry_tree, ent);
 
+	if (ent->flags & TEXTENTRY_FLAG_EPHEMERAL)
+		buffer->ephemeral_count--;
+
 	g_free (ent->msgid);
 
 	/* Phase 4: free separate str and redaction info */
@@ -7396,6 +7445,8 @@ gtk_xtext_clear (xtext_buffer *buf, int lines)
 			scrollback_clear (buf->virt_db, buf->virt_channel);
 			buf->total_entries = 0;
 			buf->mat_first_index = 0;
+			buf->lines_before_mat = 0;
+			buf->ephemeral_count = 0;
 		}
 	}
 
@@ -8154,8 +8205,15 @@ gtk_xtext_init_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 
 	/* Entry modification support */
 	ent->state = XTEXT_STATE_NORMAL;
-	ent->flags = (!ent->has_db_row && HAS_VIRT_DB (buf))
-		? TEXTENTRY_FLAG_EPHEMERAL : 0;
+	if (!ent->has_db_row && HAS_VIRT_DB (buf))
+	{
+		ent->flags = TEXTENTRY_FLAG_EPHEMERAL;
+		buf->ephemeral_count++;
+	}
+	else
+	{
+		ent->flags = 0;
+	}
 	ent->redaction = NULL;
 
 	if (ent->indent < MARGIN)
@@ -9719,8 +9777,9 @@ gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
 		buf->avg_lines_per_entry = (count > 0) ? (double)total_lines / count : 1.5;
 	}
 
-	/* Loaded entries are the newest — they start at this index */
-	buf->mat_first_index = total_entries - BUF_MAT_COUNT (buf);
+	/* Loaded entries are the newest — they start at this index.
+	 * Exclude ephemerals from the count (they have no DB position). */
+	buf->mat_first_index = total_entries - (BUF_MAT_COUNT (buf) - buf->ephemeral_count);
 	if (buf->mat_first_index < 0)
 		buf->mat_first_index = 0;
 
@@ -9730,6 +9789,8 @@ gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
 
 	/* Set initial lines_before_mat from the formula — the only place this
 	 * is computed from the formula.  After this, it's absorptive. */
+	buf->lines_before_mat = (int)(buf->mat_first_index * buf->avg_lines_per_entry);
+
 	/* Compute initial line estimates so the scrollbar reflects total history.
 	 * Block the value-changed handler during calc_lines_virtual to prevent
 	 * adjustment_changed from clearing scrollbar_down (the old scroll value
@@ -9953,7 +10014,7 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 		return;
 
 	mat_start = buf->mat_first_index;
-	mat_end = buf->mat_first_index + BUF_MAT_COUNT (buf) - 1;
+	mat_end = buf->mat_first_index + (BUF_MAT_COUNT (buf) - buf->ephemeral_count) - 1;
 
 	/* Prepend: load entries before current materialized window.
 	 * Build a local chain (oldest→newest) then splice at head. */
@@ -10030,6 +10091,15 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 			}
 		}
 
+		/* Absorptive: prepended entries move from estimated to actual */
+		{
+			textentry *e;
+			int checked = 0;
+			for (e = buf->text_first; e && checked < loaded; e = e->next, checked++)
+				buf->lines_before_mat -= ENT_DISPLAY_LINES (e);
+			if (buf->lines_before_mat < 0)
+				buf->lines_before_mat = 0;
+		}
 	}
 
 	/* Append: load entries after current materialized window */
@@ -10131,7 +10201,13 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 			break;
 
 		{
+			int evicted_lines = ENT_DISPLAY_LINES (buf->text_first);
+			gboolean next_loses_boundary = (buf->text_first->next &&
+			    (buf->text_first->next->flags & TEXTENTRY_FLAG_DAY_BOUNDARY));
 			gtk_xtext_virt_evict_head (buf);
+			buf->lines_before_mat += evicted_lines;
+			if (next_loses_boundary)
+				buf->lines_before_mat++;
 		}
 		buf->mat_first_index++;
 	}
@@ -10197,8 +10273,9 @@ gtk_xtext_virt_should_materialize (xtext_buffer *buf, time_t stamp,
 		return TRUE;
 
 	/* Mat window not full — always materialize so content is visible
-	 * as it arrives (e.g., fresh channel during catch-up). */
-	if (BUF_MAT_COUNT (buf) < VIRT_MAT_WINDOW)
+	 * as it arrives (e.g., fresh channel during catch-up).
+	 * Use DB-backed count only; ephemerals don't consume DB capacity. */
+	if (BUF_MAT_COUNT (buf) - buf->ephemeral_count < VIRT_MAT_WINDOW)
 		return TRUE;
 
 	if (dir == LINK_TAIL)
@@ -10229,6 +10306,7 @@ gtk_xtext_virt_should_materialize (xtext_buffer *buf, time_t stamp,
 	{
 		/* Older entry shifts all DB indices up by 1 */
 		buf->mat_first_index++;
+		buf->lines_before_mat += est;
 	}
 
 	/* Update scrollbar atomically via configure.
@@ -10537,6 +10615,10 @@ gtk_xtext_entry_add_reaction (xtext_buffer *buf, textentry *ent,
 	xtext_reaction *reaction = NULL;
 	guint i;
 
+	/* Ephemeral entries (system output) are not reactable */
+	if (ent->flags & TEXTENTRY_FLAG_EPHEMERAL)
+		return;
+
 	if (!ent || !reaction_text || !nick)
 		return;
 
@@ -10650,6 +10732,10 @@ gtk_xtext_entry_set_reply (xtext_buffer *buf, textentry *ent,
                            const char *target_preview, guint64 target_entry_id)
 {
 	if (!ent || !target_msgid)
+		return;
+
+	/* Ephemeral entries (system output) are not replyable */
+	if (ent->flags & TEXTENTRY_FLAG_EPHEMERAL)
 		return;
 
 	/* Don't overwrite existing reply info */

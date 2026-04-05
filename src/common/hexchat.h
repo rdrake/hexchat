@@ -521,7 +521,8 @@ typedef struct batch_info
 	char *label;         /* labeled-response: label tag from BATCH START */
 	char *msgid;         /* msgid tag from BATCH START (for echo confirmation) */
 	GSList *messages;    /* Collected messages (each element is batch_message) */
-	time_t started;      /* When the batch was opened */
+	time_t started;      /* When the batch was opened (wall clock, for stale detection) */
+	time_t server_time;  /* server-time from BATCH START tags (for nested batch timestamps) */
 } batch_info;
 
 /* IRCv3 labeled-response: pending label tracking */

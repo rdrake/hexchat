@@ -900,6 +900,14 @@ typedef struct {
 
 static gboolean cv_tabs_scroll_to_tab_timeout (gpointer user_data);
 
+static void
+cv_tabs_scroll_data_free (ScrollToTabData *data)
+{
+	if (data->tab)
+		g_object_remove_weak_pointer (G_OBJECT (data->tab), (gpointer *) &data->tab);
+	g_free (data);
+}
+
 static gboolean
 cv_tabs_scroll_to_tab_try (gpointer user_data)
 {
@@ -913,11 +921,11 @@ cv_tabs_scroll_to_tab_try (gpointer user_data)
 	gboolean transform_ok;
 	gint tab_width, tab_height;
 
-	/* Verify the tab widget is still valid and mapped */
-	if (!data->tab || !GTK_IS_WIDGET (data->tab) ||
-	    gtk_widget_get_parent (data->tab) == NULL)
+	/* Verify the tab widget is still valid and mapped.
+	 * data->tab is a weak pointer — NULLed automatically on destroy. */
+	if (!data->tab || gtk_widget_get_parent (data->tab) == NULL)
 	{
-		g_free (data);
+		cv_tabs_scroll_data_free (data);
 		return G_SOURCE_REMOVE;
 	}
 
@@ -935,7 +943,7 @@ cv_tabs_scroll_to_tab_try (gpointer user_data)
 		}
 
 		/* Give up after too many retries */
-		g_free (data);
+		cv_tabs_scroll_data_free (data);
 		return G_SOURCE_REMOVE;
 	}
 
@@ -954,7 +962,7 @@ cv_tabs_scroll_to_tab_try (gpointer user_data)
 			return G_SOURCE_REMOVE;
 		}
 
-		g_free (data);
+		cv_tabs_scroll_data_free (data);
 		return G_SOURCE_REMOVE;
 	}
 
@@ -988,7 +996,7 @@ cv_tabs_scroll_to_tab_try (gpointer user_data)
 	}
 
 	cv_tabs_scroll_to_tab_impl (data->cv, data->tab);
-	g_free (data);
+	cv_tabs_scroll_data_free (data);
 	return G_SOURCE_REMOVE;
 }
 
@@ -1011,6 +1019,10 @@ cv_tabs_scroll_to_tab (chanview *cv, GtkWidget *tab)
 	data->cv = cv;
 	data->tab = tab;
 	data->retry_count = 0;
+
+	/* Use weak ref so data->tab is NULLed if the widget is destroyed
+	 * before the idle/timeout fires (e.g., closing a server tab). */
+	g_object_add_weak_pointer (G_OBJECT (tab), (gpointer *) &data->tab);
 
 	g_idle_add (cv_tabs_scroll_to_tab_try, data);
 }

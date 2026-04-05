@@ -32,11 +32,10 @@
 #define BUF_LINES_MAT(buf) (totalweight234((buf)->entry_tree))
 #define BUF_MAT_COUNT(buf) (count234((buf)->entry_tree))
 
-/* Estimated lines above the materialized window.  Computed from
- * mat_first_index and the running average — no stored field. */
-#define LINES_BEFORE_MAT(buf) \
-	((buf)->mat_first_index > 0 \
-	 ? (int)((buf)->mat_first_index * (buf)->avg_lines_per_entry) : 0)
+/* Estimated lines above the materialized window.  Absorptive: initialized
+ * from mat_first_index * avg_lines_per_entry, then refined as entries
+ * are loaded (subtract actual) or evicted (add actual). */
+#define LINES_BEFORE_MAT(buf) ((buf)->lines_before_mat)
 
 /* TRUE when buffer has SQLite-backed scrollback (DB paging, ensure_range).
  * Rendering optimizations (lazy reflow, bottom-up) apply to ALL buffers. */
@@ -233,7 +232,9 @@ typedef struct {
 
 	int total_entries;				/* total messages in DB for this channel */
 	int mat_first_index;			/* 0-based index of text_first in total order */
+	int ephemeral_count;			/* materialized entries without DB rows (pinned) */
 
+	int lines_before_mat;			/* absorptive: estimated lines above text_first */
 	double avg_lines_per_entry;		/* running average (uses ENT_DISPLAY_LINES) */
 
 	guint64 sel_pin_start_id;		/* entry_id pinned by selection (0=none) */
