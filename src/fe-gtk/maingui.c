@@ -457,7 +457,11 @@ mg_windowstate_cb (GObject *gobject, GParamSpec *pspec, gpointer userdata)
 	if (state & GDK_TOPLEVEL_STATE_FULLSCREEN)
 		prefs.hex_gui_win_fullscreen = 1;
 
-	menu_set_fullscreen (current_sess->gui, prefs.hex_gui_win_fullscreen);
+	/* current_sess can be NULL during early window construction — libenchant
+	 * init inside hex_input_edit_new triggers a Windows surface-state event
+	 * before the session is fully wired up. */
+	if (current_sess && current_sess->gui)
+		menu_set_fullscreen (current_sess->gui, prefs.hex_gui_win_fullscreen);
 }
 
 /* GTK4: Connect to surface state after window is realized */

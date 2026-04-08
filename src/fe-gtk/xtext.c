@@ -85,6 +85,49 @@
 /* force scrolling off */
 #define dontscroll(buf) (buf)->last_pixel_pos = 0x7fffffff
 
+/* Local entry_id namespace base.  Entries without a DB rowid get IDs
+ * from this range upward; DB rowids stay in [1 .. LOCAL_ENTRY_ID_BASE-1].
+ * See gtk_xtext_init_entry for full rationale. */
+#define LOCAL_ENTRY_ID_BASE  ((guint64) 1 << 62)
+
+/* Debug instrumentation for scroll/anchor work.  Set to 1 to get traces in
+ * VS Output window (Windows) or stderr (other).  g_warning/g_print do not
+ * surface on Windows GUI builds, so we route through OutputDebugStringW.
+ * Format strings are UTF-8 (source encoding); we widen to UTF-16 before
+ * handing them to Windows so the Output window decodes correctly. */
+#define XTEXT_DEBUG_SCROLL 0
+
+#if XTEXT_DEBUG_SCROLL
+static void
+xt_dbg (const char *fmt, ...)
+{
+	char buf[1024];
+	va_list ap;
+	va_start (ap, fmt);
+	g_vsnprintf (buf, sizeof buf, fmt, ap);
+	va_end (ap);
+#ifdef WIN32
+	{
+		wchar_t *wbuf = g_utf8_to_utf16 (buf, -1, NULL, NULL, NULL);
+		if (wbuf)
+		{
+			OutputDebugStringW (wbuf);
+			g_free (wbuf);
+		}
+		else
+		{
+			OutputDebugStringA (buf);
+		}
+	}
+#else
+	fputs (buf, stderr);
+#endif
+}
+#define XT_DBG(...) xt_dbg (__VA_ARGS__)
+#else
+#define XT_DBG(...) ((void)0)
+#endif
+
 static GtkWidgetClass *parent_class = NULL;
 
 /* Phase 4: entry modification support */
@@ -1026,9 +1069,10 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			 * materialized window — nothing to load, and the spurious trigger
 			 * causes harmful head eviction that drifts lines_before_mat. */
 			{
+				int db_mat = BUF_MAT_COUNT (xtext->buffer) -
+					xtext->buffer->ephemeral_count;
 				int entries_after = xtext->buffer->total_entries -
-					xtext->buffer->mat_first_index -
-					(BUF_MAT_COUNT (xtext->buffer) - xtext->buffer->ephemeral_count);
+					xtext->buffer->mat_first_index - db_mat;
 				gboolean near_top = (scroll_line < mat_top + margin);
 				gboolean near_bot = (entries_after > 0 &&
 					scroll_line + (int) page_size > mat_bot - margin);
@@ -1036,26 +1080,63 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 				if (near_top || near_bot || BUF_MAT_COUNT (xtext->buffer) == 0)
 				{
 					int idx;
+					int radius;
 
-					if (scroll_line <= mat_top)
-						idx = (int)(scroll_line / xtext->buffer->avg_lines_per_entry);
-					else
-						idx = xtext->buffer->mat_first_index +
-							  (int)((scroll_line - mat_top) /
-									xtext->buffer->avg_lines_per_entry);
+					/* Compute the DB target index DIRECTIONALLY from the
+					 * known boundaries of the materialized window, not from
+					 * scroll_line / avg_lines_per_entry.  The avg-based
+					 * estimate is unreliable: it can drift, and when
+					 * scroll_line lies in the lines_after estimate region
+					 * (which happens after the user scrolled up and new
+					 * messages arrived as DB-only via virt_should_materialize),
+					 * the extrapolated idx points far past the user's actual
+					 * position, causing ensure_range to evict the visible
+					 * window and producing a multi-day visual jump on a
+					 * single wheel tick.
+					 *
+					 * The user is, by definition, viewing the materialized
+					 * region — there is no need to compute their DB index.
+					 * We only need to know which edge they are approaching
+					 * and extend the window in that direction. */
+					if (BUF_MAT_COUNT (xtext->buffer) == 0)
+					{
+						/* Initial load: nothing materialized yet, fall back
+						 * to the avg-based estimate as the only available
+						 * starting point. */
+						if (xtext->buffer->avg_lines_per_entry > 0)
+							idx = (int)(scroll_line /
+								xtext->buffer->avg_lines_per_entry);
+						else
+							idx = 0;
+					}
+					else if (near_top)
+					{
+						/* Extend the window upward.  Target the entry just
+						 * before mat_first; ensure_range's radius will pull
+						 * older entries in. */
+						idx = xtext->buffer->mat_first_index - 1;
+					}
+					else /* near_bot */
+					{
+						/* Extend the window downward.  Target the entry
+						 * just after the current materialized end. */
+						int mat_end_idx = xtext->buffer->mat_first_index +
+							(BUF_MAT_COUNT (xtext->buffer) -
+							 xtext->buffer->ephemeral_count) - 1;
+						idx = mat_end_idx + 1;
+					}
 
 					if (idx < 0)
 						idx = 0;
 					if (idx >= xtext->buffer->total_entries)
 						idx = xtext->buffer->total_entries - 1;
 
-					{
-						int radius = (int)(page_size * 2 / xtext->buffer->avg_lines_per_entry);
-						if (radius < VIRT_PAGE_SIZE)
-							radius = VIRT_PAGE_SIZE;
+					radius = (int)(page_size * 2 /
+						xtext->buffer->avg_lines_per_entry);
+					if (radius < VIRT_PAGE_SIZE)
+						radius = VIRT_PAGE_SIZE;
 
-						gtk_xtext_virt_ensure_range (xtext->buffer, idx, radius);
-					}
+					gtk_xtext_virt_ensure_range (xtext->buffer, idx, radius);
 				}
 			}
 
@@ -8183,7 +8264,25 @@ gtk_xtext_init_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	}
 
 	/* Entry identification: use DB rowid when available so
-	 * eviction + rematerialization preserves the same ID. */
+	 * eviction + rematerialization preserves the same ID.
+	 *
+	 * Two disjoint ID spaces:
+	 *   [1 .. LOCAL_ENTRY_ID_BASE-1]   — DB rowids (assigned by SQLite)
+	 *   [LOCAL_ENTRY_ID_BASE .. ∞]     — local-only IDs (no DB row)
+	 *
+	 * The split eliminates collisions between locally-allocated IDs
+	 * (e.g. wrapped lines of a multiline replay message, or system
+	 * messages printed before scrollback_save runs) and future DB
+	 * rowids.  Previously, next_entry_id started at 1 and incremented
+	 * through the same space SQLite was about to use; multiline
+	 * replay batches consumed IDs that the next replay iteration's
+	 * rowid would also claim, producing duplicate (stamp, entry_id)
+	 * keys that add234 silently dropped, leaving entries in the
+	 * linked list but absent from the tree.
+	 *
+	 * 2^62 leaves the full int64 positive range usable by SQLite
+	 * while reserving the top quarter for local IDs (~4.6e18 entries
+	 * before exhaustion — effectively unbounded). */
 	ent->msgid = NULL;
 	{
 		gboolean has_db_row = (buf->pending_db_rowid > 0);
@@ -8191,11 +8290,11 @@ gtk_xtext_init_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		{
 			ent->entry_id = (guint64) buf->pending_db_rowid;
 			buf->pending_db_rowid = 0;
-			if (ent->entry_id >= buf->next_entry_id)
-				buf->next_entry_id = ent->entry_id + 1;
 		}
 		else
 		{
+			if (buf->next_entry_id < LOCAL_ENTRY_ID_BASE)
+				buf->next_entry_id = LOCAL_ENTRY_ID_BASE;
 			ent->entry_id = buf->next_entry_id++;
 		}
 		ent->has_db_row = has_db_row ? 1 : 0;
@@ -8349,8 +8448,10 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 	gtk_xtext_init_entry (buf, ent, stamp);
 	gtk_xtext_link_entry (buf, ent, LINK_TAIL);
 
-	/* Approximate total_entries between DB syncs (calc_lines corrects drift) */
-	if (HAS_VIRT_DB (buf))
+	/* Track DB-row count.  Only entries actually written to the DB
+	 * contribute — ephemerals (system messages, dedup-rejected duplicates)
+	 * have no DB row, so they must not bump total_entries. */
+	if (HAS_VIRT_DB (buf) && ent->has_db_row)
 		buf->total_entries++;
 
 	/* Local auto-advance: move marker to newest unread message when window is
@@ -8427,10 +8528,11 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	gtk_xtext_init_entry (buf, ent, stamp);
 	new_lines = gtk_xtext_link_entry (buf, ent, LINK_HEAD);
 
-	/* DB-backed bookkeeping */
+	/* DB-backed bookkeeping — only entries with a real DB row count */
 	if (HAS_VIRT_DB (buf))
 	{
-		buf->total_entries++;
+		if (ent->has_db_row)
+			buf->total_entries++;
 		if (buf->mat_first_index > 0)
 			buf->mat_first_index--;
 	}
@@ -8565,10 +8667,11 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 		buf->insert_hint_lines = lines_before_insert + new_lines;
 	}
 
-	/* DB-backed bookkeeping */
+	/* DB-backed bookkeeping — only entries with a real DB row count */
 	if (HAS_VIRT_DB (buf))
 	{
-		buf->total_entries++;
+		if (ent->has_db_row)
+			buf->total_entries++;
 
 		/* If inserted at head, the materialized window shifted down */
 		if (ent == buf->text_first)
@@ -9672,7 +9775,9 @@ gtk_xtext_buffer_new (GtkXText *xtext)
 	/* IRCv3 modernization: entry identification (Phase 1) */
 	buf->entries_by_msgid = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 	buf->entries_by_id = g_hash_table_new (g_direct_hash, g_direct_equal);
-	buf->next_entry_id = 1;	/* Start at 1, so 0 can mean "not set" */
+	/* Start at 1 (so 0 can mean "not set"); init_entry lazily bumps
+	 * to LOCAL_ENTRY_ID_BASE on first local-ID allocation. */
+	buf->next_entry_id = 1;
 
 	/* Counted B-tree for O(log n) positional access by display line.
 	 * Uses timestamp comparator for sorted insertion. */
@@ -9783,9 +9888,11 @@ gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
 	if (buf->mat_first_index < 0)
 		buf->mat_first_index = 0;
 
-	/* Ensure entry_id counter is above max DB rowid to avoid collisions */
-	if (max_rowid > 0 && buf->next_entry_id <= (guint64)max_rowid)
-		buf->next_entry_id = (guint64)max_rowid + 1;
+	/* Local IDs live in [LOCAL_ENTRY_ID_BASE..) which is disjoint from
+	 * the DB rowid space, so the historical bump-past-max_rowid here is
+	 * no longer needed.  max_rowid is unused — keep the parameter for
+	 * API stability. */
+	(void) max_rowid;
 
 	/* Set initial lines_before_mat from the formula — the only place this
 	 * is computed from the formula.  After this, it's absorptive. */
@@ -10390,8 +10497,12 @@ gtk_xtext_set_msgid (xtext_buffer *buf, textentry *ent, const char *msgid)
 void
 gtk_xtext_begin_group (xtext_buffer *buf)
 {
-	/* Use next_entry_id as a unique group_id (it won't collide with entry_ids
-	 * because group_id and entry_id are separate namespaces) */
+	/* Consume a slot from the local-ID counter for a unique group_id.
+	 * Group IDs and local entry_ids share the [LOCAL_ENTRY_ID_BASE..)
+	 * space, so this is safe even if compared against an entry_id
+	 * elsewhere — neither will ever equal a DB rowid. */
+	if (buf->next_entry_id < LOCAL_ENTRY_ID_BASE)
+		buf->next_entry_id = LOCAL_ENTRY_ID_BASE;
 	buf->current_group_id = buf->next_entry_id++;
 }
 
@@ -10941,9 +11052,15 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 
 	if (!ent)
 	{
-		/* Anchor entry was deleted - try to find nearest neighbor.
-		 * For now, just stay at current position or scroll to top.
-		 * Future enhancement: find entry with nearest timestamp. */
+		/* Anchor entry was deleted or evicted between save and restore.
+		 * Without a fallback the scrollbar value stays in the pre-mutation
+		 * coordinate space and resolves to a wildly different entry on next
+		 * render — this is the multi-day-jump symptom.  Future enhancement:
+		 * find entry with nearest timestamp.  For now, warn loudly so the
+		 * symptom is visible in the log instead of a silent visual glitch. */
+		XT_DBG ("xtext: scroll anchor (center) entry_id %" G_GUINT64_FORMAT
+			" not found after mutation; scroll position lost\n",
+			anchor->anchor_entry_id);
 		return;
 	}
 
@@ -11059,7 +11176,14 @@ gtk_xtext_restore_scroll_anchor_top (xtext_buffer *buf, const xtext_scroll_ancho
 
 	ent = gtk_xtext_find_by_id (buf, anchor->anchor_entry_id);
 	if (!ent)
+	{
+		/* See restore_scroll_anchor (center variant) for rationale —
+		 * silent failure here was a primary cause of the multi-day jump. */
+		XT_DBG ("xtext: scroll anchor (top) entry_id %" G_GUINT64_FORMAT
+			" not found after mutation; scroll position lost\n",
+			anchor->anchor_entry_id);
 		return;
+	}
 
 	target_line = gtk_xtext_entry_get_line (buf, ent);
 	if (target_line < 0)

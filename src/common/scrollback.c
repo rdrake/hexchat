@@ -659,6 +659,17 @@ scrollback_db_save (scrollback_db *db, const char *channel,
 		return -1;
 	}
 
+	/* INSERT OR IGNORE returns SQLITE_DONE even when the row is silently
+	 * dropped due to a UNIQUE constraint conflict on msgid.  In that case
+	 * sqlite3_changes() is 0 and sqlite3_last_insert_rowid() still returns
+	 * the rowid of the most recent *actual* insert (not the duplicate that
+	 * was ignored).  Returning that stale rowid would cause the caller to
+	 * assign a stale entry_id to a brand-new entry, producing duplicate
+	 * (entry_id, stamp) pairs in xtext's tree and a flood of orphans.
+	 * Treat the duplicate-ignored case as "row not stored". */
+	if (sqlite3_changes (db->db) == 0)
+		return -1;
+
 	return (gint64) sqlite3_last_insert_rowid (db->db);
 }
 
