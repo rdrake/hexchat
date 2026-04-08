@@ -925,7 +925,15 @@ gtk_xtext_adjustment_set (xtext_buffer *buf, int fire_signal)
 			int effective_height = widget_height;
 			if (buf->xtext->status_strip_visible)
 				effective_height -= (buf->xtext->fontsize * 2 / 3 + 4);
-			page_size = (double)effective_height / buf->xtext->fontsize;
+			/* Integer page_size: a fractional page_size makes upper - page_size
+			 * fractional, which makes value fractional, which makes
+			 * pixel_offset = (value - (int)value) * fontsize non-zero — the
+			 * sub-line clip from snippet #1.  Floor to whole lines so that
+			 * bottom-edge math stays exact.  The trade-off is a strip of
+			 * background pixels below the last visible line equal to
+			 * effective_height % fontsize, which matches the standard look
+			 * in GtkTextView and other line-aligned scrollables. */
+			page_size = (double)(effective_height / buf->xtext->fontsize);
 		}
 		value = gtk_adjustment_get_value (adj);
 
@@ -1063,6 +1071,16 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			int mat_top = LINES_BEFORE_MAT (xtext->buffer);
 			int mat_bot = mat_top + BUF_LINES_MAT (xtext->buffer);
 			int margin = (int) page_size;  /* 1 page buffer before triggering */
+			/* Detect "scrollbar click into the unmaterialized region":
+			 * the click value is below mat_top, so the entry the user is
+			 * pointing at is not currently in memory.  ensure_range will
+			 * load entries around it, but ensure_range's internal
+			 * save/restore_scroll_anchor_top would otherwise teleport
+			 * value back to text_first (because pre-load nth(value)
+			 * clamped there).  Remember the click target so we can
+			 * re-place value after the load. */
+			gboolean click_into_unmat = (scroll_line < mat_top);
+			int click_target_value = scroll_line;
 
 			/* Only load if viewport is within margin of mat boundary (or outside it).
 			 * Skip the bottom-edge check when there are no entries beyond the
@@ -1111,10 +1129,25 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 					}
 					else if (near_top)
 					{
-						/* Extend the window upward.  Target the entry just
-						 * before mat_first; ensure_range's radius will pull
-						 * older entries in. */
-						idx = xtext->buffer->mat_first_index - 1;
+						/* Two sub-cases:
+						 *
+						 * (a) value is just inside mat_top — wheel scroll
+						 *     approaching the head.  Extend the window
+						 *     upward by one page; target mat_first - 1.
+						 *
+						 * (b) value is well below mat_top — scrollbar
+						 *     click into the unmaterialized region.  The
+						 *     user wants to land at an absolute line that
+						 *     no anchor in the materialized window can
+						 *     resolve to.  Compute a target DB index from
+						 *     value / avg_lines_per_entry so ensure_range
+						 *     loads around the click target instead of
+						 *     adjacent to the current window. */
+						if (scroll_line < mat_top)
+							idx = (int)(scroll_line /
+								xtext->buffer->avg_lines_per_entry);
+						else
+							idx = xtext->buffer->mat_first_index - 1;
 					}
 					else /* near_bot */
 					{
@@ -1137,6 +1170,57 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 						radius = VIRT_PAGE_SIZE;
 
 					gtk_xtext_virt_ensure_range (xtext->buffer, idx, radius);
+				}
+			}
+
+			/* For a click into the unmaterialized region, ensure_range
+			 * has now loaded the right window but its internal anchor
+			 * restore moved value back to (the old) text_first, not the
+			 * click target.  Re-place value to honor the click: nth on
+			 * the post-load coordinate space resolves to a real entry
+			 * close to where the user pointed, and we set value to that
+			 * entry's actual line number.  This also refreshes
+			 * buf->scroll_anchor so subsequent renders track the right
+			 * entry. */
+			if (click_into_unmat)
+			{
+				int sub;
+				textentry *target;
+				int target_line;
+				int new_lbm = LINES_BEFORE_MAT (xtext->buffer);
+
+				/* Convert the original click value into the new
+				 * coordinate space and resolve. */
+				target = gtk_xtext_nth (xtext, click_target_value, &sub);
+				if (target)
+				{
+					target_line = gtk_xtext_entry_get_line (
+						xtext->buffer, target);
+					if (target_line >= 0)
+					{
+						gdouble new_val =
+							(gdouble) (target_line + new_lbm + sub);
+						gdouble new_upper = gtk_adjustment_get_upper (
+							xtext->adj);
+						gdouble new_page = gtk_adjustment_get_page_size (
+							xtext->adj);
+						if (new_val > new_upper - new_page)
+							new_val = new_upper - new_page;
+						if (new_val < 0)
+							new_val = 0;
+						g_signal_handler_block (xtext->adj,
+							xtext->vc_signal_tag);
+						gtk_adjustment_set_value (xtext->adj, new_val);
+						g_signal_handler_unblock (xtext->adj,
+							xtext->vc_signal_tag);
+
+						xtext->buffer->scroll_anchor.anchor_entry_id =
+							target->entry_id;
+						xtext->buffer->scroll_anchor.subline_offset = sub;
+						xtext->buffer->scroll_anchor.anchor_to_bottom =
+							FALSE;
+						xtext->buffer->scrollbar_down = FALSE;
+					}
 				}
 			}
 
@@ -3816,7 +3900,13 @@ gtk_xtext_scroll (GtkEventControllerScroll *controller, double dx, double dy, gp
 			new_value = adj_lower;
 		if (new_value > (adj_upper - adj_page_size))
 			new_value = adj_upper - adj_page_size;
-		gtk_adjustment_set_value (xtext->adj, new_value);
+		/* Skip the set_value call entirely when the clamped value
+		 * doesn't differ from the current one — free-spinning the
+		 * wheel into the bottom edge can produce hundreds of events
+		 * per second, all clamped to the same value, all otherwise
+		 * walking the value-changed signal path for nothing. */
+		if (new_value != adj_value)
+			gtk_adjustment_set_value (xtext->adj, new_value);
 	}
 
 	return TRUE; /* Stop propagation */
@@ -6396,74 +6486,138 @@ gtk_xtext_render_page (GtkXText * xtext)
 	}
 
 	line = 0;
-	if (xtext->buffer->scrollbar_down
-		&& xtext->buffer->text_last
-		&& xtext->buffer->num_lines > gtk_adjustment_get_page_size (xtext->adj))
 	{
-		/* Bottom-up: anchor to text_last and walk backward to fill the page.
-		 * Bypasses lbm estimate for pixel-perfect bottom alignment.
-		 * Only when content exceeds the page — partially-filled buffers
-		 * use the normal top-down path. */
+		/* Anchoring strategy:
+		 *
+		 *   Top-anchored:   value <= LINES_BEFORE_MAT (literal top of buffer)
+		 *                   → render top-down from text_first, pixel_offset 0.
+		 *                   Top edge is line-aligned; bottom may be partial.
+		 *
+		 *   Otherwise:      anchor the bottom edge of the viewport.  Pick the
+		 *                   entry+subline at the intended viewport bottom and
+		 *                   walk backward.  Bottom edge is pixel-perfect; top
+		 *                   may be partial.  This includes the scrollbar_down
+		 *                   case (where the bottom entry is text_last) and
+		 *                   the free-scroll case (where it's whatever entry
+		 *                   the bottom of the user's viewport currently
+		 *                   intersects).
+		 *
+		 * The integer page_size in adjustment_set means line-aligned edges
+		 * are exact; the partial-edge artifact only appears at the unanchored
+		 * side. */
 		int effective_height = height;
-		int lines_needed, accumulated;
-		textentry *walk;
+		gdouble adj_page = gtk_adjustment_get_page_size (xtext->adj);
+		gboolean at_top;
+		gboolean use_bottom_anchor;
 
 		if (xtext->status_strip_visible)
 			effective_height -= (xtext->fontsize * 2 / 3 + 4);
-		lines_needed = (effective_height + xtext->fontsize - 1) / xtext->fontsize;
 
-		accumulated = 0;
-		ent = NULL;
-		subline = 0;
-		for (walk = xtext->buffer->text_last; walk; walk = walk->prev)
+		at_top = (gtk_adjustment_get_value (xtext->adj)
+			<= (gdouble) LINES_BEFORE_MAT (xtext->buffer));
+		use_bottom_anchor = !at_top
+			&& xtext->buffer->text_last
+			&& xtext->buffer->num_lines > adj_page;
+
+		if (use_bottom_anchor)
 		{
-			/* Reflow stale entries before using display_lines for positioning.
-			 * Only entries in the backward walk (~1 page) are touched, not all
-			 * materialized entries.  Without this, stale estimates cause the
-			 * walk to overcount lines and start rendering too close to text_last,
-			 * leaving blank space at the bottom. */
-			if (walk->sublines_width != xtext->buffer->window_width)
+			int lines_needed, accumulated;
+			int start_sub;
+			textentry *start_ent;
+			textentry *walk;
+			gboolean from_text_last;
+
+			lines_needed = (effective_height + xtext->fontsize - 1) / xtext->fontsize;
+			from_text_last = xtext->buffer->scrollbar_down;
+
+			if (from_text_last)
 			{
-				int old_dl = walk->display_lines;
-				gtk_xtext_lines_taken (xtext->buffer, walk);
-				if (walk->display_lines != old_dl && xtext->buffer->entry_tree)
+				start_ent = xtext->buffer->text_last;
+				start_sub = -1;  /* "all sublines of start_ent" */
+			}
+			else
+			{
+				/* Free-scroll: bottom of viewport is at value + page_size - 1
+				 * (last visible line index in absolute coords).  Resolve it
+				 * to (entry, subline) and walk backward from there. */
+				int bot_line = (int) (gtk_adjustment_get_value (xtext->adj)
+					+ adj_page - 1.0);
+				start_ent = gtk_xtext_nth (xtext, bot_line, &start_sub);
+				if (!start_ent)
 				{
-					int delta = walk->display_lines - old_dl;
-					xtext->buffer->num_lines += delta;
-					update_weight234 (xtext->buffer->entry_tree, walk, delta);
+					start_ent = xtext->buffer->text_last;
+					start_sub = -1;
 				}
 			}
-			accumulated += ENT_DISPLAY_LINES (walk);
-			if (accumulated >= lines_needed)
+
+			accumulated = 0;
+			ent = NULL;
+			subline = 0;
+			for (walk = start_ent; walk; walk = walk->prev)
 			{
-				ent = walk;
-				subline = accumulated - lines_needed;
-				break;
+				int contrib;
+
+				/* Reflow stale entries before using display_lines for positioning.
+				 * Only entries in the backward walk (~1 page) are touched, not all
+				 * materialized entries.  Without this, stale estimates cause the
+				 * walk to overcount lines and start rendering too close to the
+				 * anchor, leaving blank space at the bottom. */
+				if (walk->sublines_width != xtext->buffer->window_width)
+				{
+					int old_dl = walk->display_lines;
+					gtk_xtext_lines_taken (xtext->buffer, walk);
+					if (walk->display_lines != old_dl && xtext->buffer->entry_tree)
+					{
+						int delta = walk->display_lines - old_dl;
+						xtext->buffer->num_lines += delta;
+						update_weight234 (xtext->buffer->entry_tree, walk, delta);
+					}
+				}
+
+				/* For the start entry in free-scroll mode, only sublines
+				 * 0..start_sub are inside the viewport at this end; for all
+				 * other entries, the full display_lines count contributes. */
+				if (walk == start_ent && start_sub >= 0)
+					contrib = start_sub + 1;
+				else
+					contrib = ENT_DISPLAY_LINES (walk);
+
+				accumulated += contrib;
+				if (accumulated >= lines_needed)
+				{
+					ent = walk;
+					/* This entry's first visible subline is at the
+					 * (accumulated - lines_needed)-th position within its
+					 * contributing range, which (since contributing ranges
+					 * always start at subline 0) is also the subline index. */
+					subline = accumulated - lines_needed;
+					break;
+				}
+			}
+
+			if (ent)
+				xtext->pixel_offset = lines_needed * xtext->fontsize - effective_height;
+			else
+			{
+				/* Materialized entries don't fill the page even though num_lines
+				 * says they should (lbm over-estimate).  Fall through to top-down. */
+				goto top_down;
 			}
 		}
-
-		if (ent)
-			xtext->pixel_offset = lines_needed * xtext->fontsize - effective_height;
 		else
 		{
-			/* Materialized entries don't fill the page even though num_lines
-			 * says they should (lbm over-estimate).  Fall through to top-down. */
-			goto top_down;
-		}
-	}
-	else
-	{
 top_down:
-		/* Top-down: standard path using adjustment value.
-		 * The persistent scroll_anchor is maintained in shadow mode
-		 * (updated in adjustment_changed and below) for future use
-		 * when the adjustment becomes fully derived from the anchor. */
-		xtext->pixel_offset = (gtk_adjustment_get_value (xtext->adj) - startline)
-							  * xtext->fontsize;
-		subline = 0;
-		ent = xtext->buffer->text_first;
-		if (startline > 0)
-			ent = gtk_xtext_nth (xtext, startline, &subline);
+			/* Top-anchored or short buffer: render from text_first.
+			 * pixel_offset = 0 → top edge is line-aligned.  The persistent
+			 * scroll_anchor is maintained in shadow mode (updated in
+			 * adjustment_changed and below) for future use when the
+			 * adjustment becomes fully derived from the anchor. */
+			xtext->pixel_offset = 0;
+			subline = 0;
+			ent = xtext->buffer->text_first;
+			if (startline > 0)
+				ent = gtk_xtext_nth (xtext, startline, &subline);
+		}
 	}
 
 	xtext->buffer->pagetop_ent = ent;
