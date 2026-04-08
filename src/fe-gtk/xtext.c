@@ -1550,7 +1550,10 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 		 * bottom because num_lines is an estimate.  The scroll anchor system
 		 * still handles non-bottom positions correctly during width changes. */
 		if (was_down)
+		{
 			xtext->buffer->scrollbar_down = TRUE;
+			xtext->buffer->scroll_anchor.anchor_to_bottom = TRUE;
+		}
 	}
 	if (!height_only)
 	{
@@ -1608,6 +1611,7 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 		if (was_down)
 		{
 			xtext->buffer->scrollbar_down = TRUE;
+			xtext->buffer->scroll_anchor.anchor_to_bottom = TRUE;
 		}
 		else
 		{
@@ -3662,7 +3666,10 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 			gtk_xtext_calc_lines (xtext->buffer, FALSE);
 			gtk_xtext_restore_scroll_anchor (xtext->buffer, &anchor);
 			if (was_down)
+			{
 				xtext->buffer->scrollbar_down = TRUE;
+				xtext->buffer->scroll_anchor.anchor_to_bottom = TRUE;
+			}
 			gtk_widget_queue_draw (GTK_WIDGET (xtext));
 			xtext->press_handled = TRUE;
 			return;
@@ -6290,7 +6297,10 @@ gtk_xtext_calc_lines (xtext_buffer *buf, int fire_signal)
 	if (buf->xtext->vc_signal_tag)
 		g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
 	if (was_down)
+	{
 		buf->scrollbar_down = TRUE;
+		buf->scroll_anchor.anchor_to_bottom = TRUE;
+	}
 }
 
 /* find the n-th line in the linked list, this includes wrap calculations */
@@ -7652,6 +7662,8 @@ gtk_xtext_clear (xtext_buffer *buf, int lines)
 		if (buf->xtext->auto_indent)
 			buf->indent = MARGIN;
 		buf->scrollbar_down = TRUE;
+		buf->scroll_anchor.anchor_to_bottom = TRUE;
+		buf->scroll_anchor.anchor_entry_id = 0;
 		buf->last_ent_start_id = 0;
 		buf->last_ent_end_id = 0;
 		buf->marker_pos_id = 0;
@@ -9867,6 +9879,7 @@ gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 		if (was_down)
 		{
 			buf->scrollbar_down = TRUE;
+			buf->scroll_anchor.anchor_to_bottom = TRUE;
 			gtk_adjustment_set_value (xtext->adj, gtk_adjustment_get_upper (xtext->adj) - gtk_adjustment_get_page_size (xtext->adj));
 		}
 		else if (buf->old_value >= 0)
@@ -10068,6 +10081,7 @@ gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
 			gdouble upper = gtk_adjustment_get_upper (buf->xtext->adj);
 			gdouble page = gtk_adjustment_get_page_size (buf->xtext->adj);
 			buf->scrollbar_down = TRUE;
+			buf->scroll_anchor.anchor_to_bottom = TRUE;
 			buf->old_value = (gfloat)(upper - page);
 			if (buf->old_value < 0)
 				buf->old_value = 0;
@@ -10076,6 +10090,7 @@ gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
 		else if (was_down)
 		{
 			buf->scrollbar_down = TRUE;
+			buf->scroll_anchor.anchor_to_bottom = TRUE;
 		}
 
 		g_signal_handler_unblock (buf->xtext->adj, buf->xtext->vc_signal_tag);
@@ -11251,9 +11266,15 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 
 	/* Update scrollbar_down flag based on new position */
 	if (new_value >= upper - page_size - 1.0)
+	{
 		buf->scrollbar_down = TRUE;
+		buf->scroll_anchor.anchor_to_bottom = TRUE;
+	}
 	else
+	{
 		buf->scrollbar_down = FALSE;
+		buf->scroll_anchor.anchor_to_bottom = FALSE;
+	}
 
 	/* Set the new scroll position */
 	gtk_adjustment_set_value (adj, new_value);
@@ -11366,9 +11387,15 @@ gtk_xtext_restore_scroll_anchor_top (xtext_buffer *buf, const xtext_scroll_ancho
 		new_value = 0;
 
 	if (new_value >= upper - page_size - 1.0)
+	{
 		buf->scrollbar_down = TRUE;
+		buf->scroll_anchor.anchor_to_bottom = TRUE;
+	}
 	else
+	{
 		buf->scrollbar_down = FALSE;
+		buf->scroll_anchor.anchor_to_bottom = FALSE;
+	}
 
 	gtk_adjustment_set_value (adj, new_value);
 	buf->pagetop_ent = NULL;
