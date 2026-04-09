@@ -1019,14 +1019,18 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 		{
 			int anchor_subline;
 			textentry *anchor_ent;
+			int bot_line;
 
 			xtext->buffer->scrollbar_down = FALSE;
 			xtext->buffer->scroll_anchor.anchor_to_bottom = FALSE;
 
-			/* Sync anchor to current scroll position so it's always
-			 * up-to-date (not just at render time).  This is essential
-			 * for Phase 3 where render_page reads from the anchor. */
-			anchor_ent = gtk_xtext_nth (xtext, (int)value, &anchor_subline);
+			/* Convention: scroll_anchor.anchor_entry_id stores the entry+subline
+			 * at the BOTTOM edge of the viewport, not the top.  This matches the
+			 * bottom-anchored render path: render_page walks backward from this
+			 * entry to fill the page, giving pixel-perfect bottom alignment.
+			 * The top edge falls where it falls (potentially a partial line). */
+			bot_line = (int) (value + page_size - 1.0);
+			anchor_ent = gtk_xtext_nth (xtext, bot_line, &anchor_subline);
 			if (anchor_ent)
 			{
 				xtext->buffer->scroll_anchor.anchor_entry_id = anchor_ent->entry_id;
@@ -1179,31 +1183,35 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			 * click target.  Re-place value to honor the click: nth on
 			 * the post-load coordinate space resolves to a real entry
 			 * close to where the user pointed, and we set value to that
-			 * entry's actual line number.  This also refreshes
-			 * buf->scroll_anchor so subsequent renders track the right
-			 * entry. */
+			 * entry's actual line number.  buf->scroll_anchor is then
+			 * refreshed to point at the BOTTOM-of-viewport entry per
+			 * the convention used by render_page. */
 			if (click_into_unmat)
 			{
-				int sub;
-				textentry *target;
-				int target_line;
+				int top_sub;
+				textentry *top_target;
+				int top_line;
 				int new_lbm = LINES_BEFORE_MAT (xtext->buffer);
 
-				/* Convert the original click value into the new
-				 * coordinate space and resolve. */
-				target = gtk_xtext_nth (xtext, click_target_value, &sub);
-				if (target)
+				/* Resolve the click target (will become the viewport top) in
+				 * the new coordinate space. */
+				top_target = gtk_xtext_nth (xtext, click_target_value,
+					&top_sub);
+				if (top_target)
 				{
-					target_line = gtk_xtext_entry_get_line (
-						xtext->buffer, target);
-					if (target_line >= 0)
+					top_line = gtk_xtext_entry_get_line (
+						xtext->buffer, top_target);
+					if (top_line >= 0)
 					{
 						gdouble new_val =
-							(gdouble) (target_line + new_lbm + sub);
+							(gdouble) (top_line + new_lbm + top_sub);
 						gdouble new_upper = gtk_adjustment_get_upper (
 							xtext->adj);
 						gdouble new_page = gtk_adjustment_get_page_size (
 							xtext->adj);
+						int bot_sub;
+						textentry *bot_target;
+
 						if (new_val > new_upper - new_page)
 							new_val = new_upper - new_page;
 						if (new_val < 0)
@@ -1214,9 +1222,17 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 						g_signal_handler_unblock (xtext->adj,
 							xtext->vc_signal_tag);
 
-						xtext->buffer->scroll_anchor.anchor_entry_id =
-							target->entry_id;
-						xtext->buffer->scroll_anchor.subline_offset = sub;
+						/* The persistent anchor stores the BOTTOM entry of
+						 * the viewport.  Resolve it from the new value. */
+						bot_target = gtk_xtext_nth (xtext,
+							(int) (new_val + new_page - 1.0), &bot_sub);
+						if (bot_target)
+						{
+							xtext->buffer->scroll_anchor.anchor_entry_id =
+								bot_target->entry_id;
+							xtext->buffer->scroll_anchor.subline_offset =
+								bot_sub;
+						}
 						xtext->buffer->scroll_anchor.anchor_to_bottom =
 							FALSE;
 						xtext->buffer->scrollbar_down = FALSE;
@@ -6523,8 +6539,15 @@ gtk_xtext_render_page (GtkXText * xtext)
 		if (xtext->status_strip_visible)
 			effective_height -= (xtext->fontsize * 2 / 3 + 4);
 
-		at_top = (gtk_adjustment_get_value (xtext->adj)
-			<= (gdouble) LINES_BEFORE_MAT (xtext->buffer));
+		/* "At top" is encoded by anchor_entry_id == 0 with no bottom pin.
+		 * Fall back to checking adj->value for the very first render
+		 * (before adjustment_changed has captured an anchor) and for
+		 * paths that adjust adj->value without going through the
+		 * value-changed signal handler. */
+		at_top = (xtext->buffer->scroll_anchor.anchor_entry_id == 0
+			&& !xtext->buffer->scroll_anchor.anchor_to_bottom)
+			|| (gtk_adjustment_get_value (xtext->adj)
+				<= (gdouble) LINES_BEFORE_MAT (xtext->buffer));
 		use_bottom_anchor = !at_top
 			&& xtext->buffer->text_last
 			&& xtext->buffer->num_lines > adj_page;
@@ -6547,16 +6570,35 @@ gtk_xtext_render_page (GtkXText * xtext)
 			}
 			else
 			{
-				/* Free-scroll: bottom of viewport is at value + page_size - 1
-				 * (last visible line index in absolute coords).  Resolve it
-				 * to (entry, subline) and walk backward from there. */
-				int bot_line = (int) (gtk_adjustment_get_value (xtext->adj)
-					+ adj_page - 1.0);
-				start_ent = gtk_xtext_nth (xtext, bot_line, &start_sub);
+				/* Free-scroll: read the bottom-of-viewport entry directly
+				 * from the persistent scroll_anchor.  This bypasses adj->value
+				 * and gtk_xtext_nth, both of which can drift after a buffer
+				 * mutation (the anchor entry_id is stable across mutations
+				 * because it survives in the entries_by_id hash). */
+				start_ent = NULL;
+				start_sub = -1;
+				if (xtext->buffer->scroll_anchor.anchor_entry_id != 0)
+				{
+					start_ent = gtk_xtext_find_by_id (xtext->buffer,
+						xtext->buffer->scroll_anchor.anchor_entry_id);
+					if (start_ent)
+						start_sub =
+							xtext->buffer->scroll_anchor.subline_offset;
+				}
 				if (!start_ent)
 				{
-					start_ent = xtext->buffer->text_last;
-					start_sub = -1;
+					/* Anchor lost or never set — fall back to nth(value)
+					 * resolution.  This also covers the very first render
+					 * after a buffer switch when the anchor hasn't been
+					 * captured yet. */
+					int bot_line = (int) (gtk_adjustment_get_value (xtext->adj)
+						+ adj_page - 1.0);
+					start_ent = gtk_xtext_nth (xtext, bot_line, &start_sub);
+					if (!start_ent)
+					{
+						start_ent = xtext->buffer->text_last;
+						start_sub = -1;
+					}
 				}
 			}
 
@@ -6619,9 +6661,8 @@ gtk_xtext_render_page (GtkXText * xtext)
 top_down:
 			/* Top-anchored or short buffer: render from text_first.
 			 * pixel_offset = 0 → top edge is line-aligned.  The persistent
-			 * scroll_anchor is maintained in shadow mode (updated in
-			 * adjustment_changed and below) for future use when the
-			 * adjustment becomes fully derived from the anchor. */
+			 * scroll_anchor is maintained by adjustment_changed; render_page
+			 * is purely a reader. */
 			xtext->pixel_offset = 0;
 			subline = 0;
 			ent = xtext->buffer->text_first;
@@ -6632,13 +6673,6 @@ top_down:
 
 	xtext->buffer->pagetop_ent = ent;
 	xtext->buffer->pagetop_subline = subline;
-
-	/* Shadow: keep persistent anchor in sync with what's rendered */
-	if (ent && !xtext->buffer->scroll_anchor.anchor_to_bottom)
-	{
-		xtext->buffer->scroll_anchor.anchor_entry_id = ent->entry_id;
-		xtext->buffer->scroll_anchor.subline_offset = subline;
-	}
 
 	if (xtext->buffer->num_lines <= gtk_adjustment_get_page_size (xtext->adj))
 		dontscroll (xtext->buffer);
