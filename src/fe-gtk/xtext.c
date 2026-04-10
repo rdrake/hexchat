@@ -1501,54 +1501,13 @@ gtk_xtext_measure (GtkWidget *widget,
 		*natural_baseline = -1;
 }
 
-/* Timeout for deferred line recalculation during window resize.
- * This throttles expensive recalculations when the user is actively resizing. */
-#define RESIZE_TIMEOUT 50
-
-static gboolean
-gtk_xtext_resize_cb (gpointer data)
-{
-	GtkXText *xtext = data;
-#if XTEXT_DEBUG_SCROLL
-	gint64 t0 = g_get_monotonic_time ();
-#endif
-
-	xtext->resize_tag = 0;
-
-	/* Recompute line counts WITHOUT Pango reflow.  The immediate calc_lines
-	 * in size_allocate already invalidated stale entries (set sublines_width=0
-	 * for multi-liners); calling calc_lines again with recompute_sublines=TRUE
-	 * would trigger full Pango reflow for every invalidated entry — O(n) at
-	 * ~250µs/entry, producing 360ms+ stalls at mat=2688.
-	 * Instead, just re-sum the cached display_lines estimates.  render_page's
-	 * lazy reflow handles the ~30 on-screen entries; off-screen ones stay
-	 * as estimates until scrolled into view. */
-	{
-		gboolean was_down = xtext->buffer->scrollbar_down;
-		if (xtext->buffer->xtext->vc_signal_tag)
-			g_signal_handler_block (xtext->buffer->xtext->adj,
-				xtext->buffer->xtext->vc_signal_tag);
-		gtk_xtext_calc_lines_virtual_ex (xtext->buffer, TRUE, FALSE);
-		if (xtext->buffer->xtext->vc_signal_tag)
-			g_signal_handler_unblock (xtext->buffer->xtext->adj,
-				xtext->buffer->xtext->vc_signal_tag);
-		if (was_down)
-		{
-			xtext->buffer->scrollbar_down = TRUE;
-			xtext->buffer->scroll_anchor.anchor_to_bottom = TRUE;
-		}
-	}
-	gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
-
-	gtk_widget_queue_draw (GTK_WIDGET (xtext));
-
-#if XTEXT_DEBUG_SCROLL
-	XT_DBG ("[resize_cb] deferred: %lld us  mat=%d\n",
-		(long long)(g_get_monotonic_time () - t0),
-		BUF_MAT_COUNT (xtext->buffer));
-#endif
-	return G_SOURCE_REMOVE;
-}
+/* Historically there was a deferred resize_cb here (50ms timeout) that
+ * ran an expensive Pango reflow pass after the immediate size_allocate.
+ * With the lazy calc_lines path (recompute_sublines=FALSE) and
+ * render_page's on-demand reflow, the deferred pass is redundant —
+ * it does the same cheap O(n) sum the immediate path already did.
+ * Removed entirely; resize_tag is kept in the struct for ABI but
+ * never armed. */
 
 /* GTK4: size_allocate has different signature - width, height, baseline */
 static void
@@ -1606,11 +1565,6 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 			/* First real allocation — text was loaded before the widget had
 			 * a width, so line counts are wrong.  Recalculate immediately
 			 * and scroll to bottom if that's where we should be. */
-			if (xtext->resize_tag)
-			{
-				g_source_remove (xtext->resize_tag);
-				xtext->resize_tag = 0;
-			}
 			gtk_xtext_calc_lines (xtext->buffer, FALSE);
 			if (xtext->buffer->scrollbar_down)
 				gtk_adjustment_set_value (xtext->adj,
@@ -1622,12 +1576,11 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 
 		gtk_xtext_save_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
 
-		/* Immediate lazy recompute: re-sum cached display_lines WITHOUT
-		 * Pango reflow.  Multi-liners keep their old display_lines as
-		 * estimates; only single-liners that still fit at the new width
-		 * are stamped cheaply.  The scrollbar position is approximate
-		 * but the visual content is correct (render_page reflows on
-		 * demand).  The deferred resize_cb refines estimates later. */
+		/* Lazy recompute: re-sum cached display_lines WITHOUT Pango
+		 * reflow.  render_page reflows the ~30 visible entries on
+		 * demand; everything else keeps its cached estimate.  With
+		 * tail eviction bounding mat_count to ~500, this walk is
+		 * sub-millisecond even in the worst case. */
 		if (xtext->resize_tag)
 		{
 			g_source_remove (xtext->resize_tag);
@@ -1657,12 +1610,6 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 #endif
 		}
 		gtk_widget_queue_draw (widget);
-
-		/* Schedule deferred full recompute to correct lazy estimates.
-		 * The immediate calc_lines uses stale display_lines for
-		 * off-screen multi-liners; the deferred pass fixes them. */
-		xtext->resize_tag = g_timeout_add (RESIZE_TIMEOUT,
-		                                    gtk_xtext_resize_cb, xtext);
 	}
 	else
 	{
@@ -10586,11 +10533,36 @@ gtk_xtext_virt_ensure_range (xtext_buffer *buf, int center_index, int radius)
 	}
 	}
 
-	/* Tail eviction intentionally omitted.  Evicting from the tail
-	 * converts actual line counts into lossy estimates (lines_after),
-	 * which inflates num_lines and creates blank space at the bottom.
-	 * Only head eviction is used — memory is bounded by total_entries
-	 * which is limited by max_lines at insertion time. */
+	/* Tail eviction: symmetric with head eviction.  When the user scrolls
+	 * up, the materialized window grows at the head; evict from the tail
+	 * to keep mat_count near VIRT_MAT_WINDOW.  Previously omitted because
+	 * "converting actual to lossy estimates creates blank space at the
+	 * bottom" — but with bottom-up rendering anchored to text_last (or
+	 * scroll_anchor), the renderer doesn't derive the viewport from
+	 * num_lines, so estimate drift only affects the scrollbar thumb
+	 * position, not visible content.  Keeping mat_count bounded prevents
+	 * O(n) walks in calc_lines from hitting thousands of entries after
+	 * the user scrolls to the top and back. */
+	{
+		int mat_db_count = BUF_MAT_COUNT (buf) - buf->ephemeral_count;
+		int mat_end_idx = buf->mat_first_index + mat_db_count - 1;
+		int max = VIRT_MAT_WINDOW;
+
+		while (mat_end_idx > want_end + VIRT_PAGE_SIZE &&
+		       BUF_MAT_COUNT (buf) > max)
+		{
+			/* Don't evict pinned entries (selection or ephemeral) */
+			if (buf->text_last && buf->sel_pin_end_id != 0 &&
+			    buf->text_last->entry_id == buf->sel_pin_end_id)
+				break;
+			if (buf->text_last && (buf->text_last->flags & TEXTENTRY_FLAG_EPHEMERAL))
+				break;
+
+			gtk_xtext_virt_evict_tail (buf);
+			mat_db_count = BUF_MAT_COUNT (buf) - buf->ephemeral_count;
+			mat_end_idx = buf->mat_first_index + mat_db_count - 1;
+		}
+	}
 
 	/* Phase 5: only recompute if something was actually loaded or evicted.
 	 * If ensure_range was called but the materialization window didn't change,
