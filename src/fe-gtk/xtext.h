@@ -195,7 +195,6 @@ typedef struct {
 	int window_height;
 
 	unsigned int time_stamp:1;
-	unsigned int scrollbar_down:1;
 	unsigned int needs_recalc:1;
 	unsigned int marker_seen:1;
 	unsigned int server_read_marker:1;	/* server has draft/read-marker — suppress local auto-advance */
