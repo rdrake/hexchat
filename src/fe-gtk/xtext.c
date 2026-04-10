@@ -1280,7 +1280,6 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			 * page click, etc.) so the cached entry no longer matches.  Without
 			 * this, motion_notify → find_char → nth() uses the stale cache and
 			 * returns the wrong entry, causing flicker. */
-			xtext->buffer->pagetop_ent = NULL;
 
 			if (!xtext->io_tag)
 				xtext->io_tag = g_timeout_add (REFRESH_TIMEOUT,
@@ -1614,7 +1613,6 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 		gdouble old_page = gtk_adjustment_get_page_size (xtext->adj);
 		gdouble old_value = gtk_adjustment_get_value (xtext->adj);
 
-		xtext->buffer->pagetop_ent = NULL;
 		gtk_xtext_adjustment_set (xtext->buffer, FALSE);
 
 		if (was_down)
@@ -6280,7 +6278,6 @@ gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
 	if (buf->num_lines < 1)
 		buf->num_lines = 1;
 
-	buf->pagetop_ent = NULL;
 	gtk_xtext_adjustment_set (buf, fire_signal);
 }
 
@@ -7431,9 +7428,6 @@ gtk_xtext_kill_ent (xtext_buffer *buffer, textentry *ent)
 	visible = buffer->xtext->buffer == buffer &&
 				 gtk_xtext_check_ent_visibility (buffer->xtext, ent, 0);
 
-	if (ent == buffer->pagetop_ent)
-		buffer->pagetop_ent = NULL;
-
 	/* If the scroll anchor points to this entry, move to neighbor */
 	if (buffer->scroll_anchor.anchor_entry_id == ent->entry_id)
 	{
@@ -7933,10 +7927,6 @@ gtk_xtext_search_textentry_del (xtext_buffer *buf, textentry *ent)
 		buf->curmark = NULL;
 		buf->curdata.u = 0;
 	}
-	if (buf->pagetop_ent == ent)
-	{
-		buf->pagetop_ent = NULL;
-	}
 	if (buf->hintsearch_id == ent->entry_id)
 	{
 		buf->hintsearch_id = 0;
@@ -8132,7 +8122,6 @@ gtk_xtext_search_virt_navigate (GtkXText *xtext, gtk_xtext_search_flags flags)
 		float value;
 		textentry *walk;
 
-		buf->pagetop_ent = NULL;
 		value = LINES_BEFORE_MAT (buf);
 		for (walk = buf->text_first; walk && walk != ent; walk = walk->next)
 			value += ENT_DISPLAY_LINES (walk);
@@ -8348,7 +8337,6 @@ gtk_xtext_search (GtkXText * xtext, const gchar *text, gtk_xtext_search_flags fl
 		float value;
 		textentry *hint = ent;
 
-		buf->pagetop_ent = NULL;
 		value = LINES_BEFORE_MAT (buf);
 		for (ent = buf->text_first;
 			  ent && ent != hint; ent = ent->next)
@@ -9574,7 +9562,6 @@ gtk_xtext_enforce_mat_window (xtext_buffer *buf)
 		if (BUF_MAT_COUNT (buf) >= old_count)
 			break;
 	}
-	buf->pagetop_ent = NULL;
 }
 
 void
@@ -9927,7 +9914,6 @@ gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 	/* sanity check */
 	else if (gtk_adjustment_get_value (xtext->adj) > gtk_adjustment_get_upper (xtext->adj) - gtk_adjustment_get_page_size (xtext->adj))
 	{
-		/*buf->pagetop_ent = NULL;*/
 		gtk_adjustment_set_value (xtext->adj, gtk_adjustment_get_upper (xtext->adj) - gtk_adjustment_get_page_size (xtext->adj));
 		if (gtk_adjustment_get_value (xtext->adj) < 0)
 			gtk_adjustment_set_value (xtext->adj, 0);
@@ -9949,7 +9935,6 @@ gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 		} else if (buf->window_height != h)
 		{
 			buf->window_height = h;
-			buf->pagetop_ent = NULL;
 			if (buf->scroll_anchor.anchor_to_bottom)
 				gtk_adjustment_set_value (xtext->adj, gtk_adjustment_get_upper (xtext->adj));
 			gtk_xtext_adjustment_set (buf, FALSE);
@@ -11333,8 +11318,6 @@ gtk_xtext_restore_scroll_anchor (xtext_buffer *buf, const xtext_scroll_anchor *a
 	/* Set the new scroll position */
 	gtk_adjustment_set_value (adj, new_value);
 
-	/* Invalidate pagetop cache since position changed */
-	buf->pagetop_ent = NULL;
 }
 
 /* Top-based anchor save: anchor to the top-visible entry (not center).
@@ -11450,7 +11433,6 @@ gtk_xtext_restore_scroll_anchor_top (xtext_buffer *buf, const xtext_scroll_ancho
 	}
 
 	gtk_adjustment_set_value (adj, new_value);
-	buf->pagetop_ent = NULL;
 }
 
 GtkWidget *
