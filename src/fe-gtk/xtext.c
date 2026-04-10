@@ -279,6 +279,8 @@ char *nocasestrstr (const char *text, const char *tofind);	/* util.c */
 int xtext_get_stamp_str (time_t, char **);
 static void gtk_xtext_render_page (GtkXText * xtext);
 void gtk_xtext_calc_lines (xtext_buffer *buf, int);
+static void gtk_xtext_calc_lines_virtual_ex (xtext_buffer *buf, int fire_signal,
+                                              gboolean recompute_sublines);
 static gboolean gtk_xtext_is_selecting (GtkXText *xtext);
 static char *gtk_xtext_selection_get_text (GtkXText *xtext, int *len_ret);
 static textentry *gtk_xtext_nth (GtkXText *xtext, int line, int *subline);
@@ -1507,18 +1509,44 @@ static gboolean
 gtk_xtext_resize_cb (gpointer data)
 {
 	GtkXText *xtext = data;
+#if XTEXT_DEBUG_SCROLL
+	gint64 t0 = g_get_monotonic_time ();
+#endif
 
 	xtext->resize_tag = 0;
 
-	/* calc_lines stamps single-liners (no Pango) and leaves multi-liners
-	 * with stale display_lines as estimates.  The lazy reflow in render_ents
-	 * corrects them on demand when scrolled into view.  No O(n) Pango walk
-	 * needed — the display cache manages sublines lifecycle. */
-	gtk_xtext_calc_lines (xtext->buffer, FALSE);
+	/* Recompute line counts WITHOUT Pango reflow.  The immediate calc_lines
+	 * in size_allocate already invalidated stale entries (set sublines_width=0
+	 * for multi-liners); calling calc_lines again with recompute_sublines=TRUE
+	 * would trigger full Pango reflow for every invalidated entry — O(n) at
+	 * ~250µs/entry, producing 360ms+ stalls at mat=2688.
+	 * Instead, just re-sum the cached display_lines estimates.  render_page's
+	 * lazy reflow handles the ~30 on-screen entries; off-screen ones stay
+	 * as estimates until scrolled into view. */
+	{
+		gboolean was_down = xtext->buffer->scrollbar_down;
+		if (xtext->buffer->xtext->vc_signal_tag)
+			g_signal_handler_block (xtext->buffer->xtext->adj,
+				xtext->buffer->xtext->vc_signal_tag);
+		gtk_xtext_calc_lines_virtual_ex (xtext->buffer, TRUE, FALSE);
+		if (xtext->buffer->xtext->vc_signal_tag)
+			g_signal_handler_unblock (xtext->buffer->xtext->adj,
+				xtext->buffer->xtext->vc_signal_tag);
+		if (was_down)
+		{
+			xtext->buffer->scrollbar_down = TRUE;
+			xtext->buffer->scroll_anchor.anchor_to_bottom = TRUE;
+		}
+	}
 	gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
 
 	gtk_widget_queue_draw (GTK_WIDGET (xtext));
 
+#if XTEXT_DEBUG_SCROLL
+	XT_DBG ("[resize_cb] deferred: %lld us  mat=%d\n",
+		(long long)(g_get_monotonic_time () - t0),
+		BUF_MAT_COUNT (xtext->buffer));
+#endif
 	return G_SOURCE_REMOVE;
 }
 
@@ -1594,17 +1622,40 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 
 		gtk_xtext_save_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
 
-		/* All buffers: immediate lazy calc_lines (single-liner fast path
-		 * skips Pango for most entries) + deferred full recompute to
-		 * correct stale multi-liner estimates. */
+		/* Immediate lazy recompute: re-sum cached display_lines WITHOUT
+		 * Pango reflow.  Multi-liners keep their old display_lines as
+		 * estimates; only single-liners that still fit at the new width
+		 * are stamped cheaply.  The scrollbar position is approximate
+		 * but the visual content is correct (render_page reflows on
+		 * demand).  The deferred resize_cb refines estimates later. */
 		if (xtext->resize_tag)
 		{
 			g_source_remove (xtext->resize_tag);
 			xtext->resize_tag = 0;
 		}
-		gtk_xtext_calc_lines (xtext->buffer, FALSE);
-		gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
-		gtk_xtext_adjustment_set (xtext->buffer, FALSE);
+		{
+			gboolean was_down = xtext->buffer->scrollbar_down;
+#if XTEXT_DEBUG_SCROLL
+			gint64 t0 = g_get_monotonic_time ();
+#endif
+			if (xtext->vc_signal_tag)
+				g_signal_handler_block (xtext->adj, xtext->vc_signal_tag);
+			gtk_xtext_calc_lines_virtual_ex (xtext->buffer, TRUE, FALSE);
+			if (xtext->vc_signal_tag)
+				g_signal_handler_unblock (xtext->adj, xtext->vc_signal_tag);
+			if (was_down)
+			{
+				xtext->buffer->scrollbar_down = TRUE;
+				xtext->buffer->scroll_anchor.anchor_to_bottom = TRUE;
+			}
+			gtk_xtext_restore_scroll_anchor (xtext->buffer, &xtext->resize_anchor);
+			gtk_xtext_adjustment_set (xtext->buffer, FALSE);
+#if XTEXT_DEBUG_SCROLL
+			XT_DBG ("[resize] immediate: %lld us  mat=%d\n",
+				(long long)(g_get_monotonic_time () - t0),
+				BUF_MAT_COUNT (xtext->buffer));
+#endif
+		}
 		gtk_widget_queue_draw (widget);
 
 		/* Schedule deferred full recompute to correct lazy estimates.
@@ -6493,6 +6544,9 @@ gtk_xtext_render_page (GtkXText * xtext)
 	int subline;
 	int startline = gtk_adjustment_get_value (xtext->adj);
 	int pos, overlap;
+#if XTEXT_DEBUG_SCROLL
+	gint64 render_t0 = g_get_monotonic_time ();
+#endif
 
 	if(!gtk_widget_get_realized(GTK_WIDGET(xtext)))
 	  return;
@@ -6788,6 +6842,15 @@ top_down:
 	/* draw toast overlays at the top */
 	if (xtext->toast_count > 0)
 		gtk_xtext_draw_toasts (xtext, width + MARGIN, height);
+
+#if XTEXT_DEBUG_SCROLL
+	XT_DBG ("[render_page] %lld us  mat=%d bottom=%d at_top=%d\n",
+		(long long)(g_get_monotonic_time () - render_t0),
+		BUF_MAT_COUNT (xtext->buffer),
+		xtext->buffer->scrollbar_down,
+		(int)(gtk_adjustment_get_value (xtext->adj)
+			<= (gdouble) LINES_BEFORE_MAT (xtext->buffer)));
+#endif
 }
 
 /* ---- Bottom status strip (two-zone layout) ---- */
