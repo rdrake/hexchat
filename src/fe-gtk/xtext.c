@@ -1240,7 +1240,7 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			}
 
 			/* Re-read value after ensure_range + anchor restore, which may
-			 * have shifted it.  Needed for old_value update at bottom. */
+			 * have shifted it.  Needed for the change-gate update below. */
 			value = gtk_adjustment_get_value (xtext->adj);
 
 			/* Re-check scroll-to-top after ensure_range.  When mat_first_index
@@ -1264,29 +1264,17 @@ gtk_xtext_adjustment_changed (GtkAdjustment * adj, GtkXText * xtext)
 			}
 		}
 
-		if (value + 1 == xtext->buffer->old_value ||
-			 value - 1 == xtext->buffer->old_value)	/* clicked an arrow? */
+		/* Queue a redraw.  The old code distinguished arrow clicks (±1 line,
+		 * immediate redraw) from jumps (thumb drag, debounced 20ms).  With
+		 * GTK4 queue_draw is already deferred to the next frame, so the
+		 * distinction is unnecessary.  Cancel any pending debounce timer
+		 * and redraw immediately. */
+		if (xtext->io_tag)
 		{
-			if (xtext->io_tag)
-			{
-				g_source_remove (xtext->io_tag);
-				xtext->io_tag = 0;
-			}
-			/* GTK3: Queue a redraw instead of rendering directly */
-			gtk_widget_queue_draw (GTK_WIDGET (xtext));
-		} else
-		{
-			/* Invalidate pagetop cache — the scroll position jumped (thumb drag,
-			 * page click, etc.) so the cached entry no longer matches.  Without
-			 * this, motion_notify → find_char → nth() uses the stale cache and
-			 * returns the wrong entry, causing flicker. */
-
-			if (!xtext->io_tag)
-				xtext->io_tag = g_timeout_add (REFRESH_TIMEOUT,
-															(GSourceFunc)
-															gtk_xtext_adjustment_timeout,
-															xtext);
+			g_source_remove (xtext->io_tag);
+			xtext->io_tag = 0;
 		}
+		gtk_widget_queue_draw (GTK_WIDGET (xtext));
 	}
 	xtext->buffer->old_value = value;
 }
@@ -7579,7 +7567,6 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 		else
 			buffer->text_last = NULL;
 
-		buffer->old_value -= ent_lines;
 		if (buffer->xtext->buffer == buffer)	/* is it the current buffer? */
 		{
 			g_signal_handler_block (buffer->xtext->adj, buffer->xtext->vc_signal_tag);
@@ -8376,7 +8363,6 @@ gtk_xtext_render_page_timeout (GtkXText * xtext)
 	/* less than a complete page? */
 	if (xtext->buffer->num_lines <= gtk_adjustment_get_page_size (adj))
 	{
-		xtext->buffer->old_value = 0;
 		gtk_adjustment_set_value (adj, 0);
 		/* GTK3: Queue a redraw instead of rendering directly */
 		gtk_widget_queue_draw (GTK_WIDGET (xtext));
@@ -8386,7 +8372,6 @@ gtk_xtext_render_page_timeout (GtkXText * xtext)
 		gtk_xtext_adjustment_set (xtext->buffer, FALSE);
 		gtk_adjustment_set_value (adj, gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj));
 		g_signal_handler_unblock (xtext->adj, xtext->vc_signal_tag);
-		xtext->buffer->old_value = gtk_adjustment_get_value (adj);
 		xtext->buffer->scroll_anchor.anchor_to_bottom = TRUE;
 		/* GTK3: Queue a redraw instead of rendering directly */
 		gtk_widget_queue_draw (GTK_WIDGET (xtext));
@@ -8686,12 +8671,6 @@ gtk_xtext_append_entry (xtext_buffer *buf, textentry * ent, time_t stamp)
 															buf->xtext);
 		}
 	}
-	if (buf->scroll_anchor.anchor_to_bottom)
-	{
-		buf->old_value = buf->num_lines - gtk_adjustment_get_page_size (buf->xtext->adj);
-		if (buf->old_value < 0)
-			buf->old_value = 0;
-	}
 	if (buf->search_flags & follow)
 	{
 		GList *gl;
@@ -8727,7 +8706,6 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	}
 
 	/* Adjust scroll position - we added lines at the top, so everything shifts down */
-	buf->old_value += new_lines;
 	if (buf->xtext && buf->xtext->buffer == buf)
 	{
 		buf->xtext->select_start_adj += new_lines;
@@ -8878,7 +8856,6 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	/* Adjust scroll position if we inserted before current view */
 	if (inserted_before_pagetop)
 	{
-		buf->old_value += new_lines;
 		if (buf->xtext && buf->xtext->buffer == buf && !buf->batch_mode)
 		{
 			buf->xtext->select_start_adj += new_lines;
@@ -8892,13 +8869,8 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	/* Don't update marker_pos for historical entries */
 
 	/* Keep scroll anchored to bottom if appropriate */
-	if (buf->scroll_anchor.anchor_to_bottom)
-	{
-		buf->old_value = buf->num_lines - gtk_adjustment_get_page_size (buf->xtext->adj);
-		if (buf->old_value < 0)
-			buf->old_value = 0;
-	}
-	else if (!inserted_before_pagetop && buf->xtext && buf->xtext->buffer == buf
+	if (!buf->scroll_anchor.anchor_to_bottom
+	    && !inserted_before_pagetop && buf->xtext && buf->xtext->buffer == buf
 	         && !buf->batch_mode)
 	{
 		/* Entry inserted after viewport (e.g., chathistory catch-up while
@@ -9846,11 +9818,8 @@ gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 
 /*printf("text_buffer_show: xtext=%p buffer=%p\n", xtext, buf);*/
 
-	/* Save the current buffer's scroll position before switching */
-	if (xtext->buffer != NULL)
-	{
-		xtext->buffer->old_value = gtk_adjustment_get_value (xtext->adj);
-	}
+	/* Scroll position is preserved in buf->scroll_anchor, updated by
+	 * adjustment_changed on every value change.  No explicit save needed. */
 
 	if (xtext->add_io_tag)
 	{
@@ -9903,9 +9872,12 @@ gtk_xtext_buffer_show (GtkXText *xtext, xtext_buffer *buf, int render)
 			buf->scroll_anchor.anchor_to_bottom = TRUE;
 			gtk_adjustment_set_value (xtext->adj, gtk_adjustment_get_upper (xtext->adj) - gtk_adjustment_get_page_size (xtext->adj));
 		}
-		else if (buf->old_value >= 0)
+		else
 		{
-			gtk_adjustment_set_value (xtext->adj, buf->old_value);
+			/* Restore scroll position from the persistent anchor.
+			 * The anchor was captured in adjustment_changed when the
+			 * user last interacted with this buffer. */
+			gtk_xtext_restore_scroll_anchor (buf, &buf->scroll_anchor);
 		}
 	}
 
@@ -10098,11 +10070,11 @@ gtk_xtext_buffer_set_virtual (xtext_buffer *buf, void *db, const char *channel,
 		{
 			gdouble upper = gtk_adjustment_get_upper (buf->xtext->adj);
 			gdouble page = gtk_adjustment_get_page_size (buf->xtext->adj);
+			gdouble bottom = upper - page;
+			if (bottom < 0)
+				bottom = 0;
 			buf->scroll_anchor.anchor_to_bottom = TRUE;
-			buf->old_value = (gfloat)(upper - page);
-			if (buf->old_value < 0)
-				buf->old_value = 0;
-			gtk_adjustment_set_value (buf->xtext->adj, buf->old_value);
+			gtk_adjustment_set_value (buf->xtext->adj, bottom);
 		}
 		else if (was_down)
 		{
@@ -10640,7 +10612,6 @@ gtk_xtext_virt_should_materialize (xtext_buffer *buf, time_t stamp,
 		g_signal_handler_block (adj, buf->xtext->vc_signal_tag);
 		gtk_adjustment_configure (adj, new_val, 0, new_upper, 1, page, page);
 		g_signal_handler_unblock (adj, buf->xtext->vc_signal_tag);
-		buf->old_value = (gfloat) new_val;
 	}
 
 	return FALSE;

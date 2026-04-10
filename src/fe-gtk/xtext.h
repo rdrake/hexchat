@@ -166,7 +166,7 @@ typedef struct {
 typedef struct {
 	GtkXText *xtext;					/* attached to this widget */
 
-	gfloat old_value;					/* last known adj->value */
+	gfloat old_value;					/* last processed adj->value (change gate only) */
 	textentry *text_first;
 	textentry *text_last;
 	tree234 *entry_tree;			/* counted B-tree for O(log n) positional access */
