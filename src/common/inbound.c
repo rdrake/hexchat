@@ -1905,6 +1905,11 @@ batch_info_new (const char *id, const char *type, char *word[],
 	if (tags_data->msgid)
 		batch->msgid = g_strdup (tags_data->msgid);
 
+	/* IRCv3 draft/chathistory-end: server signals no more history available */
+	if (tags_data->all_tags &&
+	    g_hash_table_contains (tags_data->all_tags, "draft/chathistory-end"))
+		batch->chathistory_end = TRUE;
+
 	/* Count and copy parameters (starting from word[5]) */
 	param_count = 0;
 	for (i = 5; word[i] && *word[i]; i++)

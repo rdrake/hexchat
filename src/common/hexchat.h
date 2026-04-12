@@ -520,6 +520,7 @@ typedef struct batch_info
 	char *outer_batch;   /* For nested batches: reference to parent batch ID */
 	char *label;         /* labeled-response: label tag from BATCH START */
 	char *msgid;         /* msgid tag from BATCH START (for echo confirmation) */
+	unsigned int chathistory_end:1; /* draft/chathistory-end tag on BATCH START */
 	GSList *messages;    /* Collected messages (each element is batch_message) */
 	time_t started;      /* When the batch was opened (wall clock, for stale detection) */
 	time_t server_time;  /* server-time from BATCH START tags (for nested batch timestamps) */

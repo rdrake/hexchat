@@ -1188,6 +1188,7 @@ typedef struct {
 	time_t newest_timestamp;
 	char *batch_oldest_msgid;	/* owned copy */
 	gboolean is_catchup;
+	gboolean chathistory_end;	/* server signalled no more history (draft/chathistory-end) */
 	guint idle_tag;
 	scrollback_db *db;			/* for transaction begin/commit between chunks */
 } chathistory_chunk_state;
@@ -1236,6 +1237,10 @@ finish_batch_processing (chathistory_chunk_state *chunk)
 		sess->oldest_msgid = g_strdup (chunk->batch_oldest_msgid);
 	}
 
+	/* Server explicitly signalled end of history via draft/chathistory-end tag */
+	if (chunk->chathistory_end)
+		sess->history_exhausted = TRUE;
+
 	/* Catch-up loop */
 	if (chunk->is_catchup)
 	{
@@ -1244,10 +1249,9 @@ finish_batch_processing (chathistory_chunk_state *chunk)
 			/* --- BEFORE pagination phase --- */
 			sess->history_catchup_retrieved += chunk->msg_count;
 
-			/* Empty batch → server has no more history */
-			if (chunk->raw_count == 0)
+			/* No more history (empty batch or chathistory-end tag) */
+			if (chunk->raw_count == 0 || sess->history_exhausted)
 			{
-				sess->history_exhausted = TRUE;
 				finish_catchup (sess);
 				chathistory_check_before_catchup (serv);
 				return;
@@ -1467,12 +1471,16 @@ chathistory_process_batch (server *serv, batch_info *batch)
 	if (!batch->messages)
 	{
 		gboolean used_msgid = sess->history_request_used_msgid;
+		if (batch->chathistory_end)
+			sess->history_exhausted = TRUE;
 		chathistory_request_complete (sess);
 		if (is_catchup)
 		{
 			/* Server may not recognize our msgid (e.g., server restart).
-			 * Fall back to timestamp-based LATEST, then LATEST *. */
-			if (used_msgid && sess->scrollback_newest_time > 0)
+			 * Fall back to timestamp-based LATEST, then LATEST *.
+			 * But not if chathistory-end tells us there's nothing. */
+			if (!sess->history_exhausted &&
+			    used_msgid && sess->scrollback_newest_time > 0)
 			{
 				char ref[64];
 				g_snprintf (ref, sizeof (ref), "timestamp=%" G_GINT64_FORMAT,
@@ -1481,8 +1489,8 @@ chathistory_process_batch (server *serv, batch_info *batch)
 				return;
 			}
 			/* Catch-up complete — no new messages since last disconnect.
-			 * Don't set history_exhausted: older history may still exist
-			 * for scroll-to-top requests. */
+			 * Don't set history_exhausted unless chathistory-end was sent:
+			 * older history may still exist for scroll-to-top requests. */
 			finish_catchup (sess);
 			if (serv->chathistory_latest_pending > 0)
 				serv->chathistory_latest_pending--;
@@ -1527,6 +1535,7 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		sync_state.remaining = batch->messages;
 		sync_state.raw_count = raw_count;
 		sync_state.is_catchup = is_catchup;
+		sync_state.chathistory_end = batch->chathistory_end;
 		sync_state.batch_oldest_msgid = (char *)batch_oldest_msgid; /* borrowed, not freed */
 
 		if (db)
@@ -1552,6 +1561,7 @@ chathistory_process_batch (server *serv, batch_info *batch)
 		chunk->remaining = batch->messages;
 		chunk->raw_count = raw_count;
 		chunk->is_catchup = is_catchup;
+		chunk->chathistory_end = batch->chathistory_end;
 		chunk->db = db;
 		chunk->batch_oldest_msgid = g_strdup (batch_oldest_msgid);
 		batch->messages = NULL;  /* prevent batch_info_free from freeing */
