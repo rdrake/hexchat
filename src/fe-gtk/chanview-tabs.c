@@ -632,25 +632,22 @@ tab_add_real (chanview *cv, GtkWidget *tab, chan *ch)
 static void
 tab_pressed_cb (GtkToggleButton *tab, chan *ch)
 {
-	chan *old_tab;
-	int is_switching = TRUE;
 	chanview *cv = ch->cv;
+	gboolean is_switching = (cv->focused != ch);
 
-	ignore_toggle = TRUE;
-	/* de-activate the old tab */
-	old_tab = cv->focused;
-	if (old_tab && old_tab->impl)
+	/* Activate this tab; the toggle group automatically deactivates the old one.
+	 * ignore_toggle prevents tab_toggled_cb from recursing when called
+	 * programmatically (e.g. from cv_tabs_focus). */
+	if (!gtk_toggle_button_get_active (tab))
 	{
-		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (old_tab->impl), FALSE);
-		if (old_tab == ch)
-			is_switching = FALSE;
+		ignore_toggle = TRUE;
+		gtk_toggle_button_set_active (tab, TRUE);
+		ignore_toggle = FALSE;
 	}
-	gtk_toggle_button_set_active (tab, TRUE);
-	ignore_toggle = FALSE;
+
 	cv->focused = ch;
 
-	if (/*tab->active*/is_switching)
-		/* call the focus callback */
+	if (is_switching)
 		cv->cb_focus (cv, ch, ch->tag, ch->userdata);
 }
 
@@ -661,21 +658,44 @@ tab_toggled_cb (GtkToggleButton *tab, chan *ch)
 	if (ignore_toggle)
 		return;
 
-	/* In GTK4, toggle buttons automatically toggle on click.
-	 * We handle all focus logic here instead of in "pressed" signal.
-	 * Only act when the button becomes active (user clicked to select it). */
+	/* Only act on activation — the toggle group handles deactivation of the
+	 * old tab automatically.  Deselection of the active tab by clicking it
+	 * is prevented by a capture-phase gesture (tab_deselect_guard_cb). */
 	if (gtk_toggle_button_get_active (tab))
-	{
 		tab_pressed_cb (tab, ch);
-	}
-	else
-	{
-		/* User clicked on already-focused tab, trying to deselect it.
-		 * Don't allow - re-activate it to keep it selected. */
-		ignore_toggle = TRUE;
-		gtk_toggle_button_set_active (tab, TRUE);
-		ignore_toggle = FALSE;
-	}
+}
+
+/* Capture-phase guard for left-click:
+ * - On press: prevent deselecting the active tab (toggle groups allow it)
+ * - On release: clear any stuck :active CSS state from prior right-click
+ *   gesture corruption */
+static void
+tab_deselect_guard_pressed_cb (GtkGestureClick *gesture, int n_press, double x, double y, chan *ch)
+{
+	GtkToggleButton *tab = GTK_TOGGLE_BUTTON (
+		gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (gesture)));
+	(void)n_press;
+	(void)x;
+	(void)y;
+	(void)ch;
+
+	if (gtk_toggle_button_get_active (tab))
+		gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+
+static void
+tab_deselect_guard_released_cb (GtkGestureClick *gesture, int n_press, double x, double y, chan *ch)
+{
+	GtkWidget *widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (gesture));
+	(void)n_press;
+	(void)x;
+	(void)y;
+	(void)ch;
+
+	/* Right-click gestures can leave residual state that makes subsequent
+	 * left-clicks (especially drags) get :active stuck.  Clear it on every
+	 * button release so no stale state persists. */
+	gtk_widget_unset_state_flags (widget, GTK_STATE_FLAG_ACTIVE);
 }
 
 /*
@@ -724,6 +744,48 @@ cv_tabs_add (chanview *cv, chan *ch, char *name, gboolean has_parent)
 
 	/* When tabs are vertical (on left/right side), expand horizontally to fill width */
 	gtk_widget_set_hexpand (but, cv->vertical);
+	/* Join the toggle group so only one tab can be active at a time.
+	 * Group to any existing tab — cv->focused may be NULL during initial
+	 * population, so fall back to finding the first toggle button in the
+	 * tab bar (family boxes contain the actual buttons). */
+	{
+		GtkToggleButton *group_to = NULL;
+		if (cv->focused && cv->focused->impl)
+			group_to = GTK_TOGGLE_BUTTON (cv->focused->impl);
+		else
+		{
+			/* Find any existing toggle button in the tab bar */
+			GtkWidget *inner = ((tabview *)cv)->inner;
+			GtkWidget *family = gtk_widget_get_first_child (inner);
+			while (family && !group_to)
+			{
+				GtkWidget *child = gtk_widget_get_first_child (family);
+				while (child)
+				{
+					if (GTK_IS_TOGGLE_BUTTON (child))
+					{
+						group_to = GTK_TOGGLE_BUTTON (child);
+						break;
+					}
+					child = gtk_widget_get_next_sibling (child);
+				}
+				family = gtk_widget_get_next_sibling (family);
+			}
+		}
+		if (group_to)
+			gtk_toggle_button_set_group (GTK_TOGGLE_BUTTON (but), group_to);
+	}
+	/* Left-click capture: prevent deselecting the active tab, and clear
+	 * stuck :active CSS state on release */
+	{
+		GtkGesture *gesture = gtk_gesture_click_new ();
+		gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), 1);
+		gtk_event_controller_set_propagation_phase (
+			GTK_EVENT_CONTROLLER (gesture), GTK_PHASE_CAPTURE);
+		g_signal_connect (gesture, "pressed", G_CALLBACK (tab_deselect_guard_pressed_cb), ch);
+		g_signal_connect (gesture, "released", G_CALLBACK (tab_deselect_guard_released_cb), ch);
+		gtk_widget_add_controller (but, GTK_EVENT_CONTROLLER (gesture));
+	}
 	/* Right-click for context menu */
 	{
 		GtkGesture *gesture = gtk_gesture_click_new ();
