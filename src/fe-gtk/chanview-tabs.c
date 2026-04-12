@@ -679,28 +679,35 @@ tab_toggled_cb (GtkToggleButton *tab, chan *ch)
 }
 
 /*
- * Tab click handler (for context menus and middle-click close)
- * GTK4: Uses GtkGestureClick with different signature
+ * Tab click handlers for context menu and middle-click close.
+ * These use button-specific gestures (not button 0 / all buttons)
+ * to avoid interfering with the toggle button's internal handler.
  */
 static void
-tab_click_cb (GtkGestureClick *gesture, int n_press, double x, double y, chan *ch)
+tab_right_click_cb (GtkGestureClick *gesture, int n_press, double x, double y, chan *ch)
 {
-	guint button = gtk_gesture_single_get_current_button (GTK_GESTURE_SINGLE (gesture));
 	GtkWidget *widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (gesture));
 	(void)n_press;
+	(void)gesture;
 
-	/* Middle-click to close tab */
-	if (button == 2 && prefs.hex_gui_tab_middleclose)
-	{
+	ch->cv->context_menu_active = 1;
+	ch->cv->cb_contextmenu (ch->cv, ch, ch->tag, ch->userdata, widget, x, y);
+
+	/* The popover grabs input, so the button-release never reaches the
+	 * gesture — leaving :active CSS state stuck.  Clear it explicitly. */
+	gtk_widget_unset_state_flags (widget, GTK_STATE_FLAG_ACTIVE);
+}
+
+static void
+tab_middle_click_cb (GtkGestureClick *gesture, int n_press, double x, double y, chan *ch)
+{
+	(void)gesture;
+	(void)n_press;
+	(void)x;
+	(void)y;
+
+	if (prefs.hex_gui_tab_middleclose)
 		ch->cv->cb_xbutton (ch->cv, ch, ch->tag, ch->userdata);
-		return;
-	}
-
-	/* Right-click for context menu */
-	if (button == 3)
-	{
-		ch->cv->cb_contextmenu (ch->cv, ch, ch->tag, ch->userdata, widget, x, y);
-	}
 }
 
 static void *
@@ -717,8 +724,20 @@ cv_tabs_add (chanview *cv, chan *ch, char *name, gboolean has_parent)
 
 	/* When tabs are vertical (on left/right side), expand horizontally to fill width */
 	gtk_widget_set_hexpand (but, cv->vertical);
-	/* GTK4: Use gesture for right-click context menu */
-	hc_add_click_gesture (but, G_CALLBACK (tab_click_cb), NULL, ch);
+	/* Right-click for context menu */
+	{
+		GtkGesture *gesture = gtk_gesture_click_new ();
+		gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), 3);
+		g_signal_connect (gesture, "pressed", G_CALLBACK (tab_right_click_cb), ch);
+		gtk_widget_add_controller (but, GTK_EVENT_CONTROLLER (gesture));
+	}
+	/* Middle-click to close tab */
+	{
+		GtkGesture *gesture = gtk_gesture_click_new ();
+		gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), 2);
+		g_signal_connect (gesture, "pressed", G_CALLBACK (tab_middle_click_cb), ch);
+		gtk_widget_add_controller (but, GTK_EVENT_CONTROLLER (gesture));
+	}
 	/* GTK4: No need to connect enter/leave signals - prelights handled by CSS */
 
 	/* GTK4: Only connect to "toggled" signal. The toggle button automatically

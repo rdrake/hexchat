@@ -95,7 +95,7 @@ cv_tree_sel_cb (GtkSelectionModel *sel_model, guint position, guint n_items, cha
 	item = gtk_tree_list_row_get_item (row);
 	g_object_unref (row);
 
-	if (item && item->ch)
+	if (item && item->ch && !cv->context_menu_active)
 	{
 		cv->focused = item->ch;
 		cv->cb_focus (cv, item->ch, item->ch->tag, item->ch->userdata);
@@ -213,28 +213,35 @@ cv_tree_right_click_cb (GtkGestureClick *gesture, int n_press, double x, double 
 
 	sel_model = gtk_list_view_get_model (view);
 
-	/* Find which row was clicked */
+	/* Find which row was clicked; if empty space, use focused channel */
 	clicked_pos = cv_tree_get_position_at_coords (view, x, y);
-	if (clicked_pos == GTK_INVALID_LIST_POSITION)
-		return;
 
-	/* Select the clicked item (standard behavior: right-click selects) */
-	gtk_selection_model_select_item (sel_model, clicked_pos, TRUE);
-
-	row = g_list_model_get_item (G_LIST_MODEL (sel_model), clicked_pos);
-	if (!row)
-		return;
-
-	item = gtk_tree_list_row_get_item (row);
-	g_object_unref (row);
-
-	if (item && item->ch)
+	if (clicked_pos != GTK_INVALID_LIST_POSITION)
 	{
-		cv->cb_contextmenu (cv, item->ch, item->ch->tag, item->ch->userdata, widget, x, y);
-	}
+		row = g_list_model_get_item (G_LIST_MODEL (sel_model), clicked_pos);
+		if (!row)
+			return;
 
-	if (item)
-		g_object_unref (item);
+		item = gtk_tree_list_row_get_item (row);
+		g_object_unref (row);
+
+		if (item && item->ch)
+		{
+			/* Visually select the right-clicked row without switching focus */
+			cv->context_menu_active = 1;
+			gtk_selection_model_select_item (sel_model, clicked_pos, TRUE);
+			cv->cb_contextmenu (cv, item->ch, item->ch->tag, item->ch->userdata, widget, x, y);
+		}
+
+		if (item)
+			g_object_unref (item);
+	}
+	else if (cv->focused)
+	{
+		/* Right-click on empty space: show menu for focused channel */
+		cv->cb_contextmenu (cv, cv->focused, cv->focused->tag,
+		                    cv->focused->userdata, widget, x, y);
+	}
 }
 
 /*

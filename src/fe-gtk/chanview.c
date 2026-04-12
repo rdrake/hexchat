@@ -131,6 +131,7 @@ struct _chanview
 	unsigned int sorted:1;
 	unsigned int vertical:1;
 	unsigned int use_icons:1;
+	unsigned int context_menu_active:1; /* suppress focus during right-click selection */
 };
 
 struct _chan
@@ -537,6 +538,20 @@ chan_focus (chan *ch)
 		return;
 
 	ch->cv->func_focus (ch);
+}
+
+void
+chanview_set_context_menu_active (chanview *cv, gboolean active)
+{
+	cv->context_menu_active = active ? 1 : 0;
+}
+
+void
+chanview_restore_focus_selection (chanview *cv)
+{
+	cv->context_menu_active = 0;
+	if (cv->focused)
+		cv->func_focus (cv->focused);
 }
 
 void

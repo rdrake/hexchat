@@ -1725,9 +1725,18 @@ static void
 tab_menu_popover_closed_cb (GtkPopover *popover, gpointer user_data)
 {
 	GSimpleActionGroup *action_group = G_SIMPLE_ACTION_GROUP (user_data);
-	(void)popover;
+	chanview *cv;
+
+	cv = g_object_get_data (G_OBJECT (popover), "chanview");
+	if (cv)
+		chanview_restore_focus_selection (cv);
+
 	if (action_group)
 		g_object_unref (action_group);
+
+	/* Destroy the popover — without this, stale popovers accumulate on the
+	 * parent widget and eventually prevent new ones from opening */
+	gtk_widget_unparent (GTK_WIDGET (popover));
 }
 
 /* Helper to get the effective boolean state for per-channel settings */
@@ -1740,7 +1749,7 @@ tab_get_setting_state (guint8 setting, guint global_default)
 }
 
 static void
-mg_create_tabmenu (session *sess, chan *ch, GtkWidget *parent, double x, double y)
+mg_create_tabmenu (chanview *cv, session *sess, chan *ch, GtkWidget *parent, double x, double y)
 {
 	GMenu *gmenu;
 	GMenu *alerts_submenu;
@@ -1767,6 +1776,22 @@ mg_create_tabmenu (session *sess, chan *ch, GtkWidget *parent, double x, double 
 	if (!parent_widget)
 		return;
 
+	/* For toggle buttons (tabs), parent the popover to the container instead
+	 * of the button itself — otherwise popover events propagate to the toggle
+	 * button and corrupt its :active CSS state */
+	if (GTK_IS_TOGGLE_BUTTON (parent_widget))
+	{
+		GtkWidget *container = gtk_widget_get_parent (parent_widget);
+		if (container)
+		{
+			double cx, cy;
+			gtk_widget_translate_coordinates (parent_widget, container, x, y, &cx, &cy);
+			parent_widget = container;
+			x = cx;
+			y = cy;
+		}
+	}
+
 	/* Create action group */
 	action_group = g_simple_action_group_new ();
 
@@ -1783,13 +1808,17 @@ mg_create_tabmenu (session *sess, chan *ch, GtkWidget *parent, double x, double 
 
 	gmenu = g_menu_new ();
 
-	/* Channel name header */
+	/* Channel name header (in its own section for visual separator) */
 	if (sess)
 	{
+		GMenu *header_section = g_menu_new ();
+		GMenu *body_section = g_menu_new ();
 		char *name = g_markup_escape_text (sess->channel[0] ? sess->channel : _("<none>"), -1);
 		g_snprintf (buf, sizeof (buf), "%s", name);
 		g_free (name);
-		g_menu_append (gmenu, buf, NULL);  /* Header item (no action) */
+		g_menu_append (header_section, buf, NULL);
+		g_menu_append_section (gmenu, NULL, G_MENU_MODEL (header_section));
+		g_object_unref (header_section);
 
 		/* Get default values based on session type */
 		int hex_balloon, hex_beep, hex_tray, hex_flash;
@@ -1838,7 +1867,7 @@ mg_create_tabmenu (session *sess, chan *ch, GtkWidget *parent, double x, double 
 		g_object_unref (action);
 		g_menu_append (alerts_submenu, _("Blink Task _Bar"), "tab.alert_taskbar");
 
-		g_menu_append_submenu (gmenu, _("_Extra Alerts"), G_MENU_MODEL (alerts_submenu));
+		g_menu_append_submenu (body_section, _("_Extra Alerts"), G_MENU_MODEL (alerts_submenu));
 		g_object_unref (alerts_submenu);
 
 		/* Per-channel Settings submenu */
@@ -1875,7 +1904,7 @@ mg_create_tabmenu (session *sess, chan *ch, GtkWidget *parent, double x, double 
 			g_menu_append (settings_submenu, _("_Hide Join/Part Messages"), "tab.hide_joinpart");
 		}
 
-		g_menu_append_submenu (gmenu, _("_Settings"), G_MENU_MODEL (settings_submenu));
+		g_menu_append_submenu (body_section, _("_Settings"), G_MENU_MODEL (settings_submenu));
 		g_object_unref (settings_submenu);
 
 		/* Autojoin for channels */
@@ -1887,7 +1916,7 @@ mg_create_tabmenu (session *sess, chan *ch, GtkWidget *parent, double x, double 
 			g_signal_connect (action, "activate", G_CALLBACK (tab_action_autojoin), NULL);
 			g_action_map_add_action (G_ACTION_MAP (action_group), G_ACTION (action));
 			g_object_unref (action);
-			g_menu_append (gmenu, _("_Autojoin"), "tab.autojoin");
+			g_menu_append (body_section, _("_Autojoin"), "tab.autojoin");
 		}
 		/* Auto-connect for server tabs */
 		else if (sess->type == SESS_SERVER && sess->server && sess->server->network)
@@ -1898,8 +1927,11 @@ mg_create_tabmenu (session *sess, chan *ch, GtkWidget *parent, double x, double 
 			g_signal_connect (action, "activate", G_CALLBACK (tab_action_autoconnect), NULL);
 			g_action_map_add_action (G_ACTION_MAP (action_group), G_ACTION (action));
 			g_object_unref (action);
-			g_menu_append (gmenu, _("_Auto-Connect"), "tab.autoconnect");
+			g_menu_append (body_section, _("_Auto-Connect"), "tab.autoconnect");
 		}
+
+		g_menu_append_section (gmenu, NULL, G_MENU_MODEL (body_section));
+		g_object_unref (body_section);
 	}
 
 	/* Main actions */
@@ -1914,7 +1946,9 @@ mg_create_tabmenu (session *sess, chan *ch, GtkWidget *parent, double x, double 
 								 &(GdkRectangle){ (int)x, (int)y, 1, 1 });
 	gtk_popover_set_has_arrow (GTK_POPOVER (popover), FALSE);
 
-	/* Clean up action group when popover is closed */
+	/* Restore chanview focus selection and clean up when popover is closed */
+	if (cv)
+		g_object_set_data (G_OBJECT (popover), "chanview", cv);
 	g_signal_connect (popover, "closed", G_CALLBACK (tab_menu_popover_closed_cb), action_group);
 
 	gtk_popover_popup (GTK_POPOVER (popover));
@@ -1924,11 +1958,10 @@ mg_create_tabmenu (session *sess, chan *ch, GtkWidget *parent, double x, double 
 static gboolean
 mg_tab_contextmenu_cb (chanview *cv, chan *ch, int tag, gpointer ud, GtkWidget *parent, double x, double y)
 {
-	(void)cv;
 	if (tag == TAG_IRC)
-		mg_create_tabmenu (ud, ch, parent, x, y);
+		mg_create_tabmenu (cv, ud, ch, parent, x, y);
 	else
-		mg_create_tabmenu (NULL, ch, parent, x, y);
+		mg_create_tabmenu (cv, NULL, ch, parent, x, y);
 	return TRUE;
 }
 
