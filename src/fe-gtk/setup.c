@@ -845,6 +845,8 @@ setup_create_italic_label (char *text)
 static void
 setup_spin_cb (GtkSpinButton *spin, const setting *set)
 {
+	if (setup_applying)
+		return;
 	setup_set_int (&setup_prefs, set, gtk_spin_button_get_value_as_int (spin));
 }
 
@@ -906,6 +908,8 @@ setup_hscale_cb (GtkScale *wid, const setting *set)
 {
 	static int tag = 0;
 
+	if (setup_applying)
+		return;
 	setup_set_int (&setup_prefs, set, (int) gtk_range_get_value (GTK_RANGE (wid)));
 
 	if (tag == 0)
@@ -950,7 +954,11 @@ static GtkWidget *proxy_pass; 	/* password GtkEntry */
 static void
 setup_menu_cb (GObject *cbox, GParamSpec *pspec, const setting *set)
 {
-	int n = gtk_drop_down_get_selected (GTK_DROP_DOWN (cbox));
+	int n;
+
+	if (setup_applying)
+		return;
+	n = gtk_drop_down_get_selected (GTK_DROP_DOWN (cbox));
 
 	/* set the prefs.<field> */
 	setup_set_int (&setup_prefs, set, n + set->extra);
@@ -966,6 +974,8 @@ setup_menu_cb (GObject *cbox, GParamSpec *pspec, const setting *set)
 static void
 setup_radio_cb (GtkWidget *item, const setting *set)
 {
+	if (setup_applying)
+		return;
 	if (gtk_check_button_get_active (GTK_CHECK_BUTTON (item)))
 	{
 		int n = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (item), "n"));
@@ -2399,6 +2409,10 @@ setup_apply (struct hexchatprefs *pr)
 	if (DIFF (hex_gui_tab_dots))
 		do_layout = TRUE;
 	if (DIFF (hex_gui_tab_layout))
+		do_layout = TRUE;
+	if (DIFF (hex_gui_tab_pos))
+		do_layout = TRUE;
+	if (DIFF (hex_gui_ulist_pos))
 		do_layout = TRUE;
 
 	if (DIFF (hex_identd_server) || DIFF (hex_identd_port))
