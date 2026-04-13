@@ -676,7 +676,6 @@ userlist_host_setup_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer
 
 	host_label = gtk_label_new (NULL);
 	gtk_label_set_xalign (GTK_LABEL (host_label), 0.0);
-	gtk_label_set_ellipsize (GTK_LABEL (host_label), PANGO_ELLIPSIZE_END);
 	gtk_list_item_set_child (item, host_label);
 }
 
@@ -936,7 +935,7 @@ userlist_create (GtkWidget *box)
 
 	sw = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (sw),
-		GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+		GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_hexpand (sw, TRUE);
 	gtk_widget_set_vexpand (sw, TRUE);
 	gtk_box_append (GTK_BOX (box), sw);
@@ -962,11 +961,10 @@ userlist_create (GtkWidget *box)
 		G_CALLBACK (userlist_nick_bind_cb), NULL, view);
 	gtk_column_view_column_set_expand (col, TRUE);
 
-	/* Host column - visibility toggled by pref */
+	/* Host column - natural width, visibility toggled by pref */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), NULL,
 		G_CALLBACK (userlist_host_setup_cb),
 		G_CALLBACK (userlist_host_bind_cb), NULL, NULL);
-	gtk_column_view_column_set_expand (col, TRUE);
 	gtk_column_view_column_set_visible (col, prefs.hex_gui_ulist_show_hosts);
 	g_object_set_data (G_OBJECT (view), "host-column", col);
 
