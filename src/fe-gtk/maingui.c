@@ -3210,18 +3210,36 @@ mg_leftpane_cb (GtkPaned *pane, GParamSpec *param, session_gui *gui)
 	}
 }
 
+/* Approximate width of one character in the widget's current font.
+ * Used to scale progressive-collapse thresholds so they still make
+ * sense when the user runs a larger or smaller font. */
+static int
+mg_approx_char_width (GtkWidget *widget)
+{
+	PangoContext *ctx;
+	PangoFontMetrics *metrics;
+	int char_w;
+
+	ctx = gtk_widget_get_pango_context (widget);
+	metrics = pango_context_get_metrics (ctx, NULL, NULL);
+	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
+	pango_font_metrics_unref (metrics);
+	return char_w > 0 ? char_w : 8;  /* sane fallback */
+}
+
 /* Progressive column collapse as userlist pane shrinks:
  * 1. Host column hides (nick starts ellipsizing)
  * 2. Icon column hides (nick gets the extra space)
- * 3. Nick column hides
+ * Nick column stays visible and clips against the viewport at narrow widths.
  * Thresholds are computed from the actual nick label widths since
- * gtk_widget_measure on the column view returns stale values. */
+ * gtk_widget_measure on the column view returns stale values, and
+ * additive offsets scale with font char width. */
 static void
 mg_update_userlist_columns (session_gui *gui, int pane_size)
 {
 	GtkColumnViewColumn *host_col, *nick_col, *icon_col;
 	GPtrArray *nick_labels;
-	int icon_width, max_nick = 0;
+	int icon_width, max_nick = 0, char_w;
 	gboolean show_host, show_nick, show_icon;
 
 	if (!gui->user_tree)
@@ -3232,6 +3250,7 @@ mg_update_userlist_columns (session_gui *gui, int pane_size)
 	icon_col = g_object_get_data (G_OBJECT (gui->user_tree), "icon-column");
 	nick_labels = g_object_get_data (G_OBJECT (gui->user_tree), "nick-labels");
 	icon_width = (icon_col && prefs.hex_gui_ulist_icons) ? 20 : 0;
+	char_w = mg_approx_char_width (gui->user_tree);
 
 	/* Find widest nick label */
 	if (nick_labels)
@@ -3247,13 +3266,16 @@ mg_update_userlist_columns (session_gui *gui, int pane_size)
 		}
 	}
 
+	/* Host hides when there isn't room for icon + full nick + ~8 chars
+	 * of host content. */
 	show_host = (prefs.hex_gui_ulist_show_hosts &&
-		pane_size > icon_width + max_nick + 60);
-	/* Keep the mode icon visible until the pane can't fit icon + a few
-	 * chars of nick. Previously this was tied to the full nick fitting
-	 * (`max_nick + 20`), which hid the icon aggressively on narrow panes —
-	 * unnecessary now that nick has width_chars=3 and just clips. */
-	show_icon = show_host || (pane_size > icon_width + 60);
+		pane_size > icon_width + max_nick + 8 * char_w);
+	/* Keep the mode icon visible until the pane can't fit icon + ~8
+	 * chars of nick room. Previously this was tied to the full nick
+	 * fitting (`max_nick + 20`), which hid the icon aggressively on
+	 * narrow panes — unnecessary now that nick has width_chars=3 and
+	 * just clips. */
+	show_icon = show_host || (pane_size > icon_width + 8 * char_w);
 	/* Nick column stays visible at all widths — the label has width_chars=3,
 	 * so its content clips against the viewport when the pane is narrower
 	 * than ~3 chars. This also keeps column view full_width > 0 so the

@@ -518,9 +518,10 @@ cv_tree_init (chanview *cv)
 }
 
 /* Progressive collapse as the chanview pane shrinks:
- * 1. Icons hide when pane < 100px
+ * 1. Icons hide when pane < ~12 char widths
  * 2. Tree indentation (both depth and leaf-row icon slot) removed when
- *    pane < 60px — at that width the hierarchy is conceptual only.
+ *    pane < ~8 char widths — at that width the hierarchy is conceptual only.
+ * Thresholds are char-width based so they scale with the user's font.
  * Keeps channel labels readable as long as possible. */
 static void
 cv_tree_update_pane_size (chanview *cv, int pane_size)
@@ -529,10 +530,20 @@ cv_tree_update_pane_size (chanview *cv, int pane_size)
 	GPtrArray *icons, *expanders;
 	gboolean hide_icons, hide_indent;
 	gboolean was_hiding_icons, was_hiding_indent;
+	PangoContext *ctx;
+	PangoFontMetrics *metrics;
+	int char_w;
 	guint i;
 
-	hide_icons = (pane_size >= 0 && pane_size < 100);
-	hide_indent = (pane_size >= 0 && pane_size < 60);
+	ctx = gtk_widget_get_pango_context (GTK_WIDGET (tv->view));
+	metrics = pango_context_get_metrics (ctx, NULL, NULL);
+	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
+	pango_font_metrics_unref (metrics);
+	if (char_w <= 0)
+		char_w = 8;  /* sane fallback */
+
+	hide_icons = (pane_size >= 0 && pane_size < 12 * char_w);
+	hide_indent = (pane_size >= 0 && pane_size < 8 * char_w);
 
 	was_hiding_icons = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-icons"));
 	was_hiding_indent = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-indent"));
