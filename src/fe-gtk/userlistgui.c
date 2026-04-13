@@ -619,6 +619,12 @@ userlist_nick_setup_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer
 
 	nick_label = gtk_label_new (NULL);
 	gtk_label_set_xalign (GTK_LABEL (nick_label), 0.0);
+	/* Minimum display of 3 chars: as the pane shrinks, the label exceeds
+	 * the viewport and clips (showing real letters), instead of collapsing
+	 * to a column of "..." ellipses. Also ensures the column view's
+	 * full_width stays > 0 so the internal listview never gets allocated
+	 * 0 width (which triggers a bounds.y assertion in GTK4). */
+	gtk_label_set_width_chars (GTK_LABEL (nick_label), 3);
 	gtk_list_item_set_child (item, nick_label);
 
 	/* Track nick labels so we can toggle ellipsize when host column hides */
@@ -951,12 +957,15 @@ userlist_create (GtkWidget *box)
 		GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_hexpand (sw, TRUE);
 	gtk_widget_set_vexpand (sw, TRUE);
-	gtk_widget_set_size_request (sw, 0, -1);
+	/* Minimum of 1px (not 0) to avoid triggering a bounds.y assertion in
+	 * gtk_list_base_update_adjustments when the list view is allocated 0
+	 * width on the right pane. Visually indistinguishable from 0. */
+	gtk_widget_set_size_request (sw, 1, -1);
 	gtk_box_append (GTK_BOX (box), sw);
 
 	/* Create column view - model set later in userlist_show() */
 	view = hc_column_view_new_simple (NULL, GTK_SELECTION_MULTIPLE);
-	gtk_widget_set_size_request (view, 0, -1);
+	gtk_widget_set_size_request (view, 1, -1);
 	gtk_widget_set_name (view, "hexchat-userlist");
 
 	/* Track nick labels for dynamic ellipsize toggling */

@@ -127,6 +127,7 @@ struct _chanview
 	gboolean (*func_is_collapsed) (chan *);
 	chan *(*func_get_parent) (chan *);
 	void (*func_cleanup) (chanview *);
+	void (*func_update_pane_size) (chanview *, int);
 
 	unsigned int sorted:1;
 	unsigned int vertical:1;
@@ -258,6 +259,7 @@ chanview_set_impl (chanview *cv, int type)
 		cv->func_is_collapsed = cv_tabs_is_collapsed;
 		cv->func_get_parent = cv_tabs_get_parent;
 		cv->func_cleanup = cv_tabs_cleanup;
+		cv->func_update_pane_size = NULL;
 		break;
 
 	default:
@@ -275,6 +277,7 @@ chanview_set_impl (chanview *cv, int type)
 		cv->func_is_collapsed = cv_tree_is_collapsed;
 		cv->func_get_parent = cv_tree_get_parent;
 		cv->func_cleanup = cv_tree_cleanup;
+		cv->func_update_pane_size = cv_tree_update_pane_size;
 		break;
 	}
 
@@ -552,6 +555,13 @@ chanview_restore_focus_selection (chanview *cv)
 	cv->context_menu_active = 0;
 	if (cv->focused)
 		cv->func_focus (cv->focused);
+}
+
+void
+chanview_update_pane_size (chanview *cv, int pane_size)
+{
+	if (cv->func_update_pane_size)
+		cv->func_update_pane_size (cv, pane_size);
 }
 
 void

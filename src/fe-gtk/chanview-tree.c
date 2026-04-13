@@ -272,11 +272,30 @@ cv_tree_scroll_event_cb (GtkEventControllerScroll *controller, double dx, double
 static void
 cv_tree_factory_setup_cb (GtkListItemFactory *factory, GtkListItem *item, chanview *cv)
 {
+	treeview *tv = (treeview *)cv;
 	GtkWidget *expander, *content_box, *icon, *label;
 
 	/* Tree expander for expand/collapse */
 	expander = gtk_tree_expander_new ();
 	gtk_widget_set_hexpand (expander, TRUE);
+
+	/* Respect compact indent state for newly created items */
+	if (GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-indent")))
+	{
+		gtk_tree_expander_set_indent_for_depth (GTK_TREE_EXPANDER (expander), FALSE);
+		gtk_tree_expander_set_indent_for_icon (GTK_TREE_EXPANDER (expander), FALSE);
+	}
+
+	/* Track expander for compact mode toggling */
+	{
+		GPtrArray *expanders = g_object_get_data (G_OBJECT (tv->view), "tree-expanders");
+		if (expanders)
+		{
+			g_ptr_array_add (expanders, expander);
+			g_object_weak_ref (G_OBJECT (expander),
+				(GWeakNotify) g_ptr_array_remove, expanders);
+		}
+	}
 
 	/* Create horizontal box to hold icon + label inside expander */
 	content_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
@@ -287,14 +306,36 @@ cv_tree_factory_setup_cb (GtkListItemFactory *factory, GtkListItem *item, chanvi
 		icon = gtk_picture_new ();
 		gtk_picture_set_content_fit (GTK_PICTURE (icon), GTK_CONTENT_FIT_SCALE_DOWN);
 		gtk_widget_set_size_request (icon, 16, -1);
+
+		/* Respect compact icon state for newly created items */
+		if (GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-icons")))
+			gtk_widget_set_visible (icon, FALSE);
+
 		gtk_box_append (GTK_BOX (content_box), icon);
 		g_object_set_data (G_OBJECT (item), "icon", icon);
+
+		/* Track icon for compact mode toggling */
+		{
+			GPtrArray *icons = g_object_get_data (G_OBJECT (tv->view), "tree-icons");
+			if (icons)
+			{
+				g_ptr_array_add (icons, icon);
+				g_object_weak_ref (G_OBJECT (icon),
+					(GWeakNotify) g_ptr_array_remove, icons);
+			}
+		}
 	}
 
 	/* Label for channel/server name */
 	label = gtk_label_new (NULL);
 	gtk_label_set_xalign (GTK_LABEL (label), 0.0);
 	gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
+	/* Minimum display of 3 chars: as the pane shrinks, the label exceeds
+	 * the viewport and clips (showing real letters), instead of collapsing
+	 * to a column of "..." ellipses. Also keeps the list view's reported
+	 * min width > 0 so the internal listview never gets allocated 0 width
+	 * (which triggers a bounds.y assertion in GTK4). */
+	gtk_label_set_width_chars (GTK_LABEL (label), 3);
 	gtk_widget_set_hexpand (label, TRUE);
 	gtk_box_append (GTK_BOX (content_box), label);
 
@@ -405,6 +446,10 @@ cv_tree_init (chanview *cv)
 	                                GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_hexpand (win, TRUE);
 	gtk_widget_set_vexpand (win, TRUE);
+	/* Minimum of 1px (not 0) to avoid triggering a bounds.y assertion in
+	 * gtk_list_base_update_adjustments when the list view is allocated 0
+	 * width on the right pane. Visually indistinguishable from 0. */
+	gtk_widget_set_size_request (win, 1, -1);
 	gtk_box_append (GTK_BOX (cv->box), win);
 
 	/* Use cv->store directly as the root model for GtkTreeListModel */
@@ -431,6 +476,7 @@ cv_tree_init (chanview *cv)
 	view = gtk_list_view_new (GTK_SELECTION_MODEL (sel_model), factory);
 	gtk_widget_set_name (view, "hexchat-tree");
 	gtk_widget_set_can_focus (view, FALSE);
+	gtk_widget_set_size_request (view, 1, -1);
 
 	/* Connect signals */
 	g_signal_connect (sel_model, "selection-changed",
@@ -462,6 +508,69 @@ cv_tree_init (chanview *cv)
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (win), view);
 	tv->view = GTK_LIST_VIEW (view);
 	tv->scrollw = win;
+
+	/* Tracking arrays for progressive collapse (icon hiding, indent removal) */
+	if (cv->use_icons)
+		g_object_set_data_full (G_OBJECT (view), "tree-icons",
+			g_ptr_array_new (), (GDestroyNotify) g_ptr_array_unref);
+	g_object_set_data_full (G_OBJECT (view), "tree-expanders",
+		g_ptr_array_new (), (GDestroyNotify) g_ptr_array_unref);
+}
+
+/* Progressive collapse as the chanview pane shrinks:
+ * 1. Icons hide when pane < 100px
+ * 2. Tree indentation (both depth and leaf-row icon slot) removed when
+ *    pane < 60px — at that width the hierarchy is conceptual only.
+ * Keeps channel labels readable as long as possible. */
+static void
+cv_tree_update_pane_size (chanview *cv, int pane_size)
+{
+	treeview *tv = (treeview *)cv;
+	GPtrArray *icons, *expanders;
+	gboolean hide_icons, hide_indent;
+	gboolean was_hiding_icons, was_hiding_indent;
+	guint i;
+
+	hide_icons = (pane_size >= 0 && pane_size < 100);
+	hide_indent = (pane_size >= 0 && pane_size < 60);
+
+	was_hiding_icons = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-icons"));
+	was_hiding_indent = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-indent"));
+
+	if (hide_icons == was_hiding_icons && hide_indent == was_hiding_indent)
+		return;
+
+	g_object_set_data (G_OBJECT (tv->view), "compact-icons", GINT_TO_POINTER (hide_icons));
+	g_object_set_data (G_OBJECT (tv->view), "compact-indent", GINT_TO_POINTER (hide_indent));
+
+	/* Toggle icon visibility */
+	if (hide_icons != was_hiding_icons && cv->use_icons)
+	{
+		icons = g_object_get_data (G_OBJECT (tv->view), "tree-icons");
+		if (icons)
+		{
+			for (i = 0; i < icons->len; i++)
+				gtk_widget_set_visible (g_ptr_array_index (icons, i), !hide_icons);
+		}
+	}
+
+	/* Toggle tree depth + icon indentation — at this width the tree
+	 * structure is conceptual only, so flatten it entirely. */
+	if (hide_indent != was_hiding_indent)
+	{
+		expanders = g_object_get_data (G_OBJECT (tv->view), "tree-expanders");
+		if (expanders)
+		{
+			for (i = 0; i < expanders->len; i++)
+			{
+				GtkTreeExpander *exp = GTK_TREE_EXPANDER (g_ptr_array_index (expanders, i));
+				gtk_tree_expander_set_indent_for_depth (exp, !hide_indent);
+				gtk_tree_expander_set_indent_for_icon (exp, !hide_indent);
+			}
+		}
+	}
+
+	gtk_widget_queue_resize (GTK_WIDGET (tv->view));
 }
 
 static void

@@ -3174,13 +3174,20 @@ mg_pane_idle_cb (gpointer user_data)
 	              data->is_left_pane);
 	mg_update_window_minimum (gui);
 
-	/* Update userlist column visibility if userlist is on the left pane */
-	if (data->is_left_pane &&
-		(prefs.hex_gui_ulist_pos == POS_TOPLEFT ||
-		 prefs.hex_gui_ulist_pos == POS_BOTTOMLEFT))
+	if (data->is_left_pane)
 	{
 		int left_size = gtk_paned_get_position (data->pane);
-		mg_update_userlist_columns (gui, left_size);
+
+		/* Update userlist column visibility if userlist is on the left pane */
+		if (prefs.hex_gui_ulist_pos == POS_TOPLEFT ||
+			prefs.hex_gui_ulist_pos == POS_BOTTOMLEFT)
+			mg_update_userlist_columns (gui, left_size);
+
+		/* Update chanview tree compact mode if chanview is on the left pane */
+		if (gui->chanview &&
+			(prefs.hex_gui_tab_pos == POS_TOPLEFT ||
+			 prefs.hex_gui_tab_pos == POS_BOTTOMLEFT))
+			chanview_update_pane_size (gui->chanview, left_size);
 	}
 
 	g_free (data);
@@ -3242,8 +3249,16 @@ mg_update_userlist_columns (session_gui *gui, int pane_size)
 
 	show_host = (prefs.hex_gui_ulist_show_hosts &&
 		pane_size > icon_width + max_nick + 60);
-	show_icon = show_host || (pane_size > max_nick + 20);
-	show_nick = (pane_size > 20);
+	/* Keep the mode icon visible until the pane can't fit icon + a few
+	 * chars of nick. Previously this was tied to the full nick fitting
+	 * (`max_nick + 20`), which hid the icon aggressively on narrow panes —
+	 * unnecessary now that nick has width_chars=3 and just clips. */
+	show_icon = show_host || (pane_size > icon_width + 60);
+	/* Nick column stays visible at all widths — the label has width_chars=3,
+	 * so its content clips against the viewport when the pane is narrower
+	 * than ~3 chars. This also keeps column view full_width > 0 so the
+	 * internal listview never hits the bounds.y assertion at 0 width. */
+	show_nick = TRUE;
 
 	/* Apply visibility */
 	if (icon_col && prefs.hex_gui_ulist_icons)
@@ -3277,7 +3292,19 @@ mg_rightpane_idle_cb (gpointer user_data)
 		mg_update_window_minimum (gui);
 	}
 
-	mg_update_userlist_columns (gui, right_size);
+	/* Only update userlist columns if userlist is actually on the right pane.
+	 * If the user has the userlist on the left, dragging the right separator
+	 * would otherwise pass a nonsensical width (vpane_right's allocation, not
+	 * userlist's), clobbering whatever the left-pane callback just set. */
+	if (prefs.hex_gui_ulist_pos == POS_TOPRIGHT ||
+		prefs.hex_gui_ulist_pos == POS_BOTTOMRIGHT)
+		mg_update_userlist_columns (gui, right_size);
+
+	/* Update chanview tree compact mode if chanview is on the right pane */
+	if (gui->chanview &&
+		(prefs.hex_gui_tab_pos == POS_TOPRIGHT ||
+		 prefs.hex_gui_tab_pos == POS_BOTTOMRIGHT))
+		chanview_update_pane_size (gui->chanview, right_size);
 
 	return G_SOURCE_REMOVE;
 }

@@ -54,6 +54,7 @@ chan * chan_get_parent (chan *ch);
 
 void chanview_set_context_menu_active (chanview *cv, gboolean active);
 void chanview_restore_focus_selection (chanview *cv);
+void chanview_update_pane_size (chanview *cv, int pane_size);
 
 #define FOCUS_NEW_ALL 1
 #define FOCUS_NEW_ONLY_ASKED 2
