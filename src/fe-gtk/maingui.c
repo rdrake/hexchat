@@ -3154,6 +3154,8 @@ mg_vpane_cb (GtkPaned *pane, GParamSpec *param, session_gui *gui)
 	}
 }
 
+static void mg_update_userlist_columns (session_gui *gui, int pane_size);
+
 /* Data structure for deferred pane size calculation */
 typedef struct {
 	GtkPaned *pane;
@@ -3171,6 +3173,15 @@ mg_pane_idle_cb (gpointer user_data)
 	hc_debug_log ("mg_pane_idle_cb: is_left=%d, calling mg_update_window_minimum",
 	              data->is_left_pane);
 	mg_update_window_minimum (gui);
+
+	/* Update userlist column visibility if userlist is on the left pane */
+	if (data->is_left_pane &&
+		(prefs.hex_gui_ulist_pos == POS_TOPLEFT ||
+		 prefs.hex_gui_ulist_pos == POS_BOTTOMLEFT))
+	{
+		int left_size = gtk_paned_get_position (data->pane);
+		mg_update_userlist_columns (gui, left_size);
+	}
 
 	g_free (data);
 	return G_SOURCE_REMOVE;
@@ -3192,6 +3203,60 @@ mg_leftpane_cb (GtkPaned *pane, GParamSpec *param, session_gui *gui)
 	}
 }
 
+/* Progressive column collapse as userlist pane shrinks:
+ * 1. Host column hides (nick starts ellipsizing)
+ * 2. Icon column hides (nick gets the extra space)
+ * 3. Nick column hides
+ * Thresholds are computed from the actual nick label widths since
+ * gtk_widget_measure on the column view returns stale values. */
+static void
+mg_update_userlist_columns (session_gui *gui, int pane_size)
+{
+	GtkColumnViewColumn *host_col, *nick_col, *icon_col;
+	GPtrArray *nick_labels;
+	int icon_width, max_nick = 0;
+	gboolean show_host, show_nick, show_icon;
+
+	if (!gui->user_tree)
+		return;
+
+	host_col = g_object_get_data (G_OBJECT (gui->user_tree), "host-column");
+	nick_col = g_object_get_data (G_OBJECT (gui->user_tree), "nick-column");
+	icon_col = g_object_get_data (G_OBJECT (gui->user_tree), "icon-column");
+	nick_labels = g_object_get_data (G_OBJECT (gui->user_tree), "nick-labels");
+	icon_width = (icon_col && prefs.hex_gui_ulist_icons) ? 20 : 0;
+
+	/* Find widest nick label */
+	if (nick_labels)
+	{
+		guint i;
+		for (i = 0; i < nick_labels->len; i++)
+		{
+			int nat;
+			gtk_widget_measure (g_ptr_array_index (nick_labels, i),
+				GTK_ORIENTATION_HORIZONTAL, -1, NULL, &nat, NULL, NULL);
+			if (nat > max_nick)
+				max_nick = nat;
+		}
+	}
+
+	show_host = (prefs.hex_gui_ulist_show_hosts &&
+		pane_size > icon_width + max_nick + 60);
+	show_icon = show_host || (pane_size > max_nick + 20);
+	show_nick = (pane_size > 20);
+
+	/* Apply visibility */
+	if (icon_col && prefs.hex_gui_ulist_icons)
+		gtk_column_view_column_set_visible (icon_col, show_icon);
+	if (nick_col)
+		gtk_column_view_column_set_visible (nick_col, show_nick);
+	if (host_col && prefs.hex_gui_ulist_show_hosts)
+		gtk_column_view_column_set_visible (host_col, show_host);
+
+	/* Nick only ellipsizes after host is hidden */
+	userlist_set_nick_ellipsize (gui->user_tree, show_nick && !show_host);
+}
+
 /* Deferred right pane size save — only fires from user-initiated pane drags
  * (the signal is blocked during programmatic show/hide/restore). */
 static gboolean
@@ -3211,6 +3276,8 @@ mg_rightpane_idle_cb (gpointer user_data)
 		prefs.hex_gui_pane_right_size = right_size;
 		mg_update_window_minimum (gui);
 	}
+
+	mg_update_userlist_columns (gui, right_size);
 
 	return G_SOURCE_REMOVE;
 }

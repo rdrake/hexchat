@@ -621,6 +621,17 @@ userlist_nick_setup_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer
 	gtk_label_set_xalign (GTK_LABEL (nick_label), 0.0);
 	gtk_list_item_set_child (item, nick_label);
 
+	/* Track nick labels so we can toggle ellipsize when host column hides */
+	{
+		GPtrArray *labels = g_object_get_data (G_OBJECT (user_data), "nick-labels");
+		if (labels)
+		{
+			g_ptr_array_add (labels, nick_label);
+			g_object_weak_ref (G_OBJECT (nick_label),
+				(GWeakNotify) g_ptr_array_remove, labels);
+		}
+	}
+
 	/* Connect to selection changes to update nick color */
 	g_signal_connect (item, "notify::selected", G_CALLBACK (userlist_nick_selection_changed_cb), NULL);
 }
@@ -676,6 +687,8 @@ userlist_host_setup_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer
 
 	host_label = gtk_label_new (NULL);
 	gtk_label_set_xalign (GTK_LABEL (host_label), 0.0);
+	gtk_label_set_ellipsize (GTK_LABEL (host_label), PANGO_ELLIPSIZE_END);
+	gtk_widget_set_size_request (host_label, 0, -1);
 	gtk_list_item_set_child (item, host_label);
 }
 
@@ -935,14 +948,20 @@ userlist_create (GtkWidget *box)
 
 	sw = gtk_scrolled_window_new ();
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (sw),
-		GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+		GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 	gtk_widget_set_hexpand (sw, TRUE);
 	gtk_widget_set_vexpand (sw, TRUE);
+	gtk_widget_set_size_request (sw, 0, -1);
 	gtk_box_append (GTK_BOX (box), sw);
 
 	/* Create column view - model set later in userlist_show() */
 	view = hc_column_view_new_simple (NULL, GTK_SELECTION_MULTIPLE);
+	gtk_widget_set_size_request (view, 0, -1);
 	gtk_widget_set_name (view, "hexchat-userlist");
+
+	/* Track nick labels for dynamic ellipsize toggling */
+	g_object_set_data_full (G_OBJECT (view), "nick-labels",
+		g_ptr_array_new (), (GDestroyNotify) g_ptr_array_unref);
 	hc_column_view_hide_headers (GTK_COLUMN_VIEW (view));
 	gtk_column_view_set_reorderable (GTK_COLUMN_VIEW (view), FALSE);
 	gtk_widget_set_can_focus (view, FALSE);
@@ -955,13 +974,13 @@ userlist_create (GtkWidget *box)
 	gtk_column_view_column_set_visible (col, prefs.hex_gui_ulist_icons);
 	g_object_set_data (G_OBJECT (view), "icon-column", col);
 
-	/* Nick column — pass view as user_data so bind can check icon column visibility */
+	/* Nick column — natural width; host is rightmost so host collapses first */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), NULL,
 		G_CALLBACK (userlist_nick_setup_cb),
 		G_CALLBACK (userlist_nick_bind_cb), NULL, view);
-	gtk_column_view_column_set_expand (col, TRUE);
+	g_object_set_data (G_OBJECT (view), "nick-column", col);
 
-	/* Host column - natural width, visibility toggled by pref */
+	/* Host column - visibility managed by pane resize callback */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), NULL,
 		G_CALLBACK (userlist_host_setup_cb),
 		G_CALLBACK (userlist_host_bind_cb), NULL, NULL);
@@ -998,6 +1017,30 @@ userlist_create (GtkWidget *box)
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (sw), view);
 
 	return view;
+}
+
+/*
+ * Toggle ellipsize on all tracked nick labels.  Called from the pane
+ * resize handler so nicks only ellipsize after the host column is hidden.
+ */
+void
+userlist_set_nick_ellipsize (GtkWidget *view, gboolean ellipsize)
+{
+	GPtrArray *labels = g_object_get_data (G_OBJECT (view), "nick-labels");
+	guint i;
+
+	if (!labels)
+		return;
+
+	for (i = 0; i < labels->len; i++)
+	{
+		GtkLabel *label = g_ptr_array_index (labels, i);
+		gtk_label_set_ellipsize (label,
+			ellipsize ? PANGO_ELLIPSIZE_END : PANGO_ELLIPSIZE_NONE);
+	}
+
+	/* Force column view to re-measure now that label minimums changed */
+	gtk_widget_queue_resize (view);
 }
 
 /*
