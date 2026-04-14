@@ -1792,7 +1792,8 @@ gtk_xtext_find_x (GtkXText * xtext, int x, textentry * ent, int subline,
 }
 
 static textentry *
-gtk_xtext_find_char (GtkXText * xtext, int x, int y, int *off, int *out_of_bounds)
+gtk_xtext_find_char_ex (GtkXText * xtext, int x, int y, int *off,
+                        int *out_of_bounds, int *out_subline)
 {
 	textentry *ent;
 	int line;
@@ -1817,31 +1818,64 @@ gtk_xtext_find_char (GtkXText * xtext, int x, int y, int *off, int *out_of_bound
 		ent = xtext->buffer->pagetop_ent;
 		subline = xtext->buffer->pagetop_subline;
 
-		/* Advance past the remaining sublines of the starting entry */
-		ent_lines = ENT_DISPLAY_LINES (ent) - subline;
-		if (remaining < ent_lines)
+		if (remaining >= 0)
 		{
-			subline += remaining;
-			goto found;
-		}
-		remaining -= ent_lines;
-
-		/* Walk forward through entries */
-		for (ent = ent->next; ent; ent = ent->next)
-		{
-			ent_lines = ENT_DISPLAY_LINES (ent);
+			/* Walk forward: advance past the remaining sublines of
+			 * the starting entry, then step through following entries. */
+			ent_lines = ENT_DISPLAY_LINES (ent) - subline;
 			if (remaining < ent_lines)
 			{
-				subline = remaining;
+				subline += remaining;
 				goto found;
 			}
 			remaining -= ent_lines;
+
+			for (ent = ent->next; ent; ent = ent->next)
+			{
+				ent_lines = ENT_DISPLAY_LINES (ent);
+				if (remaining < ent_lines)
+				{
+					subline = remaining;
+					goto found;
+				}
+				remaining -= ent_lines;
+			}
+			return NULL;  /* past end of buffer */
 		}
-		return NULL;  /* past end of buffer */
+		else
+		{
+			/* Walk backward: y is above pagetop (e.g. selection anchor
+			 * that was scrolled off the top of the viewport).  Count
+			 * negative lines toward the previous entry's last subline. */
+			int back = -remaining;
+			if (back <= subline)
+			{
+				subline -= back;
+				goto found;
+			}
+			back -= subline;
+			for (ent = ent->prev; ent; ent = ent->prev)
+			{
+				ent_lines = ENT_DISPLAY_LINES (ent);
+				if (back <= ent_lines)
+				{
+					subline = ent_lines - back;
+					goto found;
+				}
+				back -= ent_lines;
+			}
+			return NULL;  /* above start of buffer */
+		}
 
 	found:
+		/* find_x uses `line` only to flag out-of-bounds for clicks
+		 * outside the viewport.  When we resolved via backward walk the
+		 * line is negative; clamp to 0 so find_x computes the real x
+		 * offset rather than returning 0.  Selection-draw decides what
+		 * to do with an off-screen endpoint based on y, not this flag. */
 		if (off)
-			*off = gtk_xtext_find_x (xtext, x, ent, subline, line, &outofbounds);
+			*off = gtk_xtext_find_x (xtext, x, ent, subline,
+				line < 0 ? 0 : line, &outofbounds);
 	}
 	else
 	{
@@ -1861,8 +1895,75 @@ gtk_xtext_find_char (GtkXText * xtext, int x, int y, int *off, int *out_of_bound
 	}
 	if (out_of_bounds)
 		*out_of_bounds = outofbounds;
+	if (out_subline)
+		*out_subline = subline;
 
 	return ent;
+}
+
+static textentry *
+gtk_xtext_find_char (GtkXText * xtext, int x, int y, int *off, int *out_of_bounds)
+{
+	return gtk_xtext_find_char_ex (xtext, x, y, off, out_of_bounds, NULL);
+}
+
+/* Recompute select_start_y from the pinned (entry_id, subline) relative
+ * to the current pagetop.  Returns TRUE on successful resolution.  If
+ * the anchor can't be found (entry evicted, no pagetop yet), leaves
+ * select_start_y untouched and returns FALSE — callers can still proceed
+ * with whatever stale value is there; the usual low/high fallbacks in
+ * selection_draw will handle an out-of-viewport endpoint. */
+static gboolean
+gtk_xtext_resolve_select_start_y (GtkXText *xtext)
+{
+	textentry *ent;
+	int line_count;
+
+	if (xtext->select_start_entry_id == 0
+	    || xtext->buffer->pagetop_ent == NULL)
+		return FALSE;
+
+	/* Walk forward from pagetop */
+	ent = xtext->buffer->pagetop_ent;
+	line_count = -xtext->buffer->pagetop_subline;
+	while (ent)
+	{
+		if (ent->entry_id == xtext->select_start_entry_id)
+		{
+			/* Aim for the middle of the target subline so find_char's
+			 * integer-division rounding for negative y doesn't push us
+			 * one line off. */
+			xtext->select_start_y =
+				(line_count + xtext->select_start_subline)
+					* xtext->fontsize
+				- xtext->pixel_offset
+				+ xtext->fontsize / 2;
+			return TRUE;
+		}
+		line_count += ENT_DISPLAY_LINES (ent);
+		ent = ent->next;
+	}
+
+	/* Not forward of pagetop — walk backward */
+	line_count = -xtext->buffer->pagetop_subline;
+	for (ent = xtext->buffer->pagetop_ent->prev; ent; ent = ent->prev)
+	{
+		line_count -= ENT_DISPLAY_LINES (ent);
+		if (ent->entry_id == xtext->select_start_entry_id)
+		{
+			/* Aim for the middle of the target subline so find_char's
+			 * integer-division rounding for negative y doesn't push us
+			 * one line off. */
+			xtext->select_start_y =
+				(line_count + xtext->select_start_subline)
+					* xtext->fontsize
+				- xtext->pixel_offset
+				+ xtext->fontsize / 2;
+			return TRUE;
+		}
+	}
+
+	return FALSE;
 }
 
 static void
@@ -2308,6 +2409,12 @@ gtk_xtext_selection_draw (GtkXText * xtext, void * event, gboolean render)
 	if (xtext->buffer->text_first == NULL)
 		return;
 
+	/* Re-derive select_start_y from the pinned (entry_id, subline) so the
+	 * anchor survives scrolls and buffer mutations that happen between
+	 * mousedown and this call.  select_end_y is fresh from the motion
+	 * event and needs no resolve. */
+	gtk_xtext_resolve_select_start_y (xtext);
+
 	ent_start = gtk_xtext_find_char (xtext, xtext->select_start_x, xtext->select_start_y, &offset_start, NULL);
 	ent_end = gtk_xtext_find_char (xtext, xtext->select_end_x, xtext->select_end_y, &offset_end, NULL);
 	if (ent_start == NULL && ent_end == NULL)
@@ -2443,8 +2550,6 @@ gtk_xtext_scrolldown_timeout (GtkXText * xtext)
 		return 0;
 	}
 
-	xtext->select_start_y -= xtext->fontsize;
-	xtext->select_start_adj++;
 	gtk_adjustment_set_value (adj, adj_value + 1);
 	gtk_xtext_selection_draw (xtext, NULL, TRUE);
 	if (buf->pagetop_ent)
@@ -2465,7 +2570,6 @@ gtk_xtext_scrollup_timeout (GtkXText * xtext)
 	int p_y;
 	xtext_buffer *buf = xtext->buffer;
 	GtkAdjustment *adj = xtext->adj;
-	int delta_y;
 	gdouble adj_value;
 
 	/* GTK4: Use stored position from motion events */
@@ -2483,16 +2587,10 @@ gtk_xtext_scrollup_timeout (GtkXText * xtext)
 
 	if (adj_value < 0)
 	{
-		delta_y = adj_value * xtext->fontsize;
 		gtk_adjustment_set_value (adj, 0);
-		adj_value = 0;
 	} else {
-		delta_y = xtext->fontsize;
-		adj_value--;
-		gtk_adjustment_set_value (adj, adj_value);
+		gtk_adjustment_set_value (adj, adj_value - 1);
 	}
-	xtext->select_start_y += delta_y;
-	xtext->select_start_adj = adj_value;
 	gtk_xtext_selection_draw (xtext, NULL, TRUE);
 	if (buf->pagetop_ent)
 		gtk_xtext_render_ents (xtext, buf->pagetop_ent->prev, gtk_xtext_find_by_id (buf, buf->last_ent_end_id));
@@ -2510,7 +2608,6 @@ static void
 gtk_xtext_selection_update (GtkXText * xtext, void * event, int p_y, gboolean render)
 {
 	int win_height;
-	int moved;
 	gdouble adj_value, adj_upper, adj_page_size;
 
 	if (xtext->scroll_tag)
@@ -2537,9 +2634,6 @@ gtk_xtext_selection_update (GtkXText * xtext, void * event, int p_y, gboolean re
 	}
 	else
 	{
-		moved = (int)adj_value - xtext->select_start_adj;
-		xtext->select_start_y -= (moved * xtext->fontsize);
-		xtext->select_start_adj = adj_value;
 		gtk_xtext_selection_draw (xtext, event, render);
 	}
 }
@@ -3741,16 +3835,28 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 	xtext->button_down = TRUE;
 	xtext->select_start_x = x;
 	xtext->select_start_y = y;
-	xtext->select_start_adj = gtk_adjustment_get_value (xtext->adj);
 	/* Initialize select_end to same position to avoid stale values */
 	xtext->select_end_x = x;
 	xtext->select_end_y = y;
 
-	/* Pin the clicked entry so virtual scrollback doesn't evict it */
+	/* Pin the clicked entry so virtual scrollback doesn't evict it, and
+	 * capture (entry_id, subline) so select_start_y can be re-derived
+	 * after scrolls and buffer mutations. */
 	{
-		textentry *ent = gtk_xtext_find_char (xtext, x, y, NULL, NULL);
+		int sub = 0;
+		textentry *ent =
+			gtk_xtext_find_char_ex (xtext, x, y, NULL, NULL, &sub);
 		if (ent)
+		{
 			xtext->buffer->sel_pin_start_id = ent->entry_id;
+			xtext->select_start_entry_id = ent->entry_id;
+			xtext->select_start_subline = sub;
+		}
+		else
+		{
+			xtext->select_start_entry_id = 0;
+			xtext->select_start_subline = 0;
+		}
 	}
 }
 
@@ -7573,7 +7679,6 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 			gtk_adjustment_set_value (buffer->xtext->adj,
 				gtk_adjustment_get_value (buffer->xtext->adj) - ent_lines);
 			g_signal_handler_unblock (buffer->xtext->adj, buffer->xtext->vc_signal_tag);
-			buffer->xtext->select_start_adj -= ent_lines;
 		}
 	}
 
@@ -8708,7 +8813,6 @@ gtk_xtext_prepend_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	/* Adjust scroll position - we added lines at the top, so everything shifts down */
 	if (buf->xtext && buf->xtext->buffer == buf)
 	{
-		buf->xtext->select_start_adj += new_lines;
 		/* Update adjustment value to keep view stable */
 		g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
 		gtk_adjustment_set_value (buf->xtext->adj,
@@ -8858,7 +8962,6 @@ gtk_xtext_insert_sorted_entry (xtext_buffer *buf, textentry *ent, time_t stamp)
 	{
 		if (buf->xtext && buf->xtext->buffer == buf && !buf->batch_mode)
 		{
-			buf->xtext->select_start_adj += new_lines;
 			g_signal_handler_block (buf->xtext->adj, buf->xtext->vc_signal_tag);
 			gtk_adjustment_set_value (buf->xtext->adj,
 				gtk_adjustment_get_value (buf->xtext->adj) + new_lines);

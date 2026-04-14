@@ -284,7 +284,13 @@ struct _GtkXText
 	xtext_scroll_anchor resize_anchor;	/* scroll anchor saved before reflow */
 	gulong vc_signal_tag;        /* signal handler for "value_changed" adj */
 
-	int select_start_adj;		  /* the adj->value when the selection started */
+	/* Selection start anchor.  select_start_y is derived on demand from
+	 * (select_start_entry_id, select_start_subline) relative to the current
+	 * pagetop — see gtk_xtext_resolve_select_start_y.  Pinning y directly
+	 * to pixel coordinates doesn't survive buffer mutations or anchor-
+	 * driven scrolls in virtual scrollback. */
+	guint64 select_start_entry_id;  /* 0 = not pinned (click below last ent) */
+	int select_start_subline;
 	int select_start_x;
 	int select_start_y;
 	int select_end_x;
