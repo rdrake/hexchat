@@ -25,15 +25,20 @@ typedef struct
 	GtkWidget *inner;	/* inner box */
 	GtkWidget *b1;		/* button1 */
 	GtkWidget *b2;		/* button2 */
+	GtkWidget *scroll_box;	/* box containing b1/b2 (vertical mode only) */
 	guint overflow_check_id;	/* pending idle callback for overflow check */
+	guint scroll_reorient_id;	/* pending idle callback for scroll-box reorient */
+	guint tick_cb_id;	/* frame tick callback id (outer) */
+	int last_outer_width;	/* width at last tick, to detect changes */
 } tabview;
 
 static void chanview_populate (chanview *cv);
+static gboolean cv_tabs_reorient_scroll_box_idle (gpointer data);
+static gboolean cv_tabs_tick_cb (GtkWidget *widget, GdkFrameClock *clock,
+								 gpointer user_data);
 
 /* ignore "toggled" signal? */
 static int ignore_toggle = FALSE;
-static int tab_left_is_moving = 0;
-static int tab_right_is_moving = 0;
 
 /* userdata for gobjects used here:
  *
@@ -125,14 +130,31 @@ cv_tabs_schedule_overflow_check (chanview *cv)
 }
 
 /*
- * Adjustment "changed" callback - fires when content size changes.
- * Used to detect when tabs are added/removed.
+ * Schedule a scroll-box reorient (vertical-tabs mode) — coalesces
+ * multiple triggers into a single idle pass.
+ */
+static void
+cv_tabs_schedule_reorient (chanview *cv)
+{
+	tabview *tv = (tabview *)cv;
+	if (!tv->scroll_box)
+		return;
+	if (tv->scroll_reorient_id == 0)
+		tv->scroll_reorient_id =
+			g_idle_add (cv_tabs_reorient_scroll_box_idle, cv);
+}
+
+/*
+ * Adjustment "changed" callback - fires when content size changes
+ * OR when the viewport (page_size) resizes, so it also serves as
+ * our pane-resize hook.
  */
 static void
 cv_tabs_adj_changed (GtkAdjustment *adj, chanview *cv)
 {
 	(void)adj;
 	cv_tabs_schedule_overflow_check (cv);
+	cv_tabs_schedule_reorient (cv);
 }
 
 /*
@@ -144,7 +166,81 @@ cv_tabs_sizealloc (GtkWidget *widget, int width, int height, int baseline, chanv
 {
 	(void)widget; (void)width; (void)height; (void)baseline;
 	cv_tabs_schedule_overflow_check (cv);
+	cv_tabs_schedule_reorient (cv);
 }
+
+/*
+ * Re-orient the scroll-button box (vertical-tabs mode) based on available
+ * horizontal space. When the pane is too narrow to fit both scroll arrows
+ * side-by-side, stack them vertically so the scroll box's minimum width
+ * drops to one icon and the channel-button labels can ellipsize further.
+ * Hysteresis prevents flapping right at the threshold.
+ */
+static gboolean
+cv_tabs_reorient_scroll_box_idle (gpointer data)
+{
+	chanview *cv = data;
+	tabview *tv = (tabview *)cv;
+	GtkWidget *scroll_box = tv->scroll_box;
+	int width;
+	int b1_min, b1_nat, b2_min, b2_nat;
+	int threshold;
+	GtkOrientation current, desired;
+
+	tv->scroll_reorient_id = 0;
+
+	if (!scroll_box || !tv->b1 || !tv->b2 || !tv->outer)
+		return G_SOURCE_REMOVE;
+
+	width = gtk_widget_get_width (tv->outer);
+	if (width <= 0)
+		return G_SOURCE_REMOVE;
+
+	gtk_widget_measure (tv->b1, GTK_ORIENTATION_HORIZONTAL, -1,
+		&b1_min, &b1_nat, NULL, NULL);
+	gtk_widget_measure (tv->b2, GTK_ORIENTATION_HORIZONTAL, -1,
+		&b2_min, &b2_nat, NULL, NULL);
+
+	current = gtk_orientable_get_orientation (GTK_ORIENTABLE (scroll_box));
+	/* Stack when the pane can't fit both arrows side-by-side with a
+	 * small padding margin. */
+	threshold = b1_nat + b2_nat + 8;
+	if (current == GTK_ORIENTATION_VERTICAL)
+		threshold += 16;	/* hysteresis: need extra room before un-stacking */
+
+	desired = (width < threshold)
+		? GTK_ORIENTATION_VERTICAL
+		: GTK_ORIENTATION_HORIZONTAL;
+
+	if (current != desired)
+		gtk_orientable_set_orientation (GTK_ORIENTABLE (scroll_box), desired);
+
+	return G_SOURCE_REMOVE;
+}
+
+/*
+ * Per-frame tick callback on outer. The hadjustment "changed" signal
+ * can miss horizontal allocation shrinks under POLICY_NEVER (GTK4
+ * doesn't always re-fire it on shrink). The tick fires every frame;
+ * we only schedule a reorient when the width has actually changed.
+ */
+static gboolean
+cv_tabs_tick_cb (GtkWidget *widget, GdkFrameClock *clock, gpointer user_data)
+{
+	chanview *cv = user_data;
+	tabview *tv = (tabview *)cv;
+	int width;
+	(void)clock;
+
+	width = gtk_widget_get_width (widget);
+	if (width != tv->last_outer_width)
+	{
+		tv->last_outer_width = width;
+		cv_tabs_schedule_reorient (cv);
+	}
+	return G_SOURCE_CONTINUE;
+}
+
 
 static gint
 tab_search_offset (GtkWidget *inner, gint start_offset,
@@ -197,49 +293,20 @@ tab_scroll_left_up_clicked (GtkWidget *widget, chanview *cv)
 	GtkAdjustment *adj;
 	gint viewport_size;
 	gfloat new_value;
-	GtkWidget *inner;
-	GtkWidget *viewport;
-	gdouble i;
+	GtkWidget *inner = ((tabview *)cv)->inner;
+	GtkWidget *viewport = gtk_widget_get_parent (inner);
 
-	inner = ((tabview *)cv)->inner;
-	viewport = gtk_widget_get_parent (inner);
-
-	if (cv->vertical)
-	{
-		adj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (viewport));
-		/* In GTK4, use adjustment page_size for visible size */
-		viewport_size = (gint)gtk_adjustment_get_page_size (adj);
-	} else
-	{
-		adj = gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
-		/* In GTK4, use adjustment page_size for visible size */
-		viewport_size = (gint)gtk_adjustment_get_page_size (adj);
-	}
+	adj = cv->vertical
+		? gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (viewport))
+		: gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
+	viewport_size = (gint)gtk_adjustment_get_page_size (adj);
 
 	new_value = tab_search_offset (inner, gtk_adjustment_get_value (adj), 0, cv->vertical);
 
 	if (new_value + viewport_size > gtk_adjustment_get_upper (adj))
 		new_value = gtk_adjustment_get_upper (adj) - viewport_size;
 
-	if (!tab_left_is_moving)
-	{
-		tab_left_is_moving = 1;
-
-		for (i = gtk_adjustment_get_value (adj); ((i > new_value) && (tab_left_is_moving)); i -= 0.1)
-		{
-			gtk_adjustment_set_value (adj, i);
-			while (g_main_context_pending (NULL))
-				g_main_context_iteration (NULL, TRUE);
-		}
-
-		gtk_adjustment_set_value (adj, new_value);
-
-		tab_left_is_moving = 0;		/* hSP: set to false in case we didnt get stopped (the normal case) */
-	}
-	else
-	{
-		tab_left_is_moving = 0;		/* hSP: jump directly to next element if user is clicking faster than we can scroll.. */
-	}
+	gtk_adjustment_set_value (adj, new_value);
 }
 
 static void
@@ -248,49 +315,20 @@ tab_scroll_right_down_clicked (GtkWidget *widget, chanview *cv)
 	GtkAdjustment *adj;
 	gint viewport_size;
 	gfloat new_value;
-	GtkWidget *inner;
-	GtkWidget *viewport;
-	gdouble i;
+	GtkWidget *inner = ((tabview *)cv)->inner;
+	GtkWidget *viewport = gtk_widget_get_parent (inner);
 
-	inner = ((tabview *)cv)->inner;
-	viewport = gtk_widget_get_parent (inner);
-
-	if (cv->vertical)
-	{
-		adj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (viewport));
-		/* In GTK4, use adjustment page_size for visible size */
-		viewport_size = (gint)gtk_adjustment_get_page_size (adj);
-	} else
-	{
-		adj = gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
-		/* In GTK4, use adjustment page_size for visible size */
-		viewport_size = (gint)gtk_adjustment_get_page_size (adj);
-	}
+	adj = cv->vertical
+		? gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (viewport))
+		: gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
+	viewport_size = (gint)gtk_adjustment_get_page_size (adj);
 
 	new_value = tab_search_offset (inner, gtk_adjustment_get_value (adj), 1, cv->vertical);
 
 	if (new_value == 0 || new_value + viewport_size > gtk_adjustment_get_upper (adj))
 		new_value = gtk_adjustment_get_upper (adj) - viewport_size;
 
-	if (!tab_right_is_moving)
-	{
-		tab_right_is_moving = 1;
-
-		for (i = gtk_adjustment_get_value (adj); ((i < new_value) && (tab_right_is_moving)); i += 0.1)
-		{
-			gtk_adjustment_set_value (adj, i);
-			while (g_main_context_pending (NULL))
-				g_main_context_iteration (NULL, TRUE);
-		}
-
-		gtk_adjustment_set_value (adj, new_value);
-
-		tab_right_is_moving = 0;		/* hSP: set to false in case we didnt get stopped (the normal case) */
-	}
-	else
-	{
-		tab_right_is_moving = 0;		/* hSP: jump directly to next element if user is clicking faster than we can scroll.. */
-	}
+	gtk_adjustment_set_value (adj, new_value);
 }
 
 /*
@@ -361,6 +399,10 @@ make_sbutton (GtkArrowType type, void *click_cb, void *userdata)
 	gtk_widget_set_halign (image, GTK_ALIGN_CENTER);
 	gtk_button_set_child (GTK_BUTTON (button), image);
 	gtk_button_set_has_frame (GTK_BUTTON (button), FALSE);
+	/* Let the button drop below icon width — otherwise the two scroll
+	 * buttons side-by-side floor outer's min width and keep the paned
+	 * from allocating outer narrow enough for tabs to ellipsize. */
+	gtk_button_set_can_shrink (GTK_BUTTON (button), TRUE);
 	g_signal_connect (G_OBJECT (button), "clicked",
 							G_CALLBACK (click_cb), userdata);
 	hc_add_scroll_controller (button, G_CALLBACK (tab_scroll_cb), userdata);
@@ -381,6 +423,10 @@ cv_tabs_init (chanview *cv)
 	else
 		outer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	((tabview *)cv)->outer = outer;
+	((tabview *)cv)->last_outer_width = -1;
+	if (cv->vertical)
+		((tabview *)cv)->tick_cb_id =
+			gtk_widget_add_tick_callback (outer, cv_tabs_tick_cb, cv, NULL);
 /*	hc_widget_set_margin_all (GTK_WIDGET (outer), 2);*/
 
 	{
@@ -405,12 +451,22 @@ cv_tabs_init (chanview *cv)
 		hc_add_scroll_controller (scrollw, G_CALLBACK (tab_scroll_cb), cv);
 
 		/* Connect to adjustment "changed" signal to detect when content size changes.
-		 * This fires when tabs are added/removed and the adjustment bounds update. */
+		 * This fires when tabs are added/removed and the adjustment bounds update.
+		 * In vertical mode we also listen on the horizontal adjustment so pane
+		 * resizes (which change the viewport's page_size on the non-scroll axis)
+		 * trigger the scroll-box reorient check. */
 		adj = cv->vertical ?
 			gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (viewport)) :
 			gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
 		g_signal_connect (G_OBJECT (adj), "changed",
 								G_CALLBACK (cv_tabs_adj_changed), cv);
+		if (cv->vertical)
+		{
+			GtkAdjustment *hadj =
+				gtk_scrollable_get_hadjustment (GTK_SCROLLABLE (viewport));
+			g_signal_connect (G_OBJECT (hadj), "changed",
+									G_CALLBACK (cv_tabs_adj_changed), cv);
+		}
 
 		hc_box_pack_start_impl (GTK_BOX (outer), scrollw, TRUE);
 	}
@@ -426,11 +482,14 @@ cv_tabs_init (chanview *cv)
 	g_signal_connect (G_OBJECT (box), "size_allocate",
 							G_CALLBACK (cv_tabs_sizealloc), cv);
 
-	/* if vertical, the buttons can be side by side */
+	/* if vertical, the buttons can be side by side; may re-orient
+	 * to vertical stacking when the pane is too narrow to fit both
+	 * icons side-by-side (see cv_tabs_scroll_box_sizealloc). */
 	if (cv->vertical)
 	{
 		hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 		gtk_box_append (GTK_BOX (outer), hbox);
+		((tabview *)cv)->scroll_box = hbox;
 	}
 
 	/* make the Scroll buttons */
@@ -466,6 +525,8 @@ cv_tabs_init (chanview *cv)
 									 cv, 0);
 	gtk_button_set_has_frame (GTK_BUTTON (button), FALSE);
 	gtk_widget_set_can_focus (button, FALSE);
+	/* Same reason as scroll buttons: don't floor outer's min width. */
+	gtk_button_set_can_shrink (GTK_BUTTON (button), TRUE);
 
 	gtk_box_append (GTK_BOX (cv->box), outer);
 }
@@ -741,6 +802,15 @@ cv_tabs_add (chanview *cv, chan *ch, char *name, gboolean has_parent)
 
 	/* GTK4: Allow button to shrink below natural size for compact tab bar */
 	gtk_button_set_can_shrink (GTK_BUTTON (but), TRUE);
+
+	/* Ellipsize the label so narrow tabs (or narrow vertical panes) clip
+	 * the name instead of forcing the tab bar to the full text width.
+	 * GtkButton with can-shrink=TRUE handles label layout itself. */
+	{
+		GtkWidget *label = gtk_button_get_child (GTK_BUTTON (but));
+		if (GTK_IS_LABEL (label))
+			gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
+	}
 
 	/* When tabs are vertical (on left/right side), expand horizontally to fill width */
 	gtk_widget_set_hexpand (but, cv->vertical);
@@ -1234,14 +1304,67 @@ cv_tabs_move_family (chan *ch, int delta)
 static void
 cv_tabs_cleanup (chanview *cv)
 {
+	guint n_items, n_children, i, j;
+	HcChanItem *item, *child;
+
 	/* Cancel any pending overflow check */
 	if (((tabview *)cv)->overflow_check_id != 0)
 	{
 		g_source_remove (((tabview *)cv)->overflow_check_id);
 		((tabview *)cv)->overflow_check_id = 0;
 	}
+	if (((tabview *)cv)->scroll_reorient_id != 0)
+	{
+		g_source_remove (((tabview *)cv)->scroll_reorient_id);
+		((tabview *)cv)->scroll_reorient_id = 0;
+	}
+	if (((tabview *)cv)->tick_cb_id != 0 && ((tabview *)cv)->outer)
+	{
+		gtk_widget_remove_tick_callback (((tabview *)cv)->outer,
+										 ((tabview *)cv)->tick_cb_id);
+		((tabview *)cv)->tick_cb_id = 0;
+	}
+
+	/* Clear ch->impl before destroying the tab widgets. Otherwise a
+	 * subsequent cv_tabs_add (during rebuild) reads cv->focused->impl
+	 * as a dangling pointer and passes it to gtk_toggle_button_set_group,
+	 * corrupting the group's linked list and causing gtk_toggle_button_set_active
+	 * to loop forever in the group-walk at gtktogglebutton.c. */
+	n_items = g_list_model_get_n_items (G_LIST_MODEL (cv->store));
+	for (i = 0; i < n_items; i++)
+	{
+		item = g_list_model_get_item (G_LIST_MODEL (cv->store), i);
+		if (!item)
+			continue;
+		if (item->ch)
+			item->ch->impl = NULL;
+		if (item->children)
+		{
+			n_children = g_list_model_get_n_items (G_LIST_MODEL (item->children));
+			for (j = 0; j < n_children; j++)
+			{
+				child = g_list_model_get_item (G_LIST_MODEL (item->children), j);
+				if (child)
+				{
+					if (child->ch)
+						child->ch->impl = NULL;
+					g_object_unref (child);
+				}
+			}
+		}
+		g_object_unref (item);
+	}
+
 	if (cv->box)
 		hc_widget_destroy_impl (GTK_WIDGET (((tabview *)cv)->outer));
+
+	((tabview *)cv)->scroll_box = NULL;
+	((tabview *)cv)->b1 = NULL;
+	((tabview *)cv)->b2 = NULL;
+	((tabview *)cv)->outer = NULL;
+	((tabview *)cv)->inner = NULL;
+	((tabview *)cv)->tick_cb_id = 0;
+	((tabview *)cv)->last_outer_width = -1;
 }
 
 static void
