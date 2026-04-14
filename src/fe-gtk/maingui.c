@@ -3301,7 +3301,15 @@ mg_update_userlist_columns (session *sess, int pane_size)
 
 	/* Apply visibility */
 	if (icon_col && prefs.hex_gui_ulist_icons)
+	{
+		gboolean was_visible = gtk_column_view_column_get_visible (icon_col);
 		gtk_column_view_column_set_visible (icon_col, show_icon);
+		/* GtkColumnView doesn't rebind cached row children on column
+		 * visibility change, so refresh already-bound nick labels to
+		 * add/strip the prefix char immediately. */
+		if (was_visible != show_icon)
+			userlist_refresh_nick_labels (gui->user_tree);
+	}
 	if (nick_col)
 		gtk_column_view_column_set_visible (nick_col, show_nick);
 	if (host_col && prefs.hex_gui_ulist_show_hosts)

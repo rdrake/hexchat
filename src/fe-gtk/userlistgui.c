@@ -1082,6 +1082,56 @@ userlist_set_nick_ellipsize (GtkWidget *view, gboolean ellipsize)
 }
 
 /*
+ * Re-apply text to every bound nick label based on current icon-column
+ * visibility. GtkColumnView doesn't rebind cached row children when a
+ * column's visibility toggles, so the bind_cb's prefix-prepend logic
+ * only runs on rows that are later scrolled/recycled. Without this,
+ * hiding the icon column leaves most nicks without the +@% prefix
+ * until a channel switch, and re-showing the icon column can leave
+ * the stale prefix in place next to the icon.
+ */
+void
+userlist_refresh_nick_labels (GtkWidget *view)
+{
+	GPtrArray *labels = g_object_get_data (G_OBJECT (view), "nick-labels");
+	GtkColumnViewColumn *icon_col;
+	gboolean icons_hidden;
+	guint i;
+
+	if (!labels)
+		return;
+
+	icon_col = g_object_get_data (G_OBJECT (view), "icon-column");
+	icons_hidden = icon_col && !gtk_column_view_column_get_visible (icon_col);
+
+	for (i = 0; i < labels->len; i++)
+	{
+		GtkLabel *label = g_ptr_array_index (labels, i);
+		HcUserItem *item = g_object_get_data (G_OBJECT (label), "hc-user-item");
+		const char *nick;
+		char prefix = 0;
+
+		if (!item)
+			continue;
+		nick = item->nick ? item->nick : "";
+
+		if (icons_hidden && item->user)
+			prefix = item->user->prefix[0];
+
+		if (prefix && prefix != ' ')
+		{
+			char *display = g_strdup_printf ("%c%s", prefix, nick);
+			gtk_label_set_text (label, display);
+			g_free (display);
+		}
+		else
+		{
+			gtk_label_set_text (label, nick);
+		}
+	}
+}
+
+/*
  * GTK4: Connect the session's model to the GtkColumnView with sorting
  */
 void

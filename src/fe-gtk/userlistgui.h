@@ -32,6 +32,7 @@ char **userlist_selection_list (GtkWidget *widget, int *num_ret);
 GdkPixbuf *get_user_icon (server *serv, struct User *user);
 void userlist_apply_prefs (session *sess);
 void userlist_set_nick_ellipsize (GtkWidget *view, gboolean ellipsize);
+void userlist_refresh_nick_labels (GtkWidget *view);
 int userlist_measure_max_nick_width (GtkWidget *user_tree, session *sess);
 
 #endif
