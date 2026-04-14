@@ -2092,6 +2092,26 @@ mg_userlist_button (GtkWidget * box, char *label, char *cmd,
 	show_and_unfocus (wid);
 }
 
+/* Detent hint for the userlist button grid. Buttons ellipsize to "...",
+ * two per row. Min width = 2 buttons * ("..." + button padding). */
+static int
+mg_ulist_buttons_detent_min (GtkWidget *grid)
+{
+	PangoContext *ctx;
+	PangoFontMetrics *metrics;
+	int char_w;
+
+	ctx = gtk_widget_get_pango_context (grid);
+	metrics = pango_context_get_metrics (ctx, NULL, NULL);
+	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
+	pango_font_metrics_unref (metrics);
+	if (char_w <= 0)
+		char_w = 8;
+
+	/* 2 buttons/row, each ~= 2 char widths of label + ~12px button padding */
+	return 2 * (2 * char_w + 12);
+}
+
 static GtkWidget *
 mg_create_userlistbuttons (GtkWidget *box)
 {
@@ -2105,6 +2125,7 @@ mg_create_userlistbuttons (GtkWidget *box)
 	gtk_widget_set_size_request (tab, 1, -1);
 	/* pack_end places buttons at bottom, matching GTK2 behavior */
 	gtk_box_append (GTK_BOX (box), tab);
+	mg_set_detent_min_func (tab, mg_ulist_buttons_detent_min);
 
 	while (list)
 	{
@@ -3395,9 +3416,47 @@ mg_rightpane_idle_cb (gpointer user_data)
  * starts clipping the content. */
 #define MG_PANE_DETENT_STICKY_PX 25
 
+#define MG_DETENT_MIN_KEY "hexchat-detent-min-func"
+
+void
+mg_set_detent_min_func (GtkWidget *widget, mg_detent_min_func func)
+{
+	if (widget)
+		g_object_set_data (G_OBJECT (widget), MG_DETENT_MIN_KEY, (gpointer) func);
+}
+
+/* Walk the widget subtree; for each widget that declares a detent-min
+ * via mg_set_detent_min_func, call the callback and take the max value.
+ * Registered widgets are treated as leaves — we don't recurse into them. */
+static int
+mg_widget_detent_min (GtkWidget *widget)
+{
+	mg_detent_min_func func;
+	GtkWidget *child;
+	int max_min = 0, m;
+
+	if (!widget)
+		return 0;
+
+	func = (mg_detent_min_func) g_object_get_data (G_OBJECT (widget), MG_DETENT_MIN_KEY);
+	if (func)
+		return func (widget);
+
+	for (child = gtk_widget_get_first_child (widget); child;
+	     child = gtk_widget_get_next_sibling (child))
+	{
+		m = mg_widget_detent_min (child);
+		if (m > max_min)
+			max_min = m;
+	}
+
+	return max_min;
+}
+
 /* Magnetic detent on pane shrink. child is the paned child that shrinks
- * as `position` approaches `threshold_side` (START / END). We measure
- * the child's natural minimum width and, when the cursor has driven the
+ * as `position` approaches `threshold_side` (START / END). We compute
+ * the child's effective minimum width (from widget-declared hints, or
+ * fall back to gtk_widget_measure) and, when the cursor has driven the
  * paned within the sticky window on the shrinking side of that minimum,
  * clamp the position back to hold the child at its minimum. */
 static void
@@ -3413,10 +3472,17 @@ mg_pane_apply_detent (GtkPaned *pane, GtkWidget *shrinking_child,
 	if (pane_w <= 0)
 		return;
 
-	gtk_widget_measure (shrinking_child, GTK_ORIENTATION_HORIZONTAL, -1,
-	                    &child_min, NULL, NULL, NULL);
+	child_min = mg_widget_detent_min (shrinking_child);
 	if (child_min <= 0)
-		return;
+	{
+		/* No widget-declared hint found; fall back to measured natural
+		 * min. Slightly loose for widgets with ellipsizing labels, but
+		 * correct for simple content. */
+		gtk_widget_measure (shrinking_child, GTK_ORIENTATION_HORIZONTAL, -1,
+		                    &child_min, NULL, NULL, NULL);
+		if (child_min <= 0)
+			return;
+	}
 
 	pos = gtk_paned_get_position (pane);
 

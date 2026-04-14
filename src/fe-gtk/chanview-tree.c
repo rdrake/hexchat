@@ -44,6 +44,28 @@ static chan *cv_tree_get_parent (chan *ch);
 
 #include <gdk/gdk.h>
 
+/* Detent hint: the smallest useful width for the tree listview. Sits
+ * just below the final progressive-collapse threshold (9 * char_w, see
+ * cv_tree_update_pane_size) so the collapse fires first, then the detent
+ * snaps once the tree is flattened to just labels. Below this point
+ * content starts to clip. */
+static int
+cv_tree_detent_min (GtkWidget *view)
+{
+	PangoContext *ctx;
+	PangoFontMetrics *metrics;
+	int char_w;
+
+	ctx = gtk_widget_get_pango_context (view);
+	metrics = pango_context_get_metrics (ctx, NULL, NULL);
+	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
+	pango_font_metrics_unref (metrics);
+	if (char_w <= 0)
+		char_w = 8;
+
+	return 8 * char_w;
+}
+
 /*
  * GTK4: Row activated callback for GtkListView
  * Toggle expansion state of tree rows on double-click
@@ -478,6 +500,9 @@ cv_tree_init (chanview *cv)
 	gtk_widget_set_can_focus (view, FALSE);
 	gtk_widget_set_size_request (view, 1, -1);
 
+	g_object_set_data (G_OBJECT (view), "chanview-cv", cv);
+	mg_set_detent_min_func (view, cv_tree_detent_min);
+
 	/* Connect signals */
 	g_signal_connect (sel_model, "selection-changed",
 	                  G_CALLBACK (cv_tree_sel_cb), cv);
@@ -543,7 +568,7 @@ cv_tree_update_pane_size (chanview *cv, int pane_size)
 		char_w = 8;  /* sane fallback */
 
 	hide_icons = (pane_size >= 0 && pane_size < 12 * char_w);
-	hide_indent = (pane_size >= 0 && pane_size < 8 * char_w);
+	hide_indent = (pane_size >= 0 && pane_size < 9 * char_w);
 
 	was_hiding_icons = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-icons"));
 	was_hiding_indent = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-indent"));

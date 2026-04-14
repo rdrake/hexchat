@@ -63,4 +63,12 @@ void mg_search_toggle(session *sess);
 void mg_search_handle_previous(GtkWidget *wid, session *sess);
 void mg_search_handle_next(GtkWidget *wid, session *sess);
 
+/* Detent-min hint: widgets that know their own true "clip-start" width
+ * (below the natural minimum that gtk_widget_measure reports, but above
+ * the point where borders start to visibly clip) can register a callback
+ * that returns that value in pixels. The pane-drag detent walks the
+ * shrinking subtree and takes the max of any widget-declared mins. */
+typedef int (*mg_detent_min_func) (GtkWidget *widget);
+void mg_set_detent_min_func (GtkWidget *widget, mg_detent_min_func func);
+
 #endif

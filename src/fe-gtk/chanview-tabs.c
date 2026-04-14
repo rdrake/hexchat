@@ -410,6 +410,42 @@ make_sbutton (GtkArrowType type, void *click_cb, void *userdata)
 	return button;
 }
 
+/* Detent hint: true "clip-start" width for the tabs bar. In vertical
+ * orientation, min ≈ close button + ellipsized "..." + optional icon +
+ * padding. Horizontal orientation has wider min but is rarely inside a
+ * shrinking pane. */
+static int
+cv_tabs_detent_min (GtkWidget *outer)
+{
+	PangoContext *ctx;
+	PangoFontMetrics *metrics;
+	chanview *cv;
+	int char_w, min_w;
+
+	ctx = gtk_widget_get_pango_context (outer);
+	metrics = pango_context_get_metrics (ctx, NULL, NULL);
+	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
+	pango_font_metrics_unref (metrics);
+	if (char_w <= 0)
+		char_w = 8;
+
+	cv = g_object_get_data (G_OBJECT (outer), "chanview-cv");
+
+	if (cv && cv->vertical)
+	{
+		/* close button (~18) + label "..." (1 char) + padding */
+		min_w = 18 + char_w + 8;
+		if (cv && cv->use_icons)
+			min_w += 18;
+	}
+	else
+	{
+		/* horizontal: 2 scroll buttons + 1 tab min */
+		min_w = 2 * 18 + 18 + char_w + 8;
+	}
+	return min_w;
+}
+
 static void
 cv_tabs_init (chanview *cv)
 {
@@ -529,6 +565,9 @@ cv_tabs_init (chanview *cv)
 	gtk_button_set_can_shrink (GTK_BUTTON (button), TRUE);
 
 	gtk_box_append (GTK_BOX (cv->box), outer);
+
+	g_object_set_data (G_OBJECT (outer), "chanview-cv", cv);
+	mg_set_detent_min_func (outer, cv_tabs_detent_min);
 }
 
 static void

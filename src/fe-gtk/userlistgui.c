@@ -942,6 +942,41 @@ userlist_key_cb (GtkEventControllerKey *controller, guint keyval,
 	return FALSE;
 }
 
+/* Detent hint: true "clip-start" width for the column view. Natural-min
+ * measurement overshoots because the nick column's content reports a wider
+ * minimum than the point at which labels ellipsize to "..." and start
+ * clipping. We compute this from current font metrics + visible columns. */
+static int
+userlist_view_detent_min (GtkWidget *view)
+{
+	PangoContext *ctx;
+	PangoFontMetrics *metrics;
+	GtkColumnViewColumn *col;
+	int char_w, min_w = 0;
+
+	ctx = gtk_widget_get_pango_context (view);
+	metrics = pango_context_get_metrics (ctx, NULL, NULL);
+	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
+	pango_font_metrics_unref (metrics);
+	if (char_w <= 0)
+		char_w = 8;
+
+	col = g_object_get_data (G_OBJECT (view), "icon-column");
+	if (col && gtk_column_view_column_get_visible (col))
+		min_w += 20;
+
+	/* Nick column: always visible, ellipsized to "..." ≈ 4 char widths */
+	min_w += 4 * char_w;
+
+	col = g_object_get_data (G_OBJECT (view), "host-column");
+	if (col && gtk_column_view_column_get_visible (col))
+		min_w += 4 * char_w;
+
+	/* Cell separators and row padding */
+	min_w += 20;
+	return min_w;
+}
+
 /*
  * GTK4 version: Create GtkColumnView with hidden headers
  */
@@ -1024,6 +1059,8 @@ userlist_create (GtkWidget *box)
 	hc_add_key_controller (view, G_CALLBACK (userlist_key_cb), NULL, NULL);
 
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (sw), view);
+
+	mg_set_detent_min_func (view, userlist_view_detent_min);
 
 	return view;
 }
