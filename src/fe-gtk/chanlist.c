@@ -626,30 +626,58 @@ chanlist_action_autojoin (GSimpleAction *action, GVariant *parameter, gpointer u
 	}
 }
 
+typedef struct {
+	GtkWidget *popover;
+	GSimpleActionGroup *action_group;
+} ChanlistPopoverCleanup;
+
+static void
+chanlist_popover_weak_notify (gpointer data, GObject *where_the_object_was)
+{
+	ChanlistPopoverCleanup *cleanup = data;
+	(void)where_the_object_was;
+	cleanup->popover = NULL;
+}
+
 static gboolean
 chanlist_popover_cleanup_idle (gpointer user_data)
 {
-	GSimpleActionGroup *action_group = G_SIMPLE_ACTION_GROUP (user_data);
+	ChanlistPopoverCleanup *cleanup = user_data;
 
-	/* Clean up action group */
-	if (action_group)
-		g_object_unref (action_group);
+	if (cleanup->action_group)
+		g_object_unref (cleanup->action_group);
 
 	/* Free the stored channel name */
 	g_free (chanlist_menu_chan);
 	chanlist_menu_chan = NULL;
 	chanlist_menu_serv = NULL;
 
+	/* Unparent the popover if still alive with a parent. Skipping this
+	 * leaves stale popovers attached to the column view, which eventually
+	 * block new popovers from opening. The parent check guards teardown. */
+	if (cleanup->popover != NULL)
+	{
+		g_object_weak_unref (G_OBJECT (cleanup->popover), chanlist_popover_weak_notify, cleanup);
+		if (gtk_widget_get_parent (cleanup->popover))
+			gtk_widget_unparent (cleanup->popover);
+	}
+
+	g_free (cleanup);
 	return G_SOURCE_REMOVE;
 }
 
 static void
 chanlist_popover_closed_cb (GtkPopover *popover, gpointer user_data)
 {
-	(void)popover;
+	ChanlistPopoverCleanup *cleanup = g_new0 (ChanlistPopoverCleanup, 1);
+
+	cleanup->popover = GTK_WIDGET (popover);
+	cleanup->action_group = G_SIMPLE_ACTION_GROUP (user_data);
+
+	g_object_weak_ref (G_OBJECT (popover), chanlist_popover_weak_notify, cleanup);
 
 	/* Defer cleanup so action callbacks can run first */
-	g_idle_add (chanlist_popover_cleanup_idle, user_data);
+	g_idle_add (chanlist_popover_cleanup_idle, cleanup);
 }
 
 static void

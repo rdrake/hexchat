@@ -690,12 +690,16 @@ nick_menu_popover_cleanup_idle (gpointer user_data)
 	nick_menu_free_info ();
 	nick_popup_cmds_free ();
 
-	/* Remove weak ref if popover still exists.
-	 * We do NOT unparent the popover - GTK4 automatically cleans up popovers
-	 * when their parent window is destroyed. Trying to unparent after the
-	 * parent hierarchy is partially destroyed causes crashes. */
+	/* Remove weak ref and unparent the popover if still alive with a parent.
+	 * Leaving it parented lets stale popovers accumulate and eventually block
+	 * new ones. The parent check guards against window-teardown races where
+	 * the parent hierarchy is already being dismantled. */
 	if (cleanup->popover != NULL)
+	{
 		g_object_weak_unref (G_OBJECT (cleanup->popover), nick_menu_popover_weak_notify, cleanup);
+		if (gtk_widget_get_parent (cleanup->popover))
+			gtk_widget_unparent (cleanup->popover);
+	}
 
 	g_free (cleanup);
 	return G_SOURCE_REMOVE;
@@ -1751,14 +1755,18 @@ menu_popover_cleanup_idle (gpointer user_data)
 		g_object_unref (cleanup->action_group);
 	}
 
-	/* Remove weak ref if popover still exists.
-	 * We do NOT unparent the popover - GTK4 automatically cleans up popovers
-	 * when their parent window is destroyed. Trying to unparent after the
-	 * parent hierarchy is partially destroyed causes crashes. */
+	/* Remove weak ref and unparent the popover if it still exists with a
+	 * parent. Leaving it parented causes stale popovers to accumulate and
+	 * eventually block new ones from opening (and their event handling can
+	 * interfere with adjacent widgets). The parent check guards against
+	 * unparenting during window teardown, when the parent hierarchy has
+	 * already been dismantled. */
 	if (cleanup->popover != NULL)
 	{
-		hc_debug_log ("  -> popover still valid, removing weak ref");
+		hc_debug_log ("  -> popover still valid, removing weak ref and unparenting");
 		g_object_weak_unref (G_OBJECT (cleanup->popover), menu_popover_weak_notify, cleanup);
+		if (gtk_widget_get_parent (cleanup->popover))
+			gtk_widget_unparent (cleanup->popover);
 	}
 	else
 	{
@@ -1820,12 +1828,16 @@ url_menu_popover_cleanup_idle (gpointer user_data)
 	/* Free URL handler resources */
 	url_handler_cmds_free ();
 
-	/* Remove weak ref if popover still exists.
-	 * We do NOT unparent the popover - GTK4 automatically cleans up popovers
-	 * when their parent window is destroyed. Trying to unparent after the
-	 * parent hierarchy is partially destroyed causes crashes. */
+	/* Remove weak ref and unparent the popover if still alive with a parent.
+	 * Leaving it parented lets stale popovers accumulate and eventually block
+	 * new ones. The parent check guards against window-teardown races where
+	 * the parent hierarchy is already being dismantled. */
 	if (cleanup->popover != NULL)
+	{
 		g_object_weak_unref (G_OBJECT (cleanup->popover), url_menu_popover_weak_notify, cleanup);
+		if (gtk_widget_get_parent (cleanup->popover))
+			gtk_widget_unparent (cleanup->popover);
+	}
 
 	g_free (cleanup);
 	return G_SOURCE_REMOVE;
