@@ -2097,17 +2097,7 @@ mg_userlist_button (GtkWidget * box, char *label, char *cmd,
 static int
 mg_ulist_buttons_detent_min (GtkWidget *grid)
 {
-	PangoContext *ctx;
-	PangoFontMetrics *metrics;
-	int char_w;
-
-	ctx = gtk_widget_get_pango_context (grid);
-	metrics = pango_context_get_metrics (ctx, NULL, NULL);
-	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
-	pango_font_metrics_unref (metrics);
-	if (char_w <= 0)
-		char_w = 8;
-
+	int char_w = hc_widget_char_width (grid);
 	/* 2 buttons/row, each ~= 2 char widths of label + ~12px button padding */
 	return 2 * (2 * char_w + 12);
 }
@@ -3262,15 +3252,7 @@ mg_leftpane_cb (GtkPaned *pane, GParamSpec *param, session_gui *gui)
 static int
 mg_approx_char_width (GtkWidget *widget)
 {
-	PangoContext *ctx;
-	PangoFontMetrics *metrics;
-	int char_w;
-
-	ctx = gtk_widget_get_pango_context (widget);
-	metrics = pango_context_get_metrics (ctx, NULL, NULL);
-	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
-	pango_font_metrics_unref (metrics);
-	return char_w > 0 ? char_w : 8;  /* sane fallback */
+	return hc_widget_char_width (widget);
 }
 
 /* Progressive column collapse as userlist pane shrinks:

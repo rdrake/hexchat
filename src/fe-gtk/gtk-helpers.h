@@ -977,4 +977,31 @@ hc_editable_label_new (GtkListItem *list_item, GtkEditableLabel **editing_label)
 #define GDK_MOD1_MASK GDK_ALT_MASK
 #endif
 
+/* =============================================================================
+ * Font Metrics
+ * =============================================================================
+ * pango_font_metrics_get_approximate_char_width returns a width closer to a
+ * narrow-digit average than to typical letter width, which makes char-count
+ * based layout math (detent thresholds, column widths, etc.) read too small.
+ * Measure a reference glyph via a real PangoLayout instead — 'n' is a middle
+ * ground between a narrow digit and 'M'.
+ */
+static inline int
+hc_widget_char_width (GtkWidget *widget)
+{
+	PangoLayout *layout;
+	int w = 0;
+
+	if (!widget)
+		return 8;
+
+	layout = gtk_widget_create_pango_layout (widget, "n");
+	if (layout)
+	{
+		pango_layout_get_pixel_size (layout, &w, NULL);
+		g_object_unref (layout);
+	}
+	return w > 0 ? w : 8;
+}
+
 #endif /* HEXCHAT_GTK_HELPERS_H */

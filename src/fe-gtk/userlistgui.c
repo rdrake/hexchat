@@ -949,31 +949,23 @@ userlist_key_cb (GtkEventControllerKey *controller, guint keyval,
 static int
 userlist_view_detent_min (GtkWidget *view)
 {
-	PangoContext *ctx;
-	PangoFontMetrics *metrics;
 	GtkColumnViewColumn *col;
-	int char_w, min_w = 0;
-
-	ctx = gtk_widget_get_pango_context (view);
-	metrics = pango_context_get_metrics (ctx, NULL, NULL);
-	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
-	pango_font_metrics_unref (metrics);
-	if (char_w <= 0)
-		char_w = 8;
+	int char_w = hc_widget_char_width (view), min_w = 0;
 
 	col = g_object_get_data (G_OBJECT (view), "icon-column");
 	if (col && gtk_column_view_column_get_visible (col))
-		min_w += 20;
+		min_w += 16;
 
-	/* Nick column: always visible, ellipsized to "..." ≈ 4 char widths */
-	min_w += 4 * char_w;
+	/* Nick column: always visible, ellipsized to "…" — glyph is narrower
+	 * than three 'n's, so 3*char_w is a generous budget. */
+	min_w += 3 * char_w;
 
 	col = g_object_get_data (G_OBJECT (view), "host-column");
 	if (col && gtk_column_view_column_get_visible (col))
-		min_w += 4 * char_w;
+		min_w += 3 * char_w;
 
 	/* Cell separators and row padding */
-	min_w += 20;
+	min_w += 10;
 	return min_w;
 }
 

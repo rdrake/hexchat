@@ -2175,17 +2175,21 @@ hex_input_edit_measure (GtkWidget *widget, GtkOrientation orientation,
 
 	if (orientation == GTK_ORIENTATION_HORIZONTAL)
 	{
-		/* Compute character width from font metrics */
+		/* Compute character width from a real 'n' glyph — approximate
+		 * metrics under-report for many fonts. */
 		int char_w = 0;
 		if (priv->width_chars > 0 || priv->max_width_chars > 0)
 		{
-			PangoContext *pctx = gtk_widget_get_pango_context (widget);
-			PangoFontDescription *desc = priv->font_desc
-				? priv->font_desc
-				: (PangoFontDescription *) pango_context_get_font_description (pctx);
-			PangoFontMetrics *m = pango_context_get_metrics (pctx, desc, NULL);
-			char_w = pango_font_metrics_get_approximate_char_width (m) / PANGO_SCALE;
-			pango_font_metrics_unref (m);
+			PangoLayout *layout = gtk_widget_create_pango_layout (widget, "n");
+			if (layout)
+			{
+				if (priv->font_desc)
+					pango_layout_set_font_description (layout, priv->font_desc);
+				pango_layout_get_pixel_size (layout, &char_w, NULL);
+				g_object_unref (layout);
+			}
+			if (char_w <= 0)
+				char_w = 8;
 		}
 
 		if (priv->width_chars > 0)

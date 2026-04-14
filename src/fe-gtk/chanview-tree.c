@@ -39,31 +39,20 @@ typedef struct
 	GtkTreeListModel *tree_model;	/* hierarchical model wrapper */
 } treeview;
 
+#include <gdk/gdk.h>
+
 /* Forward declarations */
 static chan *cv_tree_get_parent (chan *ch);
 
-#include <gdk/gdk.h>
-
 /* Detent hint: the smallest useful width for the tree listview. Sits
- * just below the final progressive-collapse threshold (9 * char_w, see
- * cv_tree_update_pane_size) so the collapse fires first, then the detent
- * snaps once the tree is flattened to just labels. Below this point
- * content starts to clip. */
+ * just below the final progressive-collapse threshold (see
+ * cv_tree_update_pane_size) so the collapse fires first, then the
+ * detent snaps once the tree is flattened to just labels. Below this
+ * point content starts to clip. */
 static int
 cv_tree_detent_min (GtkWidget *view)
 {
-	PangoContext *ctx;
-	PangoFontMetrics *metrics;
-	int char_w;
-
-	ctx = gtk_widget_get_pango_context (view);
-	metrics = pango_context_get_metrics (ctx, NULL, NULL);
-	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
-	pango_font_metrics_unref (metrics);
-	if (char_w <= 0)
-		char_w = 8;
-
-	return 8 * char_w;
+	return 35 + 4 * hc_widget_char_width (view);
 }
 
 /*
@@ -301,12 +290,13 @@ cv_tree_factory_setup_cb (GtkListItemFactory *factory, GtkListItem *item, chanvi
 	expander = gtk_tree_expander_new ();
 	gtk_widget_set_hexpand (expander, TRUE);
 
-	/* Respect compact indent state for newly created items */
+	/* Respect compact state for newly created items. indent_for_icon tracks
+	 * the icon-hide threshold (arrow slot collapses with icons);
+	 * indent_for_depth tracks the narrower indent-removal threshold. */
 	if (GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-indent")))
-	{
 		gtk_tree_expander_set_indent_for_depth (GTK_TREE_EXPANDER (expander), FALSE);
+	if (GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-icons")))
 		gtk_tree_expander_set_indent_for_icon (GTK_TREE_EXPANDER (expander), FALSE);
-	}
 
 	/* Track expander for compact mode toggling */
 	{
@@ -327,11 +317,15 @@ cv_tree_factory_setup_cb (GtkListItemFactory *factory, GtkListItem *item, chanvi
 	{
 		icon = gtk_picture_new ();
 		gtk_picture_set_content_fit (GTK_PICTURE (icon), GTK_CONTENT_FIT_SCALE_DOWN);
-		gtk_widget_set_size_request (icon, 16, -1);
 
-		/* Respect compact icon state for newly created items */
+		/* Respect compact icon state for newly created items. We drop the
+		 * width request and the paintable together so the GtkPicture's
+		 * natural width collapses to 0 — gtk_widget_set_visible(FALSE)
+		 * alone doesn't reliably reflow row allocations on Linux. */
 		if (GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-icons")))
-			gtk_widget_set_visible (icon, FALSE);
+			gtk_widget_set_size_request (icon, 0, -1);
+		else
+			gtk_widget_set_size_request (icon, 16, -1);
 
 		gtk_box_append (GTK_BOX (content_box), icon);
 		g_object_set_data (G_OBJECT (item), "icon", icon);
@@ -375,6 +369,7 @@ cv_tree_factory_setup_cb (GtkListItemFactory *factory, GtkListItem *item, chanvi
 static void
 cv_tree_factory_bind_cb (GtkListItemFactory *factory, GtkListItem *list_item, chanview *cv)
 {
+	treeview *tv = (treeview *)cv;
 	GtkWidget *expander, *icon, *label;
 	GtkTreeListRow *row;
 	HcChanItem *chan_item;
@@ -406,17 +401,43 @@ cv_tree_factory_bind_cb (GtkListItemFactory *factory, GtkListItem *list_item, ch
 	gtk_label_set_text (GTK_LABEL (label), chan_item->name ? chan_item->name : "");
 	gtk_label_set_attributes (GTK_LABEL (label), chan_item->attr);
 
-	/* Set icon if we have one */
-	if (icon && chan_item->icon)
+	/* Set icon if we have one. While compact-icons is active, the picture's
+	 * paintable must stay NULL and size_request at 0 so the label can occupy
+	 * the slot; stash the real paintable under "cached-paintable" so the
+	 * update_pane_size restore path can pick it up when we leave compact. */
+	if (icon)
 	{
-		GdkTexture *texture = hc_pixbuf_to_texture (chan_item->icon);
-		gtk_picture_set_paintable (GTK_PICTURE (icon), GDK_PAINTABLE (texture));
-		if (texture)
-			g_object_unref (texture);
-	}
-	else if (icon)
-	{
-		gtk_picture_set_paintable (GTK_PICTURE (icon), NULL);
+		gboolean compact = GPOINTER_TO_INT (
+			g_object_get_data (G_OBJECT (tv->view), "compact-icons"));
+
+		if (chan_item->icon)
+		{
+			GdkTexture *texture = hc_pixbuf_to_texture (chan_item->icon);
+			if (compact)
+			{
+				if (texture)
+					g_object_set_data_full (G_OBJECT (icon), "cached-paintable",
+					                        g_object_ref (texture), g_object_unref);
+				else
+					g_object_set_data (G_OBJECT (icon), "cached-paintable", NULL);
+				gtk_picture_set_paintable (GTK_PICTURE (icon), NULL);
+				gtk_widget_set_size_request (icon, 0, -1);
+			}
+			else
+			{
+				gtk_picture_set_paintable (GTK_PICTURE (icon), GDK_PAINTABLE (texture));
+				g_object_set_data (G_OBJECT (icon), "cached-paintable", NULL);
+				gtk_widget_set_size_request (icon, 16, -1);
+			}
+			if (texture)
+				g_object_unref (texture);
+		}
+		else
+		{
+			gtk_picture_set_paintable (GTK_PICTURE (icon), NULL);
+			g_object_set_data (G_OBJECT (icon), "cached-paintable", NULL);
+			gtk_widget_set_size_request (icon, compact ? 0 : 16, -1);
+		}
 	}
 
 	g_object_unref (chan_item);
@@ -543,11 +564,12 @@ cv_tree_init (chanview *cv)
 }
 
 /* Progressive collapse as the chanview pane shrinks:
- * 1. Icons hide when pane < ~12 char widths
- * 2. Tree indentation (both depth and leaf-row icon slot) removed when
- *    pane < ~8 char widths — at that width the hierarchy is conceptual only.
- * Thresholds are char-width based so they scale with the user's font.
- * Keeps channel labels readable as long as possible. */
+ * 1. Icons hide at pane < 70 + 4*char_w
+ * 2. Tree indentation (both depth and leaf-row icon slot) removed at
+ *    pane < 40 + 4*char_w — at that width the hierarchy is conceptual only.
+ * Thresholds mix a fixed floor (row overhead: indent, icon slot, padding)
+ * with a per-char budget for the visible label. Pure char-count thresholds
+ * over-scale at large fonts, firing too early. */
 static void
 cv_tree_update_pane_size (chanview *cv, int pane_size)
 {
@@ -555,20 +577,13 @@ cv_tree_update_pane_size (chanview *cv, int pane_size)
 	GPtrArray *icons, *expanders;
 	gboolean hide_icons, hide_indent;
 	gboolean was_hiding_icons, was_hiding_indent;
-	PangoContext *ctx;
-	PangoFontMetrics *metrics;
 	int char_w;
 	guint i;
 
-	ctx = gtk_widget_get_pango_context (GTK_WIDGET (tv->view));
-	metrics = pango_context_get_metrics (ctx, NULL, NULL);
-	char_w = pango_font_metrics_get_approximate_char_width (metrics) / PANGO_SCALE;
-	pango_font_metrics_unref (metrics);
-	if (char_w <= 0)
-		char_w = 8;  /* sane fallback */
+	char_w = hc_widget_char_width (GTK_WIDGET (tv->view));
 
-	hide_icons = (pane_size >= 0 && pane_size < 12 * char_w);
-	hide_indent = (pane_size >= 0 && pane_size < 9 * char_w);
+	hide_icons = (pane_size >= 0 && pane_size < 70 + 4 * char_w);
+	hide_indent = (pane_size >= 0 && pane_size < 40 + 4 * char_w);
 
 	was_hiding_icons = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-icons"));
 	was_hiding_indent = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-indent"));
@@ -579,20 +594,53 @@ cv_tree_update_pane_size (chanview *cv, int pane_size)
 	g_object_set_data (G_OBJECT (tv->view), "compact-icons", GINT_TO_POINTER (hide_icons));
 	g_object_set_data (G_OBJECT (tv->view), "compact-indent", GINT_TO_POINTER (hide_indent));
 
-	/* Toggle icon visibility */
+	/* Collapse / restore the icon slot. set_visible(FALSE) doesn't reclaim
+	 * the allocation on Linux, so we drop the paintable (which zeroes the
+	 * picture's natural width) and stash it for restore. size_request goes
+	 * to 0 in lock-step so both bounds are pinned to 0. GtkListView
+	 * virtualises row allocation — our per-icon resize requests don't
+	 * propagate through the view's cached row geometry, so we walk up
+	 * each icon's parent chain and queue_resize on every ancestor. */
 	if (hide_icons != was_hiding_icons && cv->use_icons)
 	{
 		icons = g_object_get_data (G_OBJECT (tv->view), "tree-icons");
 		if (icons)
 		{
 			for (i = 0; i < icons->len; i++)
-				gtk_widget_set_visible (g_ptr_array_index (icons, i), !hide_icons);
+			{
+				GtkWidget *icon = g_ptr_array_index (icons, i);
+				GtkWidget *w;
+				if (hide_icons)
+				{
+					GdkPaintable *p = gtk_picture_get_paintable (GTK_PICTURE (icon));
+					if (p)
+						g_object_set_data_full (G_OBJECT (icon), "cached-paintable",
+						                        g_object_ref (p), g_object_unref);
+					gtk_picture_set_paintable (GTK_PICTURE (icon), NULL);
+					gtk_widget_set_size_request (icon, 0, -1);
+				}
+				else
+				{
+					GdkPaintable *p = g_object_get_data (G_OBJECT (icon), "cached-paintable");
+					if (p)
+						gtk_picture_set_paintable (GTK_PICTURE (icon), p);
+					g_object_set_data (G_OBJECT (icon), "cached-paintable", NULL);
+					gtk_widget_set_size_request (icon, 16, -1);
+				}
+				for (w = icon; w; w = gtk_widget_get_parent (w))
+					gtk_widget_queue_resize (w);
+			}
 		}
 	}
 
-	/* Toggle tree depth + icon indentation — at this width the tree
-	 * structure is conceptual only, so flatten it entirely. */
-	if (hide_indent != was_hiding_indent)
+	/* Toggle expander indent knobs. indent_for_icon reserves the expand-arrow
+	 * slot on leaf rows so they align with parents — it's what actually
+	 * pushes the label ~16px to the right, not our GtkPicture. Collapse it
+	 * in lock-step with hide_icons so the label reclaims that slot as soon
+	 * as the icons go away. indent_for_depth (the per-depth indent) stays
+	 * tied to hide_indent since it's a larger shift reserved for the
+	 * narrowest stage. */
+	if (hide_icons != was_hiding_icons || hide_indent != was_hiding_indent)
 	{
 		expanders = g_object_get_data (G_OBJECT (tv->view), "tree-expanders");
 		if (expanders)
@@ -601,7 +649,7 @@ cv_tree_update_pane_size (chanview *cv, int pane_size)
 			{
 				GtkTreeExpander *exp = GTK_TREE_EXPANDER (g_ptr_array_index (expanders, i));
 				gtk_tree_expander_set_indent_for_depth (exp, !hide_indent);
-				gtk_tree_expander_set_indent_for_icon (exp, !hide_indent);
+				gtk_tree_expander_set_indent_for_icon (exp, !hide_icons);
 			}
 		}
 	}
