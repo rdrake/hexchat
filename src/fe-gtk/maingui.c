@@ -931,6 +931,8 @@ mg_decide_userlist (session *sess, gboolean switch_to_current)
 
 static int ul_tag = 0;
 
+static gboolean mg_userlist_update_columns_idle (gpointer user_data);
+
 static gboolean
 mg_populate_userlist (session *sess)
 {
@@ -945,6 +947,10 @@ mg_populate_userlist (session *sess)
 			mg_set_access_icon (sess->gui, get_user_icon (sess->server, sess->me), sess->server->is_away);
 		userlist_show (sess);
 		userlist_set_value (sess->gui->user_tree, sess->res->old_ul_value);
+
+		/* Re-evaluate column collapse against the new channel's widest nick;
+		 * deferred to idle so the listview has time to rebind labels. */
+		g_idle_add (mg_userlist_update_columns_idle, sess->gui);
 
 		/* Re-apply right pane position after model connect triggers layout reflow */
 		if (sess->gui->hpane_right)
@@ -3292,6 +3298,50 @@ mg_update_userlist_columns (session_gui *gui, int pane_size)
 
 	/* Nick only ellipsizes after host is hidden */
 	userlist_set_nick_ellipsize (gui->user_tree, show_nick && !show_host);
+}
+
+/* Return the width currently allocated to the userlist pane based on where
+ * the userlist lives. Returns 0 if it can't be determined yet. */
+static int
+mg_userlist_pane_size (session_gui *gui)
+{
+	if (!gui)
+		return 0;
+
+	if (prefs.hex_gui_ulist_pos == POS_TOPLEFT ||
+	    prefs.hex_gui_ulist_pos == POS_BOTTOMLEFT)
+	{
+		return gui->hpane_left ? gtk_paned_get_position (GTK_PANED (gui->hpane_left)) : 0;
+	}
+	else
+	{
+		int pane_width, position;
+		if (!gui->hpane_right)
+			return 0;
+		pane_width = gtk_widget_get_width (gui->hpane_right);
+		position = gtk_paned_get_position (GTK_PANED (gui->hpane_right));
+		return pane_width > 0 ? pane_width - position : 0;
+	}
+}
+
+/* Deferred column re-evaluation after a channel switch repopulates the
+ * userlist. Switching to a channel with wider nicks can push the nick
+ * column past the viewport; re-running the collapse logic hides host/icon
+ * columns when the new max_nick no longer fits. */
+static gboolean
+mg_userlist_update_columns_idle (gpointer user_data)
+{
+	session_gui *gui = (session_gui *)user_data;
+	int pane_size;
+
+	if (!gui || !gui->user_tree)
+		return G_SOURCE_REMOVE;
+
+	pane_size = mg_userlist_pane_size (gui);
+	if (pane_size > 0)
+		mg_update_userlist_columns (gui, pane_size);
+
+	return G_SOURCE_REMOVE;
 }
 
 /* Deferred right pane size save — only fires from user-initiated pane drags
