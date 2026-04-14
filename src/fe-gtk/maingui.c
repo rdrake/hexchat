@@ -934,6 +934,9 @@ static int ul_tag = 0;
 static int mg_userlist_pane_size (session_gui *gui);
 static void mg_update_userlist_columns (session *sess, int pane_size);
 static gboolean mg_userlist_update_columns_idle (gpointer user_data);
+static void mg_pane_apply_detent (GtkPaned *pane, GtkWidget *shrinking_child,
+                                  gboolean shrinking_side_is_end,
+                                  GCallback handler, gpointer data);
 
 static gboolean
 mg_populate_userlist (session *sess)
@@ -3217,6 +3220,8 @@ mg_pane_idle_cb (gpointer user_data)
 static void
 mg_leftpane_cb (GtkPaned *pane, GParamSpec *param, session_gui *gui)
 {
+	mg_pane_apply_detent (pane, gtk_paned_get_start_child (pane), FALSE,
+	                      G_CALLBACK (mg_leftpane_cb), gui);
 	prefs.hex_gui_pane_left_size = gtk_paned_get_position (pane);
 	hc_debug_log ("mg_leftpane_cb: position=%d -> left_size=%d",
 	              gtk_paned_get_position (pane), prefs.hex_gui_pane_left_size);
@@ -3383,9 +3388,70 @@ mg_rightpane_idle_cb (gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
+/* Pixels of "overshoot" past the content's natural minimum before the
+ * detent releases. Within this window the pane visually sticks at the
+ * minimum while the cursor continues moving; past it, the paned follows
+ * the cursor normally. Gives the user a chance to stop before their drag
+ * starts clipping the content. */
+#define MG_PANE_DETENT_STICKY_PX 25
+
+/* Magnetic detent on pane shrink. child is the paned child that shrinks
+ * as `position` approaches `threshold_side` (START / END). We measure
+ * the child's natural minimum width and, when the cursor has driven the
+ * paned within the sticky window on the shrinking side of that minimum,
+ * clamp the position back to hold the child at its minimum. */
+static void
+mg_pane_apply_detent (GtkPaned *pane, GtkWidget *shrinking_child,
+                      gboolean shrinking_side_is_end, GCallback handler, gpointer data)
+{
+	int pane_w, pos, child_min, threshold;
+
+	if (!shrinking_child)
+		return;
+
+	pane_w = gtk_widget_get_width (GTK_WIDGET (pane));
+	if (pane_w <= 0)
+		return;
+
+	gtk_widget_measure (shrinking_child, GTK_ORIENTATION_HORIZONTAL, -1,
+	                    &child_min, NULL, NULL, NULL);
+	if (child_min <= 0)
+		return;
+
+	pos = gtk_paned_get_position (pane);
+
+	if (shrinking_side_is_end)
+	{
+		/* End child shrinks as position grows. Threshold is the position
+		 * at which end child == child_min. Sticky window is just past it. */
+		threshold = pane_w - child_min;
+		if (threshold <= 0)
+			return;
+		if (pos > threshold && pos <= threshold + MG_PANE_DETENT_STICKY_PX)
+		{
+			g_signal_handlers_block_by_func (pane, handler, data);
+			gtk_paned_set_position (pane, threshold);
+			g_signal_handlers_unblock_by_func (pane, handler, data);
+		}
+	}
+	else
+	{
+		/* Start child shrinks as position drops. Threshold = child_min. */
+		threshold = child_min;
+		if (pos < threshold && pos >= threshold - MG_PANE_DETENT_STICKY_PX)
+		{
+			g_signal_handlers_block_by_func (pane, handler, data);
+			gtk_paned_set_position (pane, threshold);
+			g_signal_handlers_unblock_by_func (pane, handler, data);
+		}
+	}
+}
+
 static void
 mg_rightpane_cb (GtkPaned *pane, GParamSpec *param, session_gui *gui)
 {
+	mg_pane_apply_detent (pane, gtk_paned_get_end_child (pane), TRUE,
+	                      G_CALLBACK (mg_rightpane_cb), gui);
 	/* GTK4: Defer the size calculation to an idle callback because
 	 * gtk_widget_get_width() returns invalid values during notify::position. */
 	g_idle_add (mg_rightpane_idle_cb, gui);
