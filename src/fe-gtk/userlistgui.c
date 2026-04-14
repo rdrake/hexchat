@@ -1090,6 +1090,49 @@ userlist_show (session *sess)
 	/* We don't unref sel_model/sort_model - the column view takes ownership */
 }
 
+/* Synchronously measure the pixel width of the widest nick in sess's
+ * user model, using the user_tree's font context. Used by
+ * mg_update_userlist_columns so it can run before the ColumnView has
+ * bound row labels (otherwise max-nick is 0 on the first paint after a
+ * channel switch, which causes a visible column-reshuffle flicker).
+ * Also avoids the virtualization bug where only on-screen labels exist. */
+int
+userlist_measure_max_nick_width (GtkWidget *user_tree, session *sess)
+{
+	PangoLayout *layout;
+	GListModel *model;
+	guint i, n;
+	int max_w = 0;
+
+	if (!user_tree || !sess || !sess->res || !sess->res->user_model)
+		return 0;
+
+	model = G_LIST_MODEL (sess->res->user_model);
+	n = g_list_model_get_n_items (model);
+	if (n == 0)
+		return 0;
+
+	layout = gtk_widget_create_pango_layout (user_tree, NULL);
+	for (i = 0; i < n; i++)
+	{
+		HcUserItem *item = g_list_model_get_item (model, i);
+		if (item)
+		{
+			if (item->nick)
+			{
+				int w;
+				pango_layout_set_text (layout, item->nick, -1);
+				pango_layout_get_pixel_size (layout, &w, NULL);
+				if (w > max_w)
+					max_w = w;
+			}
+			g_object_unref (item);
+		}
+	}
+	g_object_unref (layout);
+	return max_w;
+}
+
 void
 fe_uselect (session *sess, char *word[], int do_clear, int scroll_to)
 {

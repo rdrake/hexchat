@@ -931,6 +931,8 @@ mg_decide_userlist (session *sess, gboolean switch_to_current)
 
 static int ul_tag = 0;
 
+static int mg_userlist_pane_size (session_gui *gui);
+static void mg_update_userlist_columns (session *sess, int pane_size);
 static gboolean mg_userlist_update_columns_idle (gpointer user_data);
 
 static gboolean
@@ -941,16 +943,30 @@ mg_populate_userlist (session *sess)
 
 	if (is_session (sess) && sess->gui && sess->res)
 	{
+		int pane_size;
+
 		if (sess->type == SESS_DIALOG)
 			mg_set_access_icon (sess->gui, NULL, sess->server->is_away);
 		else
 			mg_set_access_icon (sess->gui, get_user_icon (sess->server, sess->me), sess->server->is_away);
+
 		userlist_show (sess);
 		userlist_set_value (sess->gui->user_tree, sess->res->old_ul_value);
 
-		/* Re-evaluate column collapse against the new channel's widest nick;
-		 * deferred to idle so the listview has time to rebind labels. */
-		g_idle_add (mg_userlist_update_columns_idle, sess->gui);
+		/* Apply the new channel's column collapse synchronously — both
+		 * set-model and set-visible queue a single coalesced layout, so
+		 * the ColumnView paints once with the correct visibility instead
+		 * of painting wide first and reshuffling (which flickers the
+		 * whole pane). max_nick is measured from sess->res->user_model
+		 * via Pango so it doesn't require the ListView to have bound
+		 * row labels yet. */
+		pane_size = mg_userlist_pane_size (sess->gui);
+		if (pane_size > 0)
+			mg_update_userlist_columns (sess, pane_size);
+
+		/* Safety net: re-run after layout completes, in case pane_size
+		 * was 0 (window not yet allocated). Normally a no-op. */
+		g_idle_add (mg_userlist_update_columns_idle, sess);
 
 		/* Re-apply right pane position after model connect triggers layout reflow */
 		if (sess->gui->hpane_right)
@@ -3160,8 +3176,6 @@ mg_vpane_cb (GtkPaned *pane, GParamSpec *param, session_gui *gui)
 	}
 }
 
-static void mg_update_userlist_columns (session_gui *gui, int pane_size);
-
 /* Data structure for deferred pane size calculation */
 typedef struct {
 	GtkPaned *pane;
@@ -3187,7 +3201,7 @@ mg_pane_idle_cb (gpointer user_data)
 		/* Update userlist column visibility if userlist is on the left pane */
 		if (prefs.hex_gui_ulist_pos == POS_TOPLEFT ||
 			prefs.hex_gui_ulist_pos == POS_BOTTOMLEFT)
-			mg_update_userlist_columns (gui, left_size);
+			mg_update_userlist_columns (current_sess, left_size);
 
 		/* Update chanview tree compact mode if chanview is on the left pane */
 		if (gui->chanview &&
@@ -3237,40 +3251,29 @@ mg_approx_char_width (GtkWidget *widget)
  * 1. Host column hides (nick starts ellipsizing)
  * 2. Icon column hides (nick gets the extra space)
  * Nick column stays visible and clips against the viewport at narrow widths.
- * Thresholds are computed from the actual nick label widths since
- * gtk_widget_measure on the column view returns stale values, and
- * additive offsets scale with font char width. */
+ * max_nick is measured synchronously from sess's user model via Pango,
+ * so the correct column visibility is set before the ColumnView first
+ * paints the new channel — avoids the full-pane flicker that happens
+ * when columns reshuffle after the initial paint. Additive offsets
+ * scale with font char width. */
 static void
-mg_update_userlist_columns (session_gui *gui, int pane_size)
+mg_update_userlist_columns (session *sess, int pane_size)
 {
+	session_gui *gui;
 	GtkColumnViewColumn *host_col, *nick_col, *icon_col;
-	GPtrArray *nick_labels;
-	int icon_width, max_nick = 0, char_w;
+	int icon_width, max_nick, char_w;
 	gboolean show_host, show_nick, show_icon;
 
-	if (!gui->user_tree)
+	if (!sess || !sess->gui || !sess->gui->user_tree)
 		return;
+	gui = sess->gui;
 
 	host_col = g_object_get_data (G_OBJECT (gui->user_tree), "host-column");
 	nick_col = g_object_get_data (G_OBJECT (gui->user_tree), "nick-column");
 	icon_col = g_object_get_data (G_OBJECT (gui->user_tree), "icon-column");
-	nick_labels = g_object_get_data (G_OBJECT (gui->user_tree), "nick-labels");
 	icon_width = (icon_col && prefs.hex_gui_ulist_icons) ? 20 : 0;
 	char_w = mg_approx_char_width (gui->user_tree);
-
-	/* Find widest nick label */
-	if (nick_labels)
-	{
-		guint i;
-		for (i = 0; i < nick_labels->len; i++)
-		{
-			int nat;
-			gtk_widget_measure (g_ptr_array_index (nick_labels, i),
-				GTK_ORIENTATION_HORIZONTAL, -1, NULL, &nat, NULL, NULL);
-			if (nat > max_nick)
-				max_nick = nat;
-		}
-	}
+	max_nick = userlist_measure_max_nick_width (gui->user_tree, sess);
 
 	/* Host hides when there isn't room for icon + full nick + ~8 chars
 	 * of host content. */
@@ -3324,22 +3327,21 @@ mg_userlist_pane_size (session_gui *gui)
 	}
 }
 
-/* Deferred column re-evaluation after a channel switch repopulates the
- * userlist. Switching to a channel with wider nicks can push the nick
- * column past the viewport; re-running the collapse logic hides host/icon
- * columns when the new max_nick no longer fits. */
+/* Safety-net idle after mg_populate_userlist's synchronous column update:
+ * verifies that after the ColumnView binds its first batch of row labels
+ * the collapse thresholds still hold. Normally a no-op. */
 static gboolean
 mg_userlist_update_columns_idle (gpointer user_data)
 {
-	session_gui *gui = (session_gui *)user_data;
+	session *sess = (session *)user_data;
 	int pane_size;
 
-	if (!gui || !gui->user_tree)
+	if (!is_session (sess) || !sess->gui)
 		return G_SOURCE_REMOVE;
 
-	pane_size = mg_userlist_pane_size (gui);
+	pane_size = mg_userlist_pane_size (sess->gui);
 	if (pane_size > 0)
-		mg_update_userlist_columns (gui, pane_size);
+		mg_update_userlist_columns (sess, pane_size);
 
 	return G_SOURCE_REMOVE;
 }
@@ -3370,7 +3372,7 @@ mg_rightpane_idle_cb (gpointer user_data)
 	 * userlist's), clobbering whatever the left-pane callback just set. */
 	if (prefs.hex_gui_ulist_pos == POS_TOPRIGHT ||
 		prefs.hex_gui_ulist_pos == POS_BOTTOMRIGHT)
-		mg_update_userlist_columns (gui, right_size);
+		mg_update_userlist_columns (current_sess, right_size);
 
 	/* Update chanview tree compact mode if chanview is on the right pane */
 	if (gui->chanview &&
