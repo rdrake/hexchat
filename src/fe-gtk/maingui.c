@@ -3760,10 +3760,6 @@ mg_change_layout (int type)
 {
 	if (mg_gui)
 	{
-		/* put tabs at the bottom */
-		if (type == 0 && prefs.hex_gui_tab_pos != POS_BOTTOM && prefs.hex_gui_tab_pos != POS_TOP)
-			prefs.hex_gui_tab_pos = POS_BOTTOM;
-
 		mg_place_userlist_and_chanview (mg_gui);
 		chanview_set_impl (mg_gui->chanview, type);
 	}
