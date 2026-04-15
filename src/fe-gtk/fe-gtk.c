@@ -740,8 +740,12 @@ fe_init (void)
 		{
 			layout_css = gtk_css_provider_new ();
 			gtk_css_provider_load_from_string (layout_css,
-				/* Ensure paned handles don't take excess space */
-				"paned > separator { min-width: 1px; min-height: 1px; background: none; } "
+				/* Paned handle: symmetric 8px with themed background.
+				 * Adwaita/Default-dark applies margin-right:-8px + padding-right:8px
+				 * (and the vertical equivalent), which extends the hit zone
+				 * asymmetrically past the visible handle. Zero those so the
+				 * interactive area matches the handle's visible bounds. */
+				"paned > separator { min-width: 0px; min-height: 0px; background: none; margin: 4px; padding: 0; } "
 				/* Nick button — let input box drive the row height */
 				"#hexchat-nickbutton { min-height: 0; padding-top: 0; padding-bottom: 0; } "
 				"#hexchat-emojibtn { min-height: 0; padding-top: 0; padding-bottom: 0; margin-left: 4px; } "
