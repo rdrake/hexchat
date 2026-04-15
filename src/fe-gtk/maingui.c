@@ -63,6 +63,7 @@
 
 #define GUI_SPACING (3)
 #define GUI_BORDER (0)
+#define GUI_PANE_MARGIN (6)
 
 enum
 {
@@ -2595,8 +2596,8 @@ mg_create_topicbar (session *sess, GtkWidget *box)
 	session_gui *gui = sess->gui;
 
 	gui->topic_bar = hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-	gtk_widget_set_margin_start (hbox, 4);
-	gtk_widget_set_margin_end (hbox, 4);
+	gtk_widget_set_margin_start (hbox, GUI_PANE_MARGIN);
+	gtk_widget_set_margin_end (hbox, GUI_PANE_MARGIN);
 	gtk_box_append (GTK_BOX (box), hbox);
 
 	if (!gui->is_tab)
@@ -2924,8 +2925,10 @@ mg_create_textarea (session *sess, GtkWidget *box)
 	gtk_widget_set_valign (frame, GTK_ALIGN_FILL);
 	gtk_widget_set_hexpand (frame, TRUE);
 	gtk_widget_set_vexpand (frame, TRUE);
-	gtk_widget_set_margin_start (frame, 4);
-	gtk_widget_set_margin_end (frame, 4);
+	gtk_widget_set_margin_start (frame, GUI_PANE_MARGIN);
+	gtk_widget_set_margin_end (frame, GUI_PANE_MARGIN);
+	gtk_widget_set_margin_top (frame, GUI_PANE_MARGIN);
+	gtk_widget_set_margin_bottom (frame, GUI_PANE_MARGIN);
 	gtk_box_append (GTK_BOX (vbox), frame);
 
 	gui->xtext = gtk_xtext_new (colors, TRUE);
@@ -3063,6 +3066,7 @@ mg_create_userlist (session_gui *gui, GtkWidget *box)
 	gtk_box_append (GTK_BOX (box), vbox);
 
 	frame = gtk_frame_new (NULL);
+	gtk_widget_set_margin_bottom (frame, GUI_PANE_MARGIN);
 	gtk_box_append (GTK_BOX (vbox), frame);
 	gtk_widget_set_visible (frame, prefs.hex_gui_ulist_count);
 
@@ -3463,11 +3467,17 @@ mg_pane_apply_detent (GtkPaned *pane, GtkWidget *shrinking_child,
 		return;
 
 	child_min = mg_widget_detent_min (shrinking_child);
-	if (child_min <= 0)
+	if (child_min > 0)
+	{
+		/* Declared hints report content-only widths. Add the shrinking
+		 * child's own margins since the paned allocates them on top. */
+		child_min += gtk_widget_get_margin_start (shrinking_child)
+		           + gtk_widget_get_margin_end (shrinking_child);
+	}
+	else
 	{
 		/* No widget-declared hint found; fall back to measured natural
-		 * min. Slightly loose for widgets with ellipsizing labels, but
-		 * correct for simple content. */
+		 * min. gtk_widget_measure already includes the widget's margins. */
 		gtk_widget_measure (shrinking_child, GTK_ORIENTATION_HORIZONTAL, -1,
 		                    &child_min, NULL, NULL, NULL);
 		if (child_min <= 0)
@@ -3561,8 +3571,8 @@ mg_create_center (session *sess, session_gui *gui, GtkWidget *box)
 		gtk_paned_set_shrink_start_child (GTK_PANED (gui->hpane_left), TRUE);
 		/* GTK4: Add margins to vpane_left (end child) to prevent content overlapping
 		 * the horizontal pane separator. In GTK4, paned separators overlay children. */
-		gtk_widget_set_margin_start (gui->vpane_left, 4);
-		gtk_widget_set_margin_end (gui->vpane_left, 4);
+		gtk_widget_set_margin_start (gui->vpane_left, GUI_PANE_MARGIN);
+		gtk_widget_set_margin_end (gui->vpane_left, GUI_PANE_MARGIN);
 	}
 	else
 	{
@@ -3574,8 +3584,8 @@ mg_create_center (session *sess, session_gui *gui, GtkWidget *box)
 		gtk_paned_set_shrink_end_child (GTK_PANED (gui->hpane_left), TRUE);
 		/* GTK4: Add margins to vpane_left (start child) to prevent content overlapping
 		 * the horizontal pane separator. */
-		gtk_widget_set_margin_start (gui->vpane_left, 4);
-		gtk_widget_set_margin_end (gui->vpane_left, 4);
+		gtk_widget_set_margin_start (gui->vpane_left, GUI_PANE_MARGIN);
+		gtk_widget_set_margin_end (gui->vpane_left, GUI_PANE_MARGIN);
 	}
 	/* shrink=TRUE allows userlist panel to shrink below its natural minimum */
 	gtk_paned_set_end_child (GTK_PANED (gui->hpane_right), gui->vpane_right);
@@ -3584,8 +3594,8 @@ mg_create_center (session *sess, session_gui *gui, GtkWidget *box)
 
 	/* GTK4: Add margins to vpane_right to prevent content overlapping the
 	 * horizontal pane separator. In GTK4, paned separators overlay children. */
-	gtk_widget_set_margin_start (gui->vpane_right, 4);
-	gtk_widget_set_margin_end (gui->vpane_right, 4);
+	gtk_widget_set_margin_start (gui->vpane_right, GUI_PANE_MARGIN);
+	gtk_widget_set_margin_end (gui->vpane_right, GUI_PANE_MARGIN);
 
 	/* GTK3: Ensure main paned fills its container for proper anchoring */
 	gtk_widget_set_halign (gui->hpane_left, GTK_ALIGN_FILL);
@@ -3733,24 +3743,28 @@ mg_place_userlist_and_chanview_real (session_gui *gui, GtkWidget *userlist, GtkW
 		{
 		case POS_TOPLEFT:
 			gtk_widget_set_vexpand (chanview, FALSE);
+			gtk_widget_set_margin_bottom (chanview, GUI_PANE_MARGIN);
 			gtk_paned_set_start_child (GTK_PANED (gui->vpane_left), chanview);
 			gtk_paned_set_resize_start_child (GTK_PANED (gui->vpane_left), FALSE);
 			gtk_paned_set_shrink_start_child (GTK_PANED (gui->vpane_left), TRUE);
 			break;
 		case POS_BOTTOMLEFT:
 			gtk_widget_set_vexpand (chanview, FALSE);
+			gtk_widget_set_margin_top (chanview, GUI_PANE_MARGIN);
 			gtk_paned_set_end_child (GTK_PANED (gui->vpane_left), chanview);
 			gtk_paned_set_resize_end_child (GTK_PANED (gui->vpane_left), FALSE);
 			gtk_paned_set_shrink_end_child (GTK_PANED (gui->vpane_left), TRUE);
 			break;
 		case POS_TOPRIGHT:
 			gtk_widget_set_vexpand (chanview, FALSE);
+			gtk_widget_set_margin_bottom (chanview, GUI_PANE_MARGIN);
 			gtk_paned_set_start_child (GTK_PANED (gui->vpane_right), chanview);
 			gtk_paned_set_resize_start_child (GTK_PANED (gui->vpane_right), FALSE);
 			gtk_paned_set_shrink_start_child (GTK_PANED (gui->vpane_right), TRUE);
 			break;
 		case POS_BOTTOMRIGHT:
 			gtk_widget_set_vexpand (chanview, FALSE);
+			gtk_widget_set_margin_top (chanview, GUI_PANE_MARGIN);
 			gtk_paned_set_end_child (GTK_PANED (gui->vpane_right), chanview);
 			gtk_paned_set_resize_end_child (GTK_PANED (gui->vpane_right), FALSE);
 			gtk_paned_set_shrink_end_child (GTK_PANED (gui->vpane_right), TRUE);
@@ -3781,20 +3795,27 @@ mg_place_userlist_and_chanview_real (session_gui *gui, GtkWidget *userlist, GtkW
 
 	if (userlist)
 	{
+		/* reset margins that may have been set by previous position */
+		gtk_widget_set_margin_top (userlist, 0);
+		gtk_widget_set_margin_bottom (userlist, 0);
+
 		/* shrink=TRUE allows userlist to shrink below natural minimum */
 		switch (prefs.hex_gui_ulist_pos)
 		{
 		case POS_TOPLEFT:
+			gtk_widget_set_margin_bottom (userlist, GUI_PANE_MARGIN);
 			gtk_paned_set_start_child (GTK_PANED (gui->vpane_left), userlist);
 			gtk_paned_set_resize_start_child (GTK_PANED (gui->vpane_left), FALSE);
 			gtk_paned_set_shrink_start_child (GTK_PANED (gui->vpane_left), TRUE);
 			break;
 		case POS_BOTTOMLEFT:
+			gtk_widget_set_margin_top (userlist, GUI_PANE_MARGIN);
 			gtk_paned_set_end_child (GTK_PANED (gui->vpane_left), userlist);
 			gtk_paned_set_resize_end_child (GTK_PANED (gui->vpane_left), FALSE);
 			gtk_paned_set_shrink_end_child (GTK_PANED (gui->vpane_left), TRUE);
 			break;
 		case POS_BOTTOMRIGHT:
+			gtk_widget_set_margin_top (userlist, GUI_PANE_MARGIN);
 			gtk_paned_set_end_child (GTK_PANED (gui->vpane_right), userlist);
 			gtk_paned_set_resize_end_child (GTK_PANED (gui->vpane_right), FALSE);
 			gtk_paned_set_shrink_end_child (GTK_PANED (gui->vpane_right), TRUE);
@@ -3802,6 +3823,7 @@ mg_place_userlist_and_chanview_real (session_gui *gui, GtkWidget *userlist, GtkW
 		/*case POS_HIDDEN:
 			break;*/	/* Hide using the VIEW menu instead */
 		default:/* POS_TOPRIGHT */
+			gtk_widget_set_margin_bottom (userlist, GUI_PANE_MARGIN);
 			gtk_paned_set_start_child (GTK_PANED (gui->vpane_right), userlist);
 			gtk_paned_set_resize_start_child (GTK_PANED (gui->vpane_right), FALSE);
 			gtk_paned_set_shrink_start_child (GTK_PANED (gui->vpane_right), TRUE);
@@ -3846,7 +3868,7 @@ mg_place_userlist_and_chanview (session_gui *gui)
 	/* GTK4: Update bottom margin based on tab position - tabs at bottom
 	 * provide their own spacing, otherwise add margin for input box */
 	gtk_widget_set_margin_bottom (gui->main_table,
-		tab_pos == POS_BOTTOM ? 0 : 4);
+		tab_pos == POS_BOTTOM ? 0 : GUI_PANE_MARGIN);
 
 	/* GTK4: Add left/right margins when no pane is visible on that side.
 	 * Only consider userlist position if userlist is actually visible. */
@@ -3861,8 +3883,8 @@ mg_place_userlist_and_chanview (session_gui *gui)
 			right_has_content = TRUE;
 	}
 
-	gtk_widget_set_margin_start (gui->main_table, left_has_content ? 0 : 4);
-	gtk_widget_set_margin_end (gui->main_table, right_has_content ? 0 : 4);
+	gtk_widget_set_margin_start (gui->main_table, left_has_content ? 0 : GUI_PANE_MARGIN);
+	gtk_widget_set_margin_end (gui->main_table, right_has_content ? 0 : GUI_PANE_MARGIN);
 
 	if (gui->chanview)
 	{
@@ -4015,6 +4037,8 @@ mg_create_search(session *sess, GtkWidget *box)
 	session_gui *gui = sess->gui;
 
 	gui->shbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
+	gtk_widget_set_margin_start (gui->shbox, GUI_PANE_MARGIN);
+	gtk_widget_set_margin_end (gui->shbox, GUI_PANE_MARGIN);
 	gtk_box_append (GTK_BOX (box), gui->shbox);
 
 	close = gtk_button_new ();
@@ -4118,8 +4142,8 @@ mg_create_entry (session *sess, GtkWidget *box)
 
 		reply_hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
 		gtk_widget_add_css_class (reply_hbox, "reply-bar");
-		gtk_widget_set_margin_start (reply_hbox, 4);
-		gtk_widget_set_margin_end (reply_hbox, 4);
+		gtk_widget_set_margin_start (reply_hbox, GUI_PANE_MARGIN);
+		gtk_widget_set_margin_end (reply_hbox, GUI_PANE_MARGIN);
 
 		reply_label = gtk_label_new ("");
 		gtk_label_set_ellipsize (GTK_LABEL (reply_label), PANGO_ELLIPSIZE_END);
@@ -4143,7 +4167,8 @@ mg_create_entry (session *sess, GtkWidget *box)
 	}
 
 	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-	gtk_widget_set_margin_start (hbox, 4);
+	gtk_widget_set_margin_start (hbox, GUI_PANE_MARGIN);
+	gtk_widget_set_margin_end (hbox, GUI_PANE_MARGIN);
 	gtk_box_append (GTK_BOX (box), hbox);
 
 	gui->nick_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
