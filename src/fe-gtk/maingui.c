@@ -64,6 +64,12 @@
 #define GUI_SPACING (3)
 #define GUI_BORDER (0)
 #define GUI_PANE_MARGIN (6)
+/* Horizontal paned handle width. CSS in fe-gtk.c gives the separator
+ * `margin: 0 6px`, so its allocation is 2 * GUI_PANE_MARGIN regardless of
+ * which paned we're measuring. Used to correct right-side position math:
+ * on the right pane, `pane_w - position` includes the handle, so the
+ * actual end-child allocation is 12px less. */
+#define MG_PANED_HANDLE_W (GUI_PANE_MARGIN * 2)
 
 enum
 {
@@ -2094,13 +2100,15 @@ mg_userlist_button (GtkWidget * box, char *label, char *cmd,
 }
 
 /* Detent hint for the userlist button grid. Buttons ellipsize to "...",
- * two per row. Min width = 2 buttons * ("..." + button padding). */
+ * two per row. Use Pango's approximate_char_width (digit-average, what GTK
+ * uses for width_chars) rather than 'n' width — 'n' over-predicts, and the
+ * overshoot grows at small fonts due to hinting rounding. */
 static int
 mg_ulist_buttons_detent_min (GtkWidget *grid)
 {
-	int char_w = hc_widget_char_width (grid);
+	int approx_cw = hc_widget_approx_char_width (grid);
 	/* 2 buttons/row, each ~= 2 char widths of label + ~12px button padding */
-	return 2 * (2 * char_w + 12);
+	return 2 * (2 * approx_cw + 12);
 }
 
 static GtkWidget *
@@ -3343,12 +3351,17 @@ mg_userlist_pane_size (session_gui *gui)
 	}
 	else
 	{
-		int pane_width, position;
+		int pane_width, position, size;
 		if (!gui->hpane_right)
 			return 0;
 		pane_width = gtk_widget_get_width (gui->hpane_right);
 		position = gtk_paned_get_position (GTK_PANED (gui->hpane_right));
-		return pane_width > 0 ? pane_width - position : 0;
+		if (pane_width <= 0)
+			return 0;
+		/* `pane_width - position` includes the handle; subtract it so
+		 * this matches the left-side semantics (vpane allocation only). */
+		size = pane_width - position - MG_PANED_HANDLE_W;
+		return size > 0 ? size : 0;
 	}
 }
 
@@ -3371,6 +3384,58 @@ mg_userlist_update_columns_idle (gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
+/* Fire the pane-dependent UI updates (userlist columns, chanview compact
+ * mode) against the currently-allocated pane sizes. Needed after layout
+ * rebuilds and after font/setup changes, since those paths don't move
+ * the pane separators so the notify::position chain never fires. */
+static gboolean
+mg_layout_update_idle_cb (gpointer user_data)
+{
+	session_gui *gui = (session_gui *)user_data;
+	int left_size = 0, right_size = 0;
+
+	if (!gui)
+		return G_SOURCE_REMOVE;
+
+	if (gui->hpane_left)
+		left_size = gtk_paned_get_position (GTK_PANED (gui->hpane_left));
+
+	if (gui->hpane_right)
+	{
+		int pane_width = gtk_widget_get_width (gui->hpane_right);
+		int position = gtk_paned_get_position (GTK_PANED (gui->hpane_right));
+		/* vpane allocation only, to match left-side `position` semantics. */
+		right_size = (pane_width > 0) ? pane_width - position - MG_PANED_HANDLE_W : 0;
+	}
+
+	if (current_sess)
+	{
+		if (prefs.hex_gui_ulist_pos == POS_TOPLEFT ||
+		    prefs.hex_gui_ulist_pos == POS_BOTTOMLEFT)
+		{
+			if (left_size > 0)
+				mg_update_userlist_columns (current_sess, left_size);
+		}
+		else
+		{
+			if (right_size > 0)
+				mg_update_userlist_columns (current_sess, right_size);
+		}
+	}
+
+	if (gui->chanview)
+	{
+		if ((prefs.hex_gui_tab_pos == POS_TOPLEFT ||
+		     prefs.hex_gui_tab_pos == POS_BOTTOMLEFT) && left_size > 0)
+			chanview_update_pane_size (gui->chanview, left_size);
+		else if ((prefs.hex_gui_tab_pos == POS_TOPRIGHT ||
+		          prefs.hex_gui_tab_pos == POS_BOTTOMRIGHT) && right_size > 0)
+			chanview_update_pane_size (gui->chanview, right_size);
+	}
+
+	return G_SOURCE_REMOVE;
+}
+
 /* Deferred right pane size save — only fires from user-initiated pane drags
  * (the signal is blocked during programmatic show/hide/restore). */
 static gboolean
@@ -3378,12 +3443,15 @@ mg_rightpane_idle_cb (gpointer user_data)
 {
 	session_gui *gui = (session_gui *)user_data;
 	GtkPaned *pane = GTK_PANED (gui->hpane_right);
-	int pane_width, position, right_size;
+	int pane_width, position, right_size, vpane_size;
 
 	/* Get dimensions after layout is complete */
 	pane_width = gtk_widget_get_width (GTK_WIDGET (pane));
 	position = gtk_paned_get_position (pane);
 	right_size = pane_width - position;
+	/* vpane allocation only — matches left-side `position` semantics, so
+	 * the collapse/column update funcs see symmetric values on both sides. */
+	vpane_size = right_size - MG_PANED_HANDLE_W;
 
 	if (pane_width > 0 && right_size > 0 && right_size < 2000)
 	{
@@ -3397,13 +3465,13 @@ mg_rightpane_idle_cb (gpointer user_data)
 	 * userlist's), clobbering whatever the left-pane callback just set. */
 	if (prefs.hex_gui_ulist_pos == POS_TOPRIGHT ||
 		prefs.hex_gui_ulist_pos == POS_BOTTOMRIGHT)
-		mg_update_userlist_columns (current_sess, right_size);
+		mg_update_userlist_columns (current_sess, vpane_size);
 
 	/* Update chanview tree compact mode if chanview is on the right pane */
 	if (gui->chanview &&
 		(prefs.hex_gui_tab_pos == POS_TOPRIGHT ||
 		 prefs.hex_gui_tab_pos == POS_BOTTOMRIGHT))
-		chanview_update_pane_size (gui->chanview, right_size);
+		chanview_update_pane_size (gui->chanview, vpane_size);
 
 	return G_SOURCE_REMOVE;
 }
@@ -3493,9 +3561,12 @@ mg_pane_apply_detent (GtkPaned *pane, GtkWidget *shrinking_child,
 
 	if (shrinking_side_is_end)
 	{
-		/* End child shrinks as position grows. Threshold is the position
-		 * at which end child == child_min. Sticky window is just past it. */
-		threshold = pane_w - child_min;
+		/* End child shrinks as position grows. At snap we want the end
+		 * child allocated child_min pixels; GTK4 gives the end child
+		 * `pane_w - position - handle_w`, so subtract the handle here
+		 * or the end child ends up handle_w pixels narrower than the
+		 * symmetric left case (which allocates `position` directly). */
+		threshold = pane_w - child_min - MG_PANED_HANDLE_W;
 		if (threshold <= 0)
 			return;
 		if (pos > threshold && pos <= threshold + MG_PANE_DETENT_STICKY_PX)
@@ -3905,6 +3976,11 @@ mg_place_userlist_and_chanview_real (session_gui *gui, GtkWidget *userlist, GtkW
 
 	mg_hide_empty_boxes (gui);
 	mg_update_window_minimum (gui);
+
+	/* Layout rebuilds don't move the pane separators, so the notify::position
+	 * chain that normally drives collapse-threshold updates won't fire. Run
+	 * the update explicitly against the now-settled pane sizes. */
+	g_idle_add (mg_layout_update_idle_cb, gui);
 }
 
 static void
@@ -4654,6 +4730,10 @@ mg_apply_setup (void)
 	{
 		mg_update_xtext (mg_gui->xtext);
 		gtk_widget_queue_draw (mg_gui->xtext);
+		/* Font-size changes alter the collapse thresholds but don't move
+		 * any pane, so the notify::position chain won't fire. Trigger
+		 * the update explicitly. */
+		g_idle_add (mg_layout_update_idle_cb, mg_gui);
 	}
 }
 

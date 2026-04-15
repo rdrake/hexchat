@@ -1004,4 +1004,54 @@ hc_widget_char_width (GtkWidget *widget)
 	return w > 0 ? w : 8;
 }
 
+/* Pango's "approximate char width" — a digit-width average, narrower than
+ * letter width. GTK uses this internally for gtk_label_set_width_chars(),
+ * so when predicting the pixel floor imposed by a label's width_chars,
+ * match GTK's math instead of measuring 'n' (which over-predicts, and the
+ * overshoot widens at small fonts because of hinting rounding). */
+static inline int
+hc_widget_approx_char_width (GtkWidget *widget)
+{
+	PangoContext *ctx;
+	PangoFontMetrics *metrics;
+	int w = 0;
+
+	if (!widget)
+		return 5;
+
+	ctx = gtk_widget_get_pango_context (widget);
+	if (ctx)
+	{
+		metrics = pango_context_get_metrics (ctx, NULL, NULL);
+		if (metrics)
+		{
+			w = pango_font_metrics_get_approximate_char_width (metrics)
+			    / PANGO_SCALE;
+			pango_font_metrics_unref (metrics);
+		}
+	}
+	return w > 0 ? w : 5;
+}
+
+/* Measure the rendered pixel width of an arbitrary string at the widget's
+ * current font. Use when char-count approximations misread — e.g. ellipsis
+ * glyph width varies non-linearly with font size and is not 1 * char_w. */
+static inline int
+hc_widget_string_width (GtkWidget *widget, const char *str)
+{
+	PangoLayout *layout;
+	int w = 0;
+
+	if (!widget || !str)
+		return 0;
+
+	layout = gtk_widget_create_pango_layout (widget, str);
+	if (layout)
+	{
+		pango_layout_get_pixel_size (layout, &w, NULL);
+		g_object_unref (layout);
+	}
+	return w;
+}
+
 #endif /* HEXCHAT_GTK_HELPERS_H */

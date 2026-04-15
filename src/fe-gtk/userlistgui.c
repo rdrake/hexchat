@@ -942,30 +942,16 @@ userlist_key_cb (GtkEventControllerKey *controller, guint keyval,
 	return FALSE;
 }
 
-/* Detent hint: true "clip-start" width for the column view. Natural-min
- * measurement overshoots because the nick column's content reports a wider
- * minimum than the point at which labels ellipsize to "..." and start
- * clipping. We compute this from current font metrics + visible columns. */
+/* Detent hint: ask GTK directly what minimum width it will enforce for the
+ * column view at the current font. Char-count approximations drift at small
+ * fonts because the ratio between 'n' width, Pango's approximate_char_width,
+ * and actual label floor varies non-linearly with hinting. */
 static int
 userlist_view_detent_min (GtkWidget *view)
 {
-	GtkColumnViewColumn *col;
-	int char_w = hc_widget_char_width (view), min_w = 0;
-
-	col = g_object_get_data (G_OBJECT (view), "icon-column");
-	if (col && gtk_column_view_column_get_visible (col))
-		min_w += 16;
-
-	/* Nick column: always visible, ellipsized to "…" — glyph is narrower
-	 * than three 'n's, so 3*char_w is a generous budget. */
-	min_w += 3 * char_w;
-
-	col = g_object_get_data (G_OBJECT (view), "host-column");
-	if (col && gtk_column_view_column_get_visible (col))
-		min_w += 3 * char_w;
-
-	/* Cell separators and row padding */
-	min_w += 10;
+	int min_w = 0;
+	gtk_widget_measure (view, GTK_ORIENTATION_HORIZONTAL, -1,
+	                    &min_w, NULL, NULL, NULL);
 	return min_w;
 }
 

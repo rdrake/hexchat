@@ -425,8 +425,10 @@ cv_tabs_detent_min (GtkWidget *outer)
 
 	if (cv && cv->vertical)
 	{
-		/* close button (~18) + label "..." (1 char) + padding */
-		min_w = 18 + char_w + 8;
+		/* Vertical tabs: each tab fills outer width. The global close
+		 * button sits below (stacked), not beside, so it doesn't add to
+		 * width. Width per tab = icon + "..." (1 char) + button padding. */
+		min_w = char_w + 11;
 		if (cv && cv->use_icons)
 			min_w += 18;
 	}

@@ -68,8 +68,11 @@ cv_tree_label_min_w (GtkWidget *view)
 
 /* Row chrome when fully collapsed: expander arrow + row padding +
  * label internal metrics + 1px slack for Pango rounding. Pixel-fixed
- * because expander/icons don't scale with font. */
-#define CV_TREE_CHROME_COLLAPSED  43
+ * because expander/icons don't scale with font. Previously 43, tuned
+ * visually against right-side rendering which under-allocated by the
+ * paned handle width (12px); left-side and post-fix right-side both
+ * render exactly `label_w + this` at detent. */
+#define CV_TREE_CHROME_COLLAPSED  31
 /* indent_for_depth adds one slot per depth level; hide_indent drops it. */
 #define CV_TREE_INDENT_SLOT       16
 /* icon slot + indent_for_icon alignment slot; hide_icons drops both. */
