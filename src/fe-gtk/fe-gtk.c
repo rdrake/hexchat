@@ -740,12 +740,17 @@ fe_init (void)
 		{
 			layout_css = gtk_css_provider_new ();
 			gtk_css_provider_load_from_string (layout_css,
-				/* Paned handle: symmetric 8px with themed background.
-				 * Adwaita/Default-dark applies margin-right:-8px + padding-right:8px
-				 * (and the vertical equivalent), which extends the hit zone
-				 * asymmetrically past the visible handle. Zero those so the
-				 * interactive area matches the handle's visible bounds. */
-				"paned > separator { min-width: 0px; min-height: 0px; background: none; margin: 4px; padding: 0; } "
+				/* Handle reserves the 12px junction gap via its own margin (6
+				 * each side). Content on handle-adjacent sides carries 0 so
+				 * the cursor-change region matches the click region.
+				 * The .collapsed class (set by mg_paned_update_collapsed when
+				 * a child hits 0 size) halves the margin: keeps a 3px hit
+				 * zone on each side of the handle so the user can still grab
+				 * and uncollapse, while preserving the window-edge margin. */
+				"paned.horizontal > separator { min-width: 0; min-height: 0; background: none; margin: 0 6px; padding: 0; } "
+				"paned.vertical > separator { min-width: 0; min-height: 0; background: none; margin: 6px 0; padding: 0; } "
+				"paned.collapsed.horizontal > separator { margin: 0 3px; } "
+				"paned.collapsed.vertical > separator { margin: 3px 0; } "
 				/* Nick button — let input box drive the row height */
 				"#hexchat-nickbutton { min-height: 0; padding-top: 0; padding-bottom: 0; } "
 				"#hexchat-emojibtn { min-height: 0; padding-top: 0; padding-bottom: 0; margin-left: 4px; } "
