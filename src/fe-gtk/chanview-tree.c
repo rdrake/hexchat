@@ -44,15 +44,56 @@ typedef struct
 /* Forward declarations */
 static chan *cv_tree_get_parent (chan *ch);
 
+/* Width of "nn" + U+2026 HORIZONTAL ELLIPSIS — the minimum ellipsized
+ * label state (2 chars + ellipsis). Used by both the detent hint and
+ * the progressive-collapse thresholds so they stay coherent: a pure
+ * char-count heuristic like 4*char_w("n") under-reports by a few pixels
+ * at some font sizes because Pango's integer rounding doesn't track
+ * glyph widths in real labels. */
+static int
+cv_tree_label_min_w (GtkWidget *view)
+{
+	PangoLayout *layout;
+	int w = 0;
+	layout = gtk_widget_create_pango_layout (view, "nn\xe2\x80\xa6");
+	if (layout)
+	{
+		pango_layout_get_pixel_size (layout, &w, NULL);
+		g_object_unref (layout);
+	}
+	if (w <= 0)
+		w = 4 * hc_widget_char_width (view);
+	return w;
+}
+
+/* Row chrome when fully collapsed: expander arrow + row padding +
+ * label internal metrics + 1px slack for Pango rounding. Pixel-fixed
+ * because expander/icons don't scale with font. */
+#define CV_TREE_CHROME_COLLAPSED  43
+/* indent_for_depth adds one slot per depth level; hide_indent drops it. */
+#define CV_TREE_INDENT_SLOT       16
+/* icon slot + indent_for_icon alignment slot; hide_icons drops both. */
+#define CV_TREE_ICON_SLOTS        32
+
 /* Detent hint: the smallest useful width for the tree listview. Sits
- * just below the final progressive-collapse threshold (see
- * cv_tree_update_pane_size) so the collapse fires first, then the
- * detent snaps once the tree is flattened to just labels. Below this
- * point content starts to clip. */
+ * just below the hide_indent threshold (see cv_tree_update_pane_size)
+ * so the collapse fires first, then the detent snaps once the tree is
+ * flattened to just labels.
+ *
+ * Binding case is the server/network row: label ellipsises to 2 chars +
+ * ellipsis glyph with the expander arrow still visible.
+ *
+ * Two constraints: (a) detent >= content min, or content clips at snap;
+ * (b) snap width (= our return + paned-child margins) < hide_indent
+ * threshold, or the hide_indent collapse stage never fires —
+ * cv_tree_update_pane_size compares against full pane_size which
+ * includes those margins. Because both functions now derive thresholds
+ * from the same measured label_w, (b) holds structurally as long as
+ * the pane-child margin stays below CV_TREE_INDENT_SLOT. */
 static int
 cv_tree_detent_min (GtkWidget *view)
 {
-	return 35 + 4 * hc_widget_char_width (view);
+	return cv_tree_label_min_w (view) + CV_TREE_CHROME_COLLAPSED;
 }
 
 /*
@@ -563,13 +604,16 @@ cv_tree_init (chanview *cv)
 		g_ptr_array_new (), (GDestroyNotify) g_ptr_array_unref);
 }
 
-/* Progressive collapse as the chanview pane shrinks:
- * 1. Icons hide at pane < 70 + 4*char_w
- * 2. Tree indentation (both depth and leaf-row icon slot) removed at
- *    pane < 40 + 4*char_w — at that width the hierarchy is conceptual only.
- * Thresholds mix a fixed floor (row overhead: indent, icon slot, padding)
- * with a per-char budget for the visible label. Pure char-count thresholds
- * over-scale at large fonts, firing too early. */
+/* Progressive collapse as the chanview pane shrinks. Thresholds are
+ * derived from the measured "nn…" label width plus the chrome for each
+ * stage, so they stay coherent with cv_tree_detent_min and with the
+ * font's actual pixel metrics (a pure char-count formula like
+ * `40 + 4*char_w` misses by a handful of pixels at small fonts, which
+ * lets the label clip before hide_indent fires).
+ *   - hide_indent fires when the pane can no longer fit the minimum
+ *     label + chrome with indent_for_depth still visible.
+ *   - hide_icons fires one indent-slot earlier: same budget plus the
+ *     icon column + indent_for_icon alignment slot. */
 static void
 cv_tree_update_pane_size (chanview *cv, int pane_size)
 {
@@ -577,13 +621,15 @@ cv_tree_update_pane_size (chanview *cv, int pane_size)
 	GPtrArray *icons, *expanders;
 	gboolean hide_icons, hide_indent;
 	gboolean was_hiding_icons, was_hiding_indent;
-	int char_w;
+	int label_w, indent_threshold, icons_threshold;
 	guint i;
 
-	char_w = hc_widget_char_width (GTK_WIDGET (tv->view));
+	label_w = cv_tree_label_min_w (GTK_WIDGET (tv->view));
+	indent_threshold = label_w + CV_TREE_CHROME_COLLAPSED + CV_TREE_INDENT_SLOT;
+	icons_threshold = indent_threshold + CV_TREE_ICON_SLOTS;
 
-	hide_icons = (pane_size >= 0 && pane_size < 70 + 4 * char_w);
-	hide_indent = (pane_size >= 0 && pane_size < 40 + 4 * char_w);
+	hide_icons = (pane_size >= 0 && pane_size < icons_threshold);
+	hide_indent = (pane_size >= 0 && pane_size < indent_threshold);
 
 	was_hiding_icons = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-icons"));
 	was_hiding_indent = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tv->view), "compact-indent"));
