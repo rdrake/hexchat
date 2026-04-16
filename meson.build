@@ -173,6 +173,10 @@ if cc.get_id() != 'msvc'
   )
 endif
 
+if host_machine.system() == 'darwin'
+  subdir('osx')
+endif
+
 if meson.version().version_compare('>= 0.53.0')
   summary({
     'prefix': get_option('prefix'),

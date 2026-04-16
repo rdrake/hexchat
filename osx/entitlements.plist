@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Pango and cairo use JIT paths in some glyph/bitmap code. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- Lets embedded GTK dylibs load under hardened runtime even though
+         they weren't signed by the same Team ID at build time. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Let gdk-pixbuf loaders be dlopen'd from a location resolved at
+         runtime (the bundle's lib/ tree rather than a fixed path). -->
+    <key>com.apple.security.cs.disable-executable-page-protection</key>
+    <true/>
+</dict>
+</plist>

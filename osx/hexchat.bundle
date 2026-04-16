@@ -2,67 +2,56 @@
 <app-bundle>
 
   <meta>
-    <prefix name="default">/usr/local</prefix>
-    <prefix name="enchant">/usr/local/opt/enchant-applespell</prefix>
-    <destination overwrite="yes">${project}</destination>
+    <!-- Homebrew (arm64) prefix holds GTK4 and all dependency dylibs. -->
+    <prefix name="default">/opt/homebrew</prefix>
+
+    <!-- Staging prefix populated by meson install. Holds the hexchat
+         binary, plugins, share/hexchat data, and translations. -->
+    <prefix name="hexchat">${env:HEXCHAT_STAGE_PREFIX}</prefix>
+
+    <destination overwrite="yes">${env:HEXCHAT_BUNDLE_DEST}</destination>
 
     <run-install-name-tool/>
-    <launcher-script>${project}/launcher.sh</launcher-script >
-    <gtk>gtk+-2.0</gtk>
+    <launcher-script>${project}/launcher.sh</launcher-script>
+
+    <gtk>gtk4</gtk>
   </meta>
 
-  <plist>${project}/Info.plist</plist>
+  <plist>${env:HEXCHAT_BUNDLE_PLIST}</plist>
 
-  <main-binary>
-    ${prefix}/bin/hexchat
-  </main-binary>
+  <main-binary>${prefix:hexchat}/bin/hexchat</main-binary>
 
+  <!-- HexChat plugins (v1 subset: no scripting runtimes).
+       PLUGIN_SUFFIX is "dylib" on macOS per src/common/plugin.h. -->
+  <binary>${prefix:hexchat}/lib/hexchat/plugins/*.dylib</binary>
+
+  <!-- GDK-pixbuf loaders. Homebrew ships both .so and .dylib
+       flavors; loaders.cache references .so, but both get copied so
+       install_name_tool runs over the actual Mach-O binaries. -->
   <binary>
-    ${prefix}/lib/hexchat/plugins/*.so
+    ${prefix}/lib/gdk-pixbuf-2.0/${pkg:gdk-pixbuf-2.0:gdk_pixbuf_binary_version}/loaders/*.so
+  </binary>
+  <binary>
+    ${prefix}/lib/gdk-pixbuf-2.0/${pkg:gdk-pixbuf-2.0:gdk_pixbuf_binary_version}/loaders/*.dylib
   </binary>
 
-  <binary>
-    ${prefix:enchant}/lib/libenchant.dylib
-  </binary>
-  <binary>
-    ${prefix:enchant}/lib/enchant/libenchant_applespell.so
-  </binary>
+  <!-- GIO modules: glib-networking for TLS (libgiognutls). -->
+  <binary>${prefix}/lib/gio/modules/*.so</binary>
 
-  <binary>
-    ${prefix}/lib/${gtkdir}/modules/*.so
-  </binary>
-  <binary>
-    ${prefix}/lib/${gtkdir}/${pkg:${gtk}:gtk_binary_version}/engines/libquartz.so
-  </binary>
-  <binary>
-    ${prefix}/lib/${gtkdir}/${pkg:${gtk}:gtk_binary_version}/engines/libxamarin.so
-  </binary>
-  <binary>
-    ${prefix}/lib/${gtkdir}/${pkg:${gtk}:gtk_binary_version}/printbackends/*.so
-  </binary>
-  <binary>
-    ${prefix}/lib/gdk-pixbuf-2.0/${pkg:${gtk}:gtk_binary_version}/loaders/*.so
-  </binary>
-  <binary>
-    ${prefix}/lib/pango/${pkg:pango:pango_module_version}/modules/
-  </binary>
-  <data>
-    ${prefix}/share/themes/Mac/gtk-2.0-key/gtkrc
-  </data>
+  <!-- GSettings schemas. Pointed at the directory so bundler walks and
+       copies everything, then makebundle.sh runs glib-compile-schemas. -->
+  <data>${prefix}/share/glib-2.0/schemas</data>
 
-  <translations name="gtk20">
-    ${prefix}/share/locale
-  </translations>
-  <translations name="hexchat">
-    ${prefix}/share/locale
-  </translations>
+  <!-- HexChat icon theme (installed into staging). Runtime UI resources
+       come from GResource baked into the binary, so no share/hexchat. -->
+  <data>${prefix:hexchat}/share/icons/hicolor</data>
 
-  <data dest="${bundle}/Contents/Resources/etc/${gtkdir}/gtkrc">
-    ${project}/gtkrc
-  </data>
+  <!-- GTK translations. HexChat's own .mo files are copied in by
+       makebundle.sh because gtk-mac-bundler's translations tag only
+       understands the default prefix. -->
+  <translations name="gtk40">${prefix}/share/locale</translations>
 
-  <data dest="${bundle}/Contents/Resources">
-    ${project}/hexchat.icns
-  </data>
+  <!-- Bundle icon. -->
+  <data dest="${bundle}/Contents/Resources">${project}/hexchat.icns</data>
 
 </app-bundle>
