@@ -3395,6 +3395,13 @@ mg_userlist_update_columns_idle (gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
+void
+mg_queue_userlist_update (session *sess)
+{
+	if (sess && sess->gui)
+		g_idle_add (mg_userlist_update_columns_idle, sess);
+}
+
 /* Fire the pane-dependent UI updates (userlist columns, chanview compact
  * mode) against the currently-allocated pane sizes. Needed after layout
  * rebuilds and after font/setup changes, since those paths don't move
@@ -4188,6 +4195,7 @@ mg_create_search(session *sess, GtkWidget *box)
 	session_gui *gui = sess->gui;
 
 	gui->shbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
+	gtk_widget_set_margin_bottom (gui->shbox, GUI_PANE_MARGIN);
 	gtk_box_append (GTK_BOX (box), gui->shbox);
 
 	close = gtk_button_new ();

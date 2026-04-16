@@ -62,6 +62,8 @@ void mg_setup_chanview_drag_source (GtkWidget *widget);
 void mg_search_toggle(session *sess);
 void mg_search_handle_previous(GtkWidget *wid, session *sess);
 void mg_search_handle_next(GtkWidget *wid, session *sess);
+/* userlist */
+void mg_queue_userlist_update (session *sess);
 
 /* Detent-min hint: widgets that know their own true "clip-start" width
  * (below the natural minimum that gtk_widget_measure reports, but above

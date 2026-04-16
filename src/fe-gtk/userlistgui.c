@@ -322,6 +322,8 @@ fe_userlist_remove (session *sess, struct User *user)
 
 	g_list_store_remove (store, position);
 
+	mg_queue_userlist_update (sess);
+
 	return sel;
 }
 
@@ -360,6 +362,8 @@ fe_userlist_rehash (session *sess, struct User *user)
 		g_list_store_insert (store, position, item);
 		g_object_unref (item);
 	}
+
+	mg_queue_userlist_update (sess);
 }
 
 void
@@ -401,12 +405,7 @@ fe_userlist_insert (session *sess, struct User *newuser, gboolean sel)
 		}
 	}
 
-	/* GTK4 workaround: column view model changes don't always propagate
-	 * resize requests correctly through the paned hierarchy, which can
-	 * leave the userlist rendered at a stale allocation offset (content
-	 * clips into the pane margin). Force the container to re-layout. */
-	if (sess->gui && sess->gui->user_box)
-		gtk_widget_queue_resize (sess->gui->user_box);
+	mg_queue_userlist_update (sess);
 }
 
 void
