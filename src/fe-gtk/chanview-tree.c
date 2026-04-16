@@ -617,9 +617,8 @@ cv_tree_init (chanview *cv)
 	g_object_set_data (G_OBJECT (view), "chanview-cv", cv);
 	mg_set_detent_min_func (view, cv_tree_detent_min);
 
-	/* Connect signals */
-	g_signal_connect (sel_model, "selection-changed",
-	                  G_CALLBACK (cv_tree_sel_cb), cv);
+	/* Connect signals — sel_cb is deferred to cv_tree_postinit so that
+	 * chanview_populate doesn't trigger it and override cv->focused. */
 	g_signal_connect (view, "activate",
 	                  G_CALLBACK (cv_tree_activated_cb), cv);
 	g_signal_connect (G_LIST_MODEL (tree_model), "items-changed",
@@ -760,8 +759,11 @@ cv_tree_update_pane_size (chanview *cv, int pane_size)
 static void
 cv_tree_postinit (chanview *cv)
 {
-	/* In GTK4, tree is autoexpanded via GtkTreeListModel setting.
-	 * The GListStore IS the model now, no rebuild needed. */
+	treeview *tv = (treeview *)cv;
+	GtkSelectionModel *sel_model = gtk_list_view_get_model (tv->view);
+
+	g_signal_connect (sel_model, "selection-changed",
+	                  G_CALLBACK (cv_tree_sel_cb), cv);
 }
 
 static void *
