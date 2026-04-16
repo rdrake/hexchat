@@ -142,10 +142,16 @@ create_msg_dialog (gchar *title, gchar *message)
 static void
 on_app_startup (GApplication *app, gpointer user_data)
 {
-	(void) app; (void) user_data;
+	(void) user_data;
 
 	/* One-time GUI setup — palette, pixmaps, CSS, key bindings */
 	fe_init ();
+
+	/* Install the application menubar. Each GtkApplicationWindow resolves
+	 * win.* action references against its own action map. On macOS this
+	 * renders in the system menu bar; elsewhere GtkApplicationWindow
+	 * shows it at the top of the window (controlled via show-menubar). */
+	gtk_application_set_menubar (GTK_APPLICATION (app), menu_get_menubar_model ());
 
 	/* Check config dir writability (needs GTK for fe_message dialog) */
 	if (g_access (get_xdir (), W_OK) != 0)

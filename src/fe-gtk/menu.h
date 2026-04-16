@@ -22,7 +22,8 @@
 
 #include "gtk-helpers.h"
 
-GtkWidget *menu_create_main (void *accel_group, int bar, int away, int toplevel, GtkWidget **menu_widgets);
+void menu_setup_window (GtkWidget *window, int away, GtkWidget **menu_widgets);
+GMenuModel *menu_get_menubar_model (void);
 void menu_urlmenu (GtkWidget *parent, double x, double y, char *url);
 void menu_chanmenu (session *sess, GtkWidget *parent, double x, double y, char *chan);
 void menu_nickmenu (session *sess, GtkWidget *parent, double x, double y, char *nick, int num_sel);
@@ -40,7 +41,7 @@ void menu_bar_toggle (void);
 void menu_add_plugin_items (GtkWidget *menu, char *root, char *target);
 void menu_add_plugin_items_gmenu (GMenu *menu, GSimpleActionGroup *action_group,
                                   const char *root, const char *target);
-void menu_add_shortcuts (GtkWidget *window, GtkWidget *menu_bar);
+void menu_add_shortcuts (GtkWidget *window);
 void menu_change_layout (void);
 
 void menu_set_away (session_gui *gui, int away);

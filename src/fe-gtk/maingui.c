@@ -529,7 +529,6 @@ mg_show_generic_tab (GtkWidget *box)
 	gtk_column_view_set_model (GTK_COLUMN_VIEW (mg_gui->user_tree), NULL);
 	gtk_window_set_title (GTK_WINDOW (mg_gui->window),
 								 g_object_get_data (G_OBJECT (box), "title"));
-	gtk_widget_set_sensitive (mg_gui->menu, FALSE);
 
 	if (f)
 		gtk_widget_grab_focus (f);
@@ -1076,9 +1075,6 @@ mg_populate (session *sess)
 	/* Update typing indicator strip and reply state for this tab */
 	fe_typing_update (sess);
 	fe_reply_state_changed (sess);
-
-	if (gui->is_tab)
-		gtk_widget_set_sensitive (gui->menu, TRUE);
 
 	/* restore all the GtkEntry's */
 	mg_restore_entry (gui->topic_entry, &res->topic_text);
@@ -4071,16 +4067,8 @@ mg_place_userlist_and_chanview (session_gui *gui)
 	gtk_widget_set_margin_start (gui->main_table, left_has_content ? 0 : GUI_PANE_MARGIN);
 	gtk_widget_set_margin_end (gui->main_table, right_has_content ? 0 : GUI_PANE_MARGIN);
 
-	/* Menu bar sits inside main_table and inherits its side margins.
-	 * When a side pane is present, main_table margin on that side is 0
-	 * (the vpane's own margin supplies the gap for pane content below).
-	 * Compensate on the menu so it always has the same visual padding
-	 * on both sides regardless of pane configuration. */
-	if (gui->menu)
-	{
-		gtk_widget_set_margin_start (gui->menu, left_has_content ? GUI_PANE_MARGIN : 0);
-		gtk_widget_set_margin_end (gui->menu, right_has_content ? GUI_PANE_MARGIN : 0);
-	}
+	/* App menubar is rendered by GtkApplicationWindow and spans the
+	 * window width; no per-side margin compensation needed here. */
 
 	if (gui->chanview)
 	{
@@ -4544,12 +4532,40 @@ mg_topwin_focus_cb (GtkEventControllerFocus *controller, session *sess)
 }
 
 static void
-mg_create_menu (session_gui *gui, GtkWidget *table, int away_state)
+mg_create_menu (session *sess, GtkWidget *table, int away_state)
 {
-	gui->menu = menu_create_main (NULL, TRUE, away_state, !gui->is_tab,
-											gui->menu_item);
-	gtk_widget_set_hexpand (gui->menu, TRUE);
-	gtk_grid_attach (GTK_GRID (table), gui->menu, 0, 0, 3, 1);
+	session_gui *gui = sess->gui;
+	(void)table;
+
+	/* GtkApplicationWindow renders the application menubar (installed at
+	 * startup via gtk_application_set_menubar) when show-menubar is TRUE.
+	 * Register the per-window action map so win.* references resolve. */
+	if (gui->window)
+	{
+		GAction *action;
+
+		menu_setup_window (gui->window, away_state, gui->menu_item);
+
+		/* Detached windows have a single session; store it so window-scoped
+		 * actions (detach, attach, etc.) operate on the correct session
+		 * regardless of global focus state. Tabbed windows use current_tab. */
+		if (!gui->is_tab)
+			g_object_set_data (G_OBJECT (gui->window), "hc-sess", sess);
+
+		/* Only one of {detach, attach} applies per window; disable the other
+		 * so it renders greyed out in the menu. */
+		action = g_action_map_lookup_action (G_ACTION_MAP (gui->window), "detach");
+		if (action)
+			g_simple_action_set_enabled (G_SIMPLE_ACTION (action), gui->is_tab);
+		action = g_action_map_lookup_action (G_ACTION_MAP (gui->window), "attach");
+		if (action)
+			g_simple_action_set_enabled (G_SIMPLE_ACTION (action), !gui->is_tab);
+
+		if (GTK_IS_APPLICATION_WINDOW (gui->window))
+			gtk_application_window_set_show_menubar (
+				GTK_APPLICATION_WINDOW (gui->window), !prefs.hex_gui_hide_menu);
+	}
+	gui->menu = NULL;
 }
 
 static void
@@ -4605,10 +4621,10 @@ mg_create_topwindow (session *sess)
 	gtk_window_set_child (GTK_WINDOW (win), table);
 
 	mg_create_irctab (sess, table);
-	mg_create_menu (sess->gui, table, sess->server->is_away);
+	mg_create_menu (sess, table, sess->server->is_away);
 
 	/* Set up keyboard shortcuts for menu actions */
-	menu_add_shortcuts (win, sess->gui->menu);
+	menu_add_shortcuts (win);
 
 	if (sess->res->buffer == NULL)
 	{
@@ -4619,9 +4635,6 @@ mg_create_topwindow (session *sess)
 	}
 
 	userlist_show (sess);
-
-	if (prefs.hex_gui_hide_menu)
-		gtk_widget_set_visible (sess->gui->menu, FALSE);
 
 	/* Will be shown when needed */
 	gtk_widget_set_visible (sess->gui->topic_bar, FALSE);
@@ -4731,15 +4744,12 @@ mg_create_tabwindow (session *sess)
 
 	mg_create_irctab (sess, table);
 	mg_create_tabs (sess->gui);
-	mg_create_menu (sess->gui, table, sess->server->is_away);
+	mg_create_menu (sess, table, sess->server->is_away);
 
 	/* Set up keyboard shortcuts for menu actions */
-	menu_add_shortcuts (win, sess->gui->menu);
+	menu_add_shortcuts (win);
 
 	mg_focus (sess);
-
-	if (prefs.hex_gui_hide_menu)
-		gtk_widget_set_visible (sess->gui->menu, FALSE);
 
 	mg_decide_userlist (sess, FALSE);
 

@@ -72,8 +72,8 @@ static GSList *submenu_list;
 
 /* Forward declarations for GTK4 */
 static void menu_popover_closed_cb (GtkPopover *popover, gpointer user_data);
-static GMenu *menu_build_gmenu (int away, int toplevel);
-static GSimpleActionGroup *menu_create_action_group (int away, int toplevel);
+static GMenu *menu_build_gmenu (void);
+static void menu_add_window_actions (GtkWidget *window, int away);
 
 enum
 {
@@ -1091,10 +1091,10 @@ menu_nickmenu (session *sess, GtkWidget *parent, double x, double y, char *nick,
 static void
 menu_showhide_cb (session *sess)
 {
-	if (prefs.hex_gui_hide_menu)
-		gtk_widget_set_visible (sess->gui->menu, FALSE);
-	else
-		gtk_widget_set_visible (sess->gui->menu, TRUE);
+	if (sess->gui->window && GTK_IS_APPLICATION_WINDOW (sess->gui->window))
+		gtk_application_window_set_show_menubar (
+			GTK_APPLICATION_WINDOW (sess->gui->window),
+			!prefs.hex_gui_hide_menu);
 }
 
 static void
@@ -1515,32 +1515,19 @@ menu_middlemenu (session *sess, GtkWidget *parent, double x, double y)
 	middle_menu_sess = sess;
 
 	/* When the menubar is hidden, show the full main menu as a popup instead
-	 * of the simplified middle-click menu. This gives users full access to
-	 * all menu functions when the menubar is not visible. */
+	 * of the simplified middle-click menu. The popover resolves its win.*
+	 * action references against the parent window's action map. */
 	if (prefs.hex_gui_hide_menu)
 	{
-		is_away = sess->server ? sess->server->is_away : FALSE;
-
-		/* Build the full main menu */
-		gmenu = menu_build_gmenu (is_away, !sess->gui->is_tab);
-		action_group = menu_create_action_group (is_away, !sess->gui->is_tab);
-
-		/* Create popover from the main menu model */
-		popover = gtk_popover_menu_new_from_model (G_MENU_MODEL (gmenu));
-		gtk_widget_insert_action_group (popover, "menu", G_ACTION_GROUP (action_group));
+		popover = gtk_popover_menu_new_from_model (menu_get_menubar_model ());
 		gtk_widget_set_parent (popover, xtext_widget);
 		gtk_popover_set_pointing_to (GTK_POPOVER (popover),
 									 &(GdkRectangle){ xtext->last_click_x, xtext->last_click_y, 1, 1 });
 		gtk_popover_set_has_arrow (GTK_POPOVER (popover), FALSE);
 
-		/* Store action group on popover for cleanup */
-		g_object_set_data (G_OBJECT (popover), "action-group", action_group);
-
-		/* Clean up when popover is closed - deferred to allow actions to complete */
 		g_signal_connect (popover, "closed", G_CALLBACK (menu_popover_closed_cb), NULL);
 
 		gtk_popover_popup (GTK_POPOVER (popover));
-		g_object_unref (gmenu);
 		return;
 	}
 
@@ -3150,8 +3137,6 @@ fe_menu_update (menu_entry *me)
  * =============================================================================
  */
 
-/* Store the action group globally so we can update toggle states */
-static GSimpleActionGroup *main_menu_action_group = NULL;
 
 /* Action callbacks - GSimpleAction signature */
 static void
@@ -3199,8 +3184,29 @@ menu_action_load_plugin (GSimpleAction *action, GVariant *parameter, gpointer us
 static void
 menu_action_detach (GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
-	(void)action; (void)parameter; (void)user_data;
-	menu_detach (NULL, NULL);
+	GtkWidget *window = GTK_WIDGET (user_data);
+	session *sess = window ? g_object_get_data (G_OBJECT (window), "hc-sess") : NULL;
+	(void)action; (void)parameter;
+
+	/* Window-scoped session pointer is set only on detached windows.
+	 * For the tabbed window, fall back to the currently selected tab. */
+	if (!sess)
+		sess = current_tab ? current_tab : current_sess;
+	if (sess)
+		mg_detach (sess, 1);  /* detach-only */
+}
+
+static void
+menu_action_attach (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+	GtkWidget *window = GTK_WIDGET (user_data);
+	session *sess = window ? g_object_get_data (G_OBJECT (window), "hc-sess") : NULL;
+	(void)action; (void)parameter;
+
+	if (!sess)
+		sess = current_sess;
+	if (sess)
+		mg_detach (sess, 2);  /* attach-only */
 }
 
 static void
@@ -3583,45 +3589,46 @@ menu_action_about (GSimpleAction *action, GVariant *parameter, gpointer user_dat
 	menu_about (NULL, NULL);
 }
 
-/* Build the GMenu model for the main menu bar */
+/* Build the GMenu model for the main menu bar.
+ * Actions are window-scoped ("win.*"), resolved per-window against the
+ * action map on each GtkApplicationWindow. */
 static GMenu *
-menu_build_gmenu (int away, int toplevel)
+menu_build_gmenu (void)
 {
 	GMenu *menubar;
 	GMenu *menu, *section, *submenu;
-
-	(void)away;  /* Initial state is set in actions, not menu model */
 
 	menubar = g_menu_new ();
 
 	/* === HexChat Menu === */
 	menu = g_menu_new ();
-	g_menu_append (menu, _("Network Li_st"), "menu.server-list");
+	g_menu_append (menu, _("Network Li_st"), "win.server-list");
 
 	section = g_menu_new ();
 	submenu = g_menu_new ();
-	g_menu_append (submenu, _("Server Tab"), "menu.new-server-tab");
-	g_menu_append (submenu, _("Channel Tab"), "menu.new-channel-tab");
-	g_menu_append (submenu, _("Server Window"), "menu.new-server-window");
-	g_menu_append (submenu, _("Channel Window"), "menu.new-channel-window");
+	g_menu_append (submenu, _("Server Tab"), "win.new-server-tab");
+	g_menu_append (submenu, _("Channel Tab"), "win.new-channel-tab");
+	g_menu_append (submenu, _("Server Window"), "win.new-server-window");
+	g_menu_append (submenu, _("Channel Window"), "win.new-channel-window");
 	g_menu_append_submenu (section, _("_New"), G_MENU_MODEL (submenu));
 	g_object_unref (submenu);
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
 	section = g_menu_new ();
-	g_menu_append (section, _("_Load Plugin or Script" ELLIPSIS), "menu.load-plugin");
+	g_menu_append (section, _("_Load Plugin or Script" ELLIPSIS), "win.load-plugin");
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
 	section = g_menu_new ();
-	g_menu_append (section, toplevel ? _("_Attach") : _("_Detach"), "menu.detach");
-	g_menu_append (section, _("_Close"), "menu.close");
+	g_menu_append (section, _("_Detach"), "win.detach");
+	g_menu_append (section, _("_Attach"), "win.attach");
+	g_menu_append (section, _("_Close"), "win.close");
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
 	section = g_menu_new ();
-	g_menu_append (section, _("_Quit"), "menu.quit");
+	g_menu_append (section, _("_Quit"), "win.quit");
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
@@ -3631,11 +3638,11 @@ menu_build_gmenu (int away, int toplevel)
 	/* === View Menu === */
 	menu = g_menu_new ();
 	section = g_menu_new ();
-	g_menu_append (section, _("_Menu Bar"), "menu.toggle-menubar");
-	g_menu_append (section, _("_Topic Bar"), "menu.toggle-topicbar");
-	g_menu_append (section, _("_User List"), "menu.toggle-userlist");
-	g_menu_append (section, _("U_ser List Buttons"), "menu.toggle-ulbuttons");
-	g_menu_append (section, _("M_ode Buttons"), "menu.toggle-modebuttons");
+	g_menu_append (section, _("_Menu Bar"), "win.toggle-menubar");
+	g_menu_append (section, _("_Topic Bar"), "win.toggle-topicbar");
+	g_menu_append (section, _("_User List"), "win.toggle-userlist");
+	g_menu_append (section, _("U_ser List Buttons"), "win.toggle-ulbuttons");
+	g_menu_append (section, _("M_ode Buttons"), "win.toggle-modebuttons");
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
@@ -3644,11 +3651,11 @@ menu_build_gmenu (int away, int toplevel)
 	{
 		GMenuItem *item;
 		item = g_menu_item_new (_("_Tabs"), NULL);
-		g_menu_item_set_action_and_target (item, "menu.layout", "s", "tabs");
+		g_menu_item_set_action_and_target (item, "win.layout", "s", "tabs");
 		g_menu_append_item (submenu, item);
 		g_object_unref (item);
 		item = g_menu_item_new (_("T_ree"), NULL);
-		g_menu_item_set_action_and_target (item, "menu.layout", "s", "tree");
+		g_menu_item_set_action_and_target (item, "win.layout", "s", "tree");
 		g_menu_append_item (submenu, item);
 		g_object_unref (item);
 	}
@@ -3659,19 +3666,19 @@ menu_build_gmenu (int away, int toplevel)
 	{
 		GMenuItem *item;
 		item = g_menu_item_new (_("Off"), NULL);
-		g_menu_item_set_action_and_target (item, "menu.metres", "s", "off");
+		g_menu_item_set_action_and_target (item, "win.metres", "s", "off");
 		g_menu_append_item (submenu, item);
 		g_object_unref (item);
 		item = g_menu_item_new (_("Graph"), NULL);
-		g_menu_item_set_action_and_target (item, "menu.metres", "s", "graph");
+		g_menu_item_set_action_and_target (item, "win.metres", "s", "graph");
 		g_menu_append_item (submenu, item);
 		g_object_unref (item);
 		item = g_menu_item_new (_("Text"), NULL);
-		g_menu_item_set_action_and_target (item, "menu.metres", "s", "text");
+		g_menu_item_set_action_and_target (item, "win.metres", "s", "text");
 		g_menu_append_item (submenu, item);
 		g_object_unref (item);
 		item = g_menu_item_new (_("Both"), NULL);
-		g_menu_item_set_action_and_target (item, "menu.metres", "s", "both");
+		g_menu_item_set_action_and_target (item, "win.metres", "s", "both");
 		g_menu_append_item (submenu, item);
 		g_object_unref (item);
 	}
@@ -3681,7 +3688,7 @@ menu_build_gmenu (int away, int toplevel)
 	g_object_unref (section);
 
 	section = g_menu_new ();
-	g_menu_append (section, _("_Fullscreen"), "menu.toggle-fullscreen");
+	g_menu_append (section, _("_Fullscreen"), "win.toggle-fullscreen");
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
@@ -3690,13 +3697,13 @@ menu_build_gmenu (int away, int toplevel)
 
 	/* === Server Menu === */
 	menu = g_menu_new ();
-	g_menu_append (menu, _("_Disconnect"), "menu.disconnect");
-	g_menu_append (menu, _("_Reconnect"), "menu.reconnect");
-	g_menu_append (menu, _("_Join a Channel" ELLIPSIS), "menu.join");
-	g_menu_append (menu, _("Channel _List"), "menu.chanlist");
+	g_menu_append (menu, _("_Disconnect"), "win.disconnect");
+	g_menu_append (menu, _("_Reconnect"), "win.reconnect");
+	g_menu_append (menu, _("_Join a Channel" ELLIPSIS), "win.join");
+	g_menu_append (menu, _("Channel _List"), "win.chanlist");
 
 	section = g_menu_new ();
-	g_menu_append (section, _("Marked _Away"), "menu.toggle-away");
+	g_menu_append (section, _("Marked _Away"), "win.toggle-away");
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
@@ -3714,18 +3721,18 @@ menu_build_gmenu (int away, int toplevel)
 
 	/* === Settings Menu === */
 	menu = g_menu_new ();
-	g_menu_append (menu, _("_Preferences"), "menu.preferences");
+	g_menu_append (menu, _("_Preferences"), "win.preferences");
 
 	section = g_menu_new ();
-	g_menu_append (section, _("Auto Replace"), "menu.auto-replace");
-	g_menu_append (section, _("CTCP Replies"), "menu.ctcp-replies");
-	g_menu_append (section, _("Dialog Buttons"), "menu.dialog-buttons");
-	g_menu_append (section, _("Keyboard Shortcuts"), "menu.keyboard-shortcuts");
-	g_menu_append (section, _("Text Events"), "menu.text-events");
-	g_menu_append (section, _("URL Handlers"), "menu.url-handlers");
-	g_menu_append (section, _("User Commands"), "menu.user-commands");
-	g_menu_append (section, _("User List Buttons"), "menu.userlist-buttons");
-	g_menu_append (section, _("User List Popup"), "menu.userlist-popup");
+	g_menu_append (section, _("Auto Replace"), "win.auto-replace");
+	g_menu_append (section, _("CTCP Replies"), "win.ctcp-replies");
+	g_menu_append (section, _("Dialog Buttons"), "win.dialog-buttons");
+	g_menu_append (section, _("Keyboard Shortcuts"), "win.keyboard-shortcuts");
+	g_menu_append (section, _("Text Events"), "win.text-events");
+	g_menu_append (section, _("URL Handlers"), "win.url-handlers");
+	g_menu_append (section, _("User Commands"), "win.user-commands");
+	g_menu_append (section, _("User List Buttons"), "win.userlist-buttons");
+	g_menu_append (section, _("User List Popup"), "win.userlist-popup");
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
@@ -3734,30 +3741,30 @@ menu_build_gmenu (int away, int toplevel)
 
 	/* === Window Menu === */
 	menu = g_menu_new ();
-	g_menu_append (menu, _("_Ban List"), "menu.banlist");
-	g_menu_append (menu, _("Character Chart"), "menu.ascii");
-	g_menu_append (menu, _("Direct Chat"), "menu.dcc-chat");
-	g_menu_append (menu, _("File _Transfers"), "menu.dcc-transfers");
-	g_menu_append (menu, _("Friends List"), "menu.friends-list");
-	g_menu_append (menu, _("Ignore List"), "menu.ignore-list");
-	g_menu_append (menu, _("_Plugins and Scripts"), "menu.plugins");
-	g_menu_append (menu, _("_Raw Log"), "menu.rawlog");
-	g_menu_append (menu, _("_URL Grabber"), "menu.url-grabber");
+	g_menu_append (menu, _("_Ban List"), "win.banlist");
+	g_menu_append (menu, _("Character Chart"), "win.ascii");
+	g_menu_append (menu, _("Direct Chat"), "win.dcc-chat");
+	g_menu_append (menu, _("File _Transfers"), "win.dcc-transfers");
+	g_menu_append (menu, _("Friends List"), "win.friends-list");
+	g_menu_append (menu, _("Ignore List"), "win.ignore-list");
+	g_menu_append (menu, _("_Plugins and Scripts"), "win.plugins");
+	g_menu_append (menu, _("_Raw Log"), "win.rawlog");
+	g_menu_append (menu, _("_URL Grabber"), "win.url-grabber");
 
 	section = g_menu_new ();
-	g_menu_append (section, _("Reset Marker Line"), "menu.reset-marker");
-	g_menu_append (section, _("Move to Marker Line"), "menu.move-to-marker");
-	g_menu_append (section, _("_Copy Selection"), "menu.copy-selection");
-	g_menu_append (section, _("C_lear Text"), "menu.clear-text");
-	g_menu_append (section, _("Save Text" ELLIPSIS), "menu.save-text");
+	g_menu_append (section, _("Reset Marker Line"), "win.reset-marker");
+	g_menu_append (section, _("Move to Marker Line"), "win.move-to-marker");
+	g_menu_append (section, _("_Copy Selection"), "win.copy-selection");
+	g_menu_append (section, _("C_lear Text"), "win.clear-text");
+	g_menu_append (section, _("Save Text" ELLIPSIS), "win.save-text");
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
 	section = g_menu_new ();
 	submenu = g_menu_new ();
-	g_menu_append (submenu, _("Search Text" ELLIPSIS), "menu.search");
-	g_menu_append (submenu, _("Search Next"), "menu.search-next");
-	g_menu_append (submenu, _("Search Previous"), "menu.search-prev");
+	g_menu_append (submenu, _("Search Text" ELLIPSIS), "win.search");
+	g_menu_append (submenu, _("Search Next"), "win.search-next");
+	g_menu_append (submenu, _("Search Previous"), "win.search-prev");
 	g_menu_append_submenu (section, _("Search"), G_MENU_MODEL (submenu));
 	g_object_unref (submenu);
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
@@ -3768,19 +3775,32 @@ menu_build_gmenu (int away, int toplevel)
 
 	/* === Help Menu === */
 	menu = g_menu_new ();
-	g_menu_append (menu, _("_Contents"), "menu.contents");
-	g_menu_append (menu, _("_About"), "menu.about");
+	g_menu_append (menu, _("_Contents"), "win.contents");
+	g_menu_append (menu, _("_About"), "win.about");
 	g_menu_append_submenu (menubar, _("_Help"), G_MENU_MODEL (menu));
 	g_object_unref (menu);
 
 	return menubar;
 }
 
-/* Create the action group for the main menu */
-static GSimpleActionGroup *
-menu_create_action_group (int away, int toplevel)
+/* Public accessor: application startup uses this to install the menubar
+ * model app-wide via gtk_application_set_menubar(). One model per app;
+ * each window resolves the win.* action references against its own map. */
+GMenuModel *
+menu_get_menubar_model (void)
 {
-	GSimpleActionGroup *group;
+	static GMenuModel *cached = NULL;
+	if (!cached)
+		cached = G_MENU_MODEL (menu_build_gmenu ());
+	return cached;
+}
+
+/* Register menu actions directly on the GtkApplicationWindow as
+ * win.* actions — the window implements GActionMap. */
+static void
+menu_add_window_actions (GtkWidget *window, int away)
+{
+	GActionMap *map = G_ACTION_MAP (window);
 	const char *layout_state;
 	const char *metres_state;
 
@@ -3793,6 +3813,7 @@ menu_create_action_group (int away, int toplevel)
 		{ "new-channel-window", menu_action_new_channel_window, NULL, NULL, NULL },
 		{ "load-plugin", menu_action_load_plugin, NULL, NULL, NULL },
 		{ "detach", menu_action_detach, NULL, NULL, NULL },
+		{ "attach", menu_action_attach, NULL, NULL, NULL },
 		{ "close", menu_action_close, NULL, NULL, NULL },
 		{ "quit", menu_action_quit, NULL, NULL, NULL },
 		{ "disconnect", menu_action_disconnect, NULL, NULL, NULL },
@@ -3830,9 +3851,8 @@ menu_create_action_group (int away, int toplevel)
 		{ "about", menu_action_about, NULL, NULL, NULL },
 	};
 
-	group = g_simple_action_group_new ();
-	g_action_map_add_action_entries (G_ACTION_MAP (group), simple_actions,
-									 G_N_ELEMENTS (simple_actions), NULL);
+	g_action_map_add_action_entries (map, simple_actions,
+									 G_N_ELEMENTS (simple_actions), window);
 
 	/* Add stateful toggle actions */
 	{
@@ -3841,43 +3861,43 @@ menu_create_action_group (int away, int toplevel)
 		action = g_simple_action_new_stateful ("toggle-menubar", NULL,
 			g_variant_new_boolean (!prefs.hex_gui_hide_menu));
 		g_signal_connect (action, "activate", G_CALLBACK (menu_action_toggle_menubar), NULL);
-		g_action_map_add_action (G_ACTION_MAP (group), G_ACTION (action));
+		g_action_map_add_action (map, G_ACTION (action));
 		g_object_unref (action);
 
 		action = g_simple_action_new_stateful ("toggle-topicbar", NULL,
 			g_variant_new_boolean (prefs.hex_gui_topicbar));
 		g_signal_connect (action, "activate", G_CALLBACK (menu_action_toggle_topicbar), NULL);
-		g_action_map_add_action (G_ACTION_MAP (group), G_ACTION (action));
+		g_action_map_add_action (map, G_ACTION (action));
 		g_object_unref (action);
 
 		action = g_simple_action_new_stateful ("toggle-userlist", NULL,
 			g_variant_new_boolean (!prefs.hex_gui_ulist_hide));
 		g_signal_connect (action, "activate", G_CALLBACK (menu_action_toggle_userlist), NULL);
-		g_action_map_add_action (G_ACTION_MAP (group), G_ACTION (action));
+		g_action_map_add_action (map, G_ACTION (action));
 		g_object_unref (action);
 
 		action = g_simple_action_new_stateful ("toggle-ulbuttons", NULL,
 			g_variant_new_boolean (prefs.hex_gui_ulist_buttons));
 		g_signal_connect (action, "activate", G_CALLBACK (menu_action_toggle_ulbuttons), NULL);
-		g_action_map_add_action (G_ACTION_MAP (group), G_ACTION (action));
+		g_action_map_add_action (map, G_ACTION (action));
 		g_object_unref (action);
 
 		action = g_simple_action_new_stateful ("toggle-modebuttons", NULL,
 			g_variant_new_boolean (prefs.hex_gui_mode_buttons));
 		g_signal_connect (action, "activate", G_CALLBACK (menu_action_toggle_modebuttons), NULL);
-		g_action_map_add_action (G_ACTION_MAP (group), G_ACTION (action));
+		g_action_map_add_action (map, G_ACTION (action));
 		g_object_unref (action);
 
 		action = g_simple_action_new_stateful ("toggle-fullscreen", NULL,
 			g_variant_new_boolean (FALSE));
 		g_signal_connect (action, "activate", G_CALLBACK (menu_action_toggle_fullscreen), NULL);
-		g_action_map_add_action (G_ACTION_MAP (group), G_ACTION (action));
+		g_action_map_add_action (map, G_ACTION (action));
 		g_object_unref (action);
 
 		action = g_simple_action_new_stateful ("toggle-away", NULL,
 			g_variant_new_boolean (away));
 		g_signal_connect (action, "activate", G_CALLBACK (menu_action_toggle_away), NULL);
-		g_action_map_add_action (G_ACTION_MAP (group), G_ACTION (action));
+		g_action_map_add_action (map, G_ACTION (action));
 		g_object_unref (action);
 	}
 
@@ -3889,7 +3909,7 @@ menu_create_action_group (int away, int toplevel)
 		action = g_simple_action_new_stateful ("layout", G_VARIANT_TYPE_STRING,
 			g_variant_new_string (layout_state));
 		g_signal_connect (action, "activate", G_CALLBACK (menu_action_layout), NULL);
-		g_action_map_add_action (G_ACTION_MAP (group), G_ACTION (action));
+		g_action_map_add_action (map, G_ACTION (action));
 		g_object_unref (action);
 
 		switch (prefs.hex_gui_lagometer)
@@ -3902,95 +3922,68 @@ menu_create_action_group (int away, int toplevel)
 		action = g_simple_action_new_stateful ("metres", G_VARIANT_TYPE_STRING,
 			g_variant_new_string (metres_state));
 		g_signal_connect (action, "activate", G_CALLBACK (menu_action_metres), NULL);
-		g_action_map_add_action (G_ACTION_MAP (group), G_ACTION (action));
+		g_action_map_add_action (map, G_ACTION (action));
 		g_object_unref (action);
 	}
-
-	return group;
 }
 
-GtkWidget *
-menu_create_main (void *accel_group, int bar, int away, int toplevel,
-						GtkWidget **menu_widgets)
+/* Register win.* actions on a main window. Call once per window after
+ * it becomes a GtkApplicationWindow but before shortcuts/menu are used.
+ * The app-wide menubar model (see menu_get_menubar_model) resolves its
+ * win.* references against these. */
+void
+menu_setup_window (GtkWidget *window, int away, GtkWidget **menu_widgets)
 {
-	GtkWidget *menu_bar;
-	GMenu *gmenu;
-	GSimpleActionGroup *action_group;
+	menu_add_window_actions (window, away);
 
-	(void)accel_group;  /* Not used in GTK4 - accelerators handled differently */
-	(void)bar;          /* Always create menu bar style in GTK4 */
-
-	/* Build the menu model */
-	gmenu = menu_build_gmenu (away, toplevel);
-
-	/* Create the menu bar widget */
-	menu_bar = gtk_popover_menu_bar_new_from_model (G_MENU_MODEL (gmenu));
-	g_object_unref (gmenu);
-
-	/* Create and attach the action group */
-	action_group = menu_create_action_group (away, toplevel);
-	gtk_widget_insert_action_group (menu_bar, "menu", G_ACTION_GROUP (action_group));
-
-	/* Store action group for state updates */
-	g_object_set_data_full (G_OBJECT (menu_bar), "action-group", action_group, g_object_unref);
-	main_menu_action_group = action_group;
-
-	/* Store menu_widgets for compatibility - in GTK4 we use action states instead */
 	if (menu_widgets)
 	{
-		/* Clear menu_widgets array - we don't use widget pointers in GTK4 */
+		/* menu_widgets is legacy (GTK2) state tracking; actions hold
+		 * their own state in GTK4. Clear for caller compatibility. */
 		memset (menu_widgets, 0, sizeof (GtkWidget *) * (MENU_ID_HEXCHAT + 1));
 	}
-
-	return menu_bar;
 }
 
-/* Sync toggle-action states with current prefs. Call after external
- * changes (e.g. preferences dialog) that mutate the underlying prefs
- * without going through the menu activate callbacks. */
-void
-menu_sync_toggle_states (void)
+static void
+sync_toggle_on_window (GtkWidget *window)
 {
+	GActionMap *map = G_ACTION_MAP (window);
 	GAction *action;
+	const char *s;
 
-	if (!main_menu_action_group)
-		return;
-
-	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "toggle-menubar");
+	action = g_action_map_lookup_action (map, "toggle-menubar");
 	if (action)
 		g_simple_action_set_state (G_SIMPLE_ACTION (action),
 			g_variant_new_boolean (!prefs.hex_gui_hide_menu));
 
-	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "toggle-topicbar");
+	action = g_action_map_lookup_action (map, "toggle-topicbar");
 	if (action)
 		g_simple_action_set_state (G_SIMPLE_ACTION (action),
 			g_variant_new_boolean (prefs.hex_gui_topicbar));
 
-	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "toggle-userlist");
+	action = g_action_map_lookup_action (map, "toggle-userlist");
 	if (action)
 		g_simple_action_set_state (G_SIMPLE_ACTION (action),
 			g_variant_new_boolean (!prefs.hex_gui_ulist_hide));
 
-	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "toggle-ulbuttons");
+	action = g_action_map_lookup_action (map, "toggle-ulbuttons");
 	if (action)
 		g_simple_action_set_state (G_SIMPLE_ACTION (action),
 			g_variant_new_boolean (prefs.hex_gui_ulist_buttons));
 
-	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "toggle-modebuttons");
+	action = g_action_map_lookup_action (map, "toggle-modebuttons");
 	if (action)
 		g_simple_action_set_state (G_SIMPLE_ACTION (action),
 			g_variant_new_boolean (prefs.hex_gui_mode_buttons));
 
-	/* Radio actions */
-	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "layout");
+	action = g_action_map_lookup_action (map, "layout");
 	if (action)
 		g_simple_action_set_state (G_SIMPLE_ACTION (action),
 			g_variant_new_string ((prefs.hex_gui_tab_layout == 0) ? "tabs" : "tree"));
 
-	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "metres");
+	action = g_action_map_lookup_action (map, "metres");
 	if (action)
 	{
-		const char *s;
 		switch (prefs.hex_gui_lagometer)
 		{
 		case 0:  s = "off"; break;
@@ -4000,6 +3993,23 @@ menu_sync_toggle_states (void)
 		}
 		g_simple_action_set_state (G_SIMPLE_ACTION (action), g_variant_new_string (s));
 	}
+}
+
+/* Sync toggle-action states with current prefs across all main windows.
+ * Called after external mutations (e.g. preferences dialog) that bypass
+ * the menu activate callbacks. */
+void
+menu_sync_toggle_states (void)
+{
+	GtkApplication *app = fe_get_application ();
+	GList *windows, *l;
+
+	if (!app)
+		return;
+
+	windows = gtk_application_get_windows (app);
+	for (l = windows; l; l = l->next)
+		sync_toggle_on_window (GTK_WIDGET (l->data));
 }
 
 /* Map MENU_ID_* constants to GAction names */
@@ -4018,22 +4028,17 @@ menu_id_to_action_name (int menu_id)
 void
 menu_set_action_sensitive (session_gui *gui, int menu_id, int enabled)
 {
-	GSimpleActionGroup *group;
 	GAction *action;
 	const char *name;
 
-	if (!gui || !gui->menu)
+	if (!gui || !gui->window)
 		return;
 
 	name = menu_id_to_action_name (menu_id);
 	if (!name)
 		return;
 
-	group = g_object_get_data (G_OBJECT (gui->menu), "action-group");
-	if (!group)
-		return;
-
-	action = g_action_map_lookup_action (G_ACTION_MAP (group), name);
+	action = g_action_map_lookup_action (G_ACTION_MAP (gui->window), name);
 	if (action)
 		g_simple_action_set_enabled (G_SIMPLE_ACTION (action), enabled != 0);
 }
@@ -4042,17 +4047,12 @@ menu_set_action_sensitive (session_gui *gui, int menu_id, int enabled)
 void
 menu_set_away (session_gui *gui, int away)
 {
-	GSimpleActionGroup *group;
 	GAction *action;
 
-	if (!gui || !gui->menu)
+	if (!gui || !gui->window)
 		return;
 
-	group = g_object_get_data (G_OBJECT (gui->menu), "action-group");
-	if (!group)
-		return;
-
-	action = g_action_map_lookup_action (G_ACTION_MAP (group), "toggle-away");
+	action = g_action_map_lookup_action (G_ACTION_MAP (gui->window), "toggle-away");
 	if (action)
 		g_simple_action_set_state (G_SIMPLE_ACTION (action), g_variant_new_boolean (away));
 }
@@ -4060,17 +4060,12 @@ menu_set_away (session_gui *gui, int away)
 void
 menu_set_fullscreen (session_gui *gui, int full)
 {
-	GSimpleActionGroup *group;
 	GAction *action;
 
-	if (!gui || !gui->menu)
+	if (!gui || !gui->window)
 		return;
 
-	group = g_object_get_data (G_OBJECT (gui->menu), "action-group");
-	if (!group)
-		return;
-
-	action = g_action_map_lookup_action (G_ACTION_MAP (group), "toggle-fullscreen");
+	action = g_action_map_lookup_action (G_ACTION_MAP (gui->window), "toggle-fullscreen");
 	if (action)
 		g_simple_action_set_state (G_SIMPLE_ACTION (action), g_variant_new_boolean (full));
 }
@@ -4081,19 +4076,12 @@ menu_set_fullscreen (session_gui *gui, int full)
  * to connect keyboard shortcuts to menu actions.
  */
 void
-menu_add_shortcuts (GtkWidget *window, GtkWidget *menu_bar)
+menu_add_shortcuts (GtkWidget *window)
 {
 	GtkEventController *controller;
 	GtkShortcut *shortcut;
 	GtkShortcutTrigger *trigger;
 	GtkShortcutAction *action;
-	GSimpleActionGroup *action_group;
-
-	/* Get the action group from the menu bar and also insert it on the window
-	 * so that GtkNamedAction can find it when shortcuts are triggered */
-	action_group = g_object_get_data (G_OBJECT (menu_bar), "action-group");
-	if (action_group)
-		gtk_widget_insert_action_group (window, "menu", G_ACTION_GROUP (action_group));
 
 	controller = gtk_shortcut_controller_new ();
 	gtk_shortcut_controller_set_scope (GTK_SHORTCUT_CONTROLLER (controller),
@@ -4102,63 +4090,61 @@ menu_add_shortcuts (GtkWidget *window, GtkWidget *menu_bar)
 
 	/* Search: Ctrl+F */
 	trigger = gtk_shortcut_trigger_parse_string ("<Primary>f");
-	action = gtk_named_action_new ("menu.search");
+	action = gtk_named_action_new ("win.search");
 	shortcut = gtk_shortcut_new (trigger, action);
 	gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
 
 	/* Search Next: Ctrl+G */
 	trigger = gtk_shortcut_trigger_parse_string ("<Primary>g");
-	action = gtk_named_action_new ("menu.search-next");
+	action = gtk_named_action_new ("win.search-next");
 	shortcut = gtk_shortcut_new (trigger, action);
 	gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
 
 	/* Search Previous: Ctrl+Shift+G */
 	trigger = gtk_shortcut_trigger_parse_string ("<Primary><Shift>g");
-	action = gtk_named_action_new ("menu.search-prev");
+	action = gtk_named_action_new ("win.search-prev");
 	shortcut = gtk_shortcut_new (trigger, action);
 	gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
 
 	/* Help Contents: F1 */
 	trigger = gtk_shortcut_trigger_parse_string ("F1");
-	action = gtk_named_action_new ("menu.help-contents");
+	action = gtk_named_action_new ("win.contents");
 	shortcut = gtk_shortcut_new (trigger, action);
 	gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
 
 	/* Copy Selection: Ctrl+Shift+C */
 	trigger = gtk_shortcut_trigger_parse_string ("<Primary><Shift>c");
-	action = gtk_named_action_new ("menu.copy-selection");
+	action = gtk_named_action_new ("win.copy-selection");
 	shortcut = gtk_shortcut_new (trigger, action);
 	gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
 
 	/* Reset Marker Line: Ctrl+M */
 	trigger = gtk_shortcut_trigger_parse_string ("<Primary>m");
-	action = gtk_named_action_new ("menu.reset-marker");
+	action = gtk_named_action_new ("win.reset-marker");
 	shortcut = gtk_shortcut_new (trigger, action);
 	gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
 
 	/* Move to Marker Line: Ctrl+Shift+M */
 	trigger = gtk_shortcut_trigger_parse_string ("<Primary><Shift>m");
-	action = gtk_named_action_new ("menu.move-to-marker");
+	action = gtk_named_action_new ("win.move-to-marker");
 	shortcut = gtk_shortcut_new (trigger, action);
 	gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
 
 	/* Disconnect: Ctrl+D - only if not in emacs key mode */
 	trigger = gtk_shortcut_trigger_parse_string ("<Primary>d");
-	action = gtk_named_action_new ("menu.disconnect");
+	action = gtk_named_action_new ("win.disconnect");
 	shortcut = gtk_shortcut_new (trigger, action);
 	gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
 
 	/* Reconnect: Ctrl+R */
 	trigger = gtk_shortcut_trigger_parse_string ("<Primary>r");
-	action = gtk_named_action_new ("menu.reconnect");
+	action = gtk_named_action_new ("win.reconnect");
 	shortcut = gtk_shortcut_new (trigger, action);
 	gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
 
-	/* Close Tab: Ctrl+W or Ctrl+Shift+W depending on key theme */
+	/* Close Tab: Ctrl+W */
 	trigger = gtk_shortcut_trigger_parse_string ("<Primary>w");
-	action = gtk_named_action_new ("menu.close-tab");
+	action = gtk_named_action_new ("win.close");
 	shortcut = gtk_shortcut_new (trigger, action);
 	gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
-
-	(void)menu_bar; /* May be used for action group lookup if needed */
 }
