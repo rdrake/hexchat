@@ -3216,7 +3216,7 @@ menu_action_close (GSimpleAction *action, GVariant *parameter, gpointer user_dat
 	menu_close (NULL, NULL);
 }
 
-static void
+void
 menu_action_quit (GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
 	(void)action; (void)parameter; (void)user_data;
@@ -3628,7 +3628,7 @@ menu_build_gmenu (void)
 	g_object_unref (section);
 
 	section = g_menu_new ();
-	g_menu_append (section, _("_Quit"), "win.quit");
+	g_menu_append (section, _("_Quit"), "app.quit");
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
@@ -3815,7 +3815,6 @@ menu_add_window_actions (GtkWidget *window, int away)
 		{ "detach", menu_action_detach, NULL, NULL, NULL },
 		{ "attach", menu_action_attach, NULL, NULL, NULL },
 		{ "close", menu_action_close, NULL, NULL, NULL },
-		{ "quit", menu_action_quit, NULL, NULL, NULL },
 		{ "disconnect", menu_action_disconnect, NULL, NULL, NULL },
 		{ "reconnect", menu_action_reconnect, NULL, NULL, NULL },
 		{ "join", menu_action_join, NULL, NULL, NULL },

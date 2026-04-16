@@ -24,6 +24,7 @@
 
 void menu_setup_window (GtkWidget *window, int away, GtkWidget **menu_widgets);
 GMenuModel *menu_get_menubar_model (void);
+void menu_action_quit (GSimpleAction *action, GVariant *parameter, gpointer user_data);
 void menu_urlmenu (GtkWidget *parent, double x, double y, char *url);
 void menu_chanmenu (session *sess, GtkWidget *parent, double x, double y, char *chan);
 void menu_nickmenu (session *sess, GtkWidget *parent, double x, double y, char *nick, int num_sel);

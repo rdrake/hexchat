@@ -142,10 +142,20 @@ create_msg_dialog (gchar *title, gchar *message)
 static void
 on_app_startup (GApplication *app, gpointer user_data)
 {
+	static const GActionEntry app_actions[] = {
+		{ "quit", menu_action_quit, NULL, NULL, NULL },
+	};
+
 	(void) user_data;
 
 	/* One-time GUI setup — palette, pixmaps, CSS, key bindings */
 	fe_init ();
+
+	/* Register application-scoped actions. Quit lives here (not win.quit)
+	 * so macOS's auto-provided Quit menu item (app.quit by convention)
+	 * resolves correctly and isn't rendered disabled. */
+	g_action_map_add_action_entries (G_ACTION_MAP (app), app_actions,
+	                                 G_N_ELEMENTS (app_actions), NULL);
 
 	/* Install the application menubar. Each GtkApplicationWindow resolves
 	 * win.* action references against its own action map. On macOS this
