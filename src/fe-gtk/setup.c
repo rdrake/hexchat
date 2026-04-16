@@ -2296,7 +2296,7 @@ unslash (char *dir)
 }
 
 void
-setup_apply_real (int new_pix, int do_ulist, int do_layout, int do_identd)
+setup_apply_real (int new_pix, int do_ulist, int do_layout, int do_meters, int do_identd)
 {
 	GSList *list;
 	session *sess;
@@ -2335,10 +2335,14 @@ setup_apply_real (int new_pix, int do_ulist, int do_layout, int do_identd)
 			{
 				done_main = TRUE;
 				setup_apply_to_sess (sess->gui);
+				if (do_meters)
+					mg_update_meters (sess->gui);
 			}
 		} else
 		{
 			setup_apply_to_sess (sess->gui);
+			if (do_meters)
+				mg_update_meters (sess->gui);
 		}
 
 		log_open_or_close (sess);
@@ -2371,6 +2375,7 @@ setup_apply (struct hexchatprefs *pr)
 	int noapply = FALSE;
 	int do_ulist = FALSE;
 	int do_layout = FALSE;
+	int do_meters = FALSE;
 	int do_identd = FALSE;
 
 	if (strcmp (pr->hex_text_background, prefs.hex_text_background) != 0)
@@ -2386,8 +2391,8 @@ setup_apply (struct hexchatprefs *pr)
 		noapply = TRUE;
 	if (DIFF (hex_gui_input_nick))
 		noapply = TRUE;
-	if (DIFF (hex_gui_lagometer))
-		noapply = TRUE;
+	if (DIFF (hex_gui_lagometer) || DIFF (hex_gui_throttlemeter))
+		do_meters = TRUE;
 	if (DIFF (hex_gui_tab_icons))
 		noapply = TRUE;
 	if (DIFF (hex_gui_tab_server))
@@ -2397,8 +2402,6 @@ setup_apply (struct hexchatprefs *pr)
 	if (DIFF (hex_gui_tab_sort))
 		noapply = TRUE;
 	if (DIFF (hex_gui_tab_trunc))
-		noapply = TRUE;
-	if (DIFF (hex_gui_throttlemeter))
 		noapply = TRUE;
 	if (DIFF (hex_gui_input_style) && prefs.hex_gui_input_style == TRUE)
 		noapply = TRUE; /* Requires restart to *disable* */
@@ -2455,7 +2458,7 @@ setup_apply (struct hexchatprefs *pr)
 		strcpy (prefs.hex_irc_real_name, "realname");
 	}
 	
-	setup_apply_real (new_pix, do_ulist, do_layout, do_identd);
+	setup_apply_real (new_pix, do_ulist, do_layout, do_meters, do_identd);
 
 	if (noapply)
 		fe_message (_("Some settings were changed that require a"

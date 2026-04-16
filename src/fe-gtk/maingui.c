@@ -2120,6 +2120,8 @@ mg_create_userlistbuttons (GtkWidget *box)
 	GtkWidget *tab;
 
 	tab = gtk_grid_new ();
+	gtk_grid_set_column_spacing (GTK_GRID (tab), GUI_PANE_MARGIN);
+	gtk_grid_set_column_homogeneous (GTK_GRID (tab), TRUE);
 	/* Allow userlist panel to shrink below button grid's natural width */
 	gtk_widget_set_size_request (tab, 1, -1);
 	/* Scrolled window (meters) above already supplies the 6px universal gap
@@ -2969,7 +2971,7 @@ mg_create_infoframe (GtkWidget *box)
 	GtkWidget *frame, *label, *hbox;
 
 	frame = gtk_frame_new (0);
-	/* Allow frame to shrink below natural minimum */
+	gtk_widget_set_hexpand (frame, TRUE);
 	gtk_widget_set_size_request (frame, 1, -1);
 	gtk_box_append (GTK_BOX (box), frame);
 
@@ -2979,6 +2981,8 @@ mg_create_infoframe (GtkWidget *box)
 
 	label = gtk_label_new (NULL);
 	gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
+	gtk_widget_set_hexpand (label, TRUE);
+	gtk_widget_set_halign (label, GTK_ALIGN_CENTER);
 	gtk_widget_set_size_request (label, 1, -1);
 	gtk_box_append (GTK_BOX (hbox), label);
 
@@ -2995,8 +2999,6 @@ mg_create_meters (session_gui *gui, GtkWidget *parent_box)
 	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (gui->meter_box),
 									GTK_POLICY_EXTERNAL, GTK_POLICY_NEVER);
 	gtk_widget_set_size_request (gui->meter_box, 1, -1);
-	/* Tree's own bottom row padding and scrolled window internals already
-	 * supply the 6px universal gap; no extra margin needed here. */
 	gtk_box_append (GTK_BOX (parent_box), gui->meter_box);
 
 	infbox = box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 1);
@@ -3005,7 +3007,9 @@ mg_create_meters (session_gui *gui, GtkWidget *parent_box)
 
 	if ((prefs.hex_gui_lagometer & 2) || (prefs.hex_gui_throttlemeter & 2))
 	{
-		infbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+		infbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, GUI_PANE_MARGIN);
+		gtk_box_set_homogeneous (GTK_BOX (infbox), TRUE);
+		gtk_widget_set_margin_bottom (infbox, GUI_PANE_MARGIN);
 		gtk_widget_set_size_request (infbox, 1, -1);
 		gtk_box_append (GTK_BOX (box), infbox);
 	}
@@ -3054,6 +3058,15 @@ mg_create_meters (session_gui *gui, GtkWidget *parent_box)
 void
 mg_update_meters (session_gui *gui)
 {
+	GtkWidget *sibling;
+
+	/* Remember the widget before meter_box so we can re-insert at the
+	 * same position.  If meter_box is NULL (first call) or already
+	 * removed, fall back to inserting before the button_box. */
+	sibling = gui->meter_box
+		? gtk_widget_get_prev_sibling (gui->meter_box)
+		: gtk_widget_get_prev_sibling (gui->button_box);
+
 	hc_widget_destroy_impl (gui->meter_box);
 	gui->lagometer = NULL;
 	gui->laginfo = NULL;
@@ -3061,6 +3074,12 @@ mg_update_meters (session_gui *gui)
 	gui->throttleinfo = NULL;
 
 	mg_create_meters (gui, gui->button_box_parent);
+
+	/* gtk_box_append put the new meter_box at the end — move it back
+	 * to just after the original predecessor (i.e. before button_box). */
+	if (gui->meter_box)
+		gtk_box_reorder_child_after (GTK_BOX (gui->button_box_parent),
+		                             gui->meter_box, sibling);
 }
 
 static void
