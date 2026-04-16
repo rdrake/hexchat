@@ -1460,6 +1460,24 @@ middle_action_react_text (GSimpleAction *action, GVariant *parameter, gpointer u
 		gtk_widget_grab_focus (sess->gui->input_box);
 }
 
+/* IRCv3 Redact: delete a message via REDACT command */
+static void
+middle_action_redact (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+	session *sess = middle_menu_sess;
+	(void)action; (void)parameter; (void)user_data;
+
+	if (!sess || !sess->server || !sess->server->have_redact ||
+	    !sess->server->connected || !middle_menu_clicked_msgid)
+		return;
+
+	{
+		char *cmd = g_strdup_printf ("REDACT %s %s", sess->channel, middle_menu_clicked_msgid);
+		handle_command (sess, cmd, FALSE);
+		g_free (cmd);
+	}
+}
+
 /* Copy Message ID to clipboard */
 static void
 middle_action_copy_msgid (GSimpleAction *action, GVariant *parameter, gpointer user_data)
@@ -1548,6 +1566,7 @@ menu_middlemenu (session *sess, GtkWidget *parent, double x, double y)
 		{ "react-to-message", middle_action_react, NULL, NULL, NULL },
 		{ "react-text-to-message", middle_action_react_text, NULL, NULL, NULL },
 		{ "copy-msgid", middle_action_copy_msgid, NULL, NULL, NULL },
+		{ "redact-message", middle_action_redact, NULL, NULL, NULL },
 	};
 	g_action_map_add_action_entries (G_ACTION_MAP (action_group), middle_actions,
 									 G_N_ELEMENTS (middle_actions), NULL);
@@ -1638,6 +1657,14 @@ menu_middlemenu (session *sess, GtkWidget *parent, double x, double y)
 			g_menu_append (section, _("Copy Message ID"), "middle.copy-msgid");
 			g_menu_append_section (gmenu, NULL, G_MENU_MODEL (section));
 			g_object_unref (section);
+
+			if (sess->server->have_redact)
+			{
+				section = g_menu_new ();
+				g_menu_append (section, _("Delete Message"), "middle.redact-message");
+				g_menu_append_section (gmenu, NULL, G_MENU_MODEL (section));
+				g_object_unref (section);
+			}
 		}
 	}
 

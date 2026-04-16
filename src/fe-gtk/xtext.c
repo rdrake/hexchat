@@ -2845,6 +2845,7 @@ gtk_xtext_leave_hover (GtkXText *xtext)
 		xtext->hover_ent = NULL;
 		xtext->hover_reply_target = NULL;
 		xtext->hover_btn_size = 0;
+		xtext->redact_confirm_ent = NULL;
 		if (xtext->hover_stamp_tag)
 		{
 			g_source_remove (xtext->hover_stamp_tag);
@@ -3703,6 +3704,12 @@ gtk_xtext_button_press (GtkGestureClick *gesture, int n_press, double event_x, d
 		{
 			cb = xtext->react_emoji_button_cb;
 			ud = xtext->react_emoji_button_userdata;
+		}
+		else if (xtext->redact_btn_x >= 0 &&
+		         x >= xtext->redact_btn_x - 4 && x < xtext->redact_btn_x + bs + 4)
+		{
+			cb = xtext->redact_button_cb;
+			ud = xtext->redact_button_userdata;
 		}
 
 		if (cb)
@@ -5754,34 +5761,42 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 
 	gtk_xtext_draw_marker (xtext, ent, y - xtext->fontsize * (taken + start_subline));
 
-	/* --- Hover buttons: reply, react-text, react-emoji --- */
+	/* --- Hover buttons: reply, react-text, react-emoji, [redact] --- */
 	if (ent == xtext->hover_ent && ent->msgid && first_subline_y && xtext->cr)
 	{
 		int btn_size = xtext->fontsize + 2;
 		int gap = 2;
-		int total_w = btn_size * 3 + gap * 2;
+		int has_redact = xtext->redact_button_visible;
+		int btn_count = has_redact ? 4 : 3;
+		int total_w = btn_size * btn_count + gap * (btn_count - 1);
 		int base_x = win_width - total_w - 4;
 		int btn_y = first_subline_y - xtext->font->ascent;
 		GdkRGBA btn_bg, fg;
 		PangoLayoutLine *pango_line;
 		PangoRectangle glyph_rect;
-		/* Button labels: ↩ reply, Aa react-text, 😀 react-emoji */
-		static const char *labels[] = { "\xe2\x86\xa9", "Aa", "\xf0\x9f\x98\x80" };
-		int btn_xs[3];
+		static const char *labels[] = { "\xe2\x86\xa9", "Aa", "\xf0\x9f\x98\x80", "\xc3\x97" };
+		int btn_xs[4];
 		int i;
 
-		btn_xs[0] = base_x;
-		btn_xs[1] = base_x + btn_size + gap;
-		btn_xs[2] = base_x + (btn_size + gap) * 2;
+		for (i = 0; i < btn_count; i++)
+			btn_xs[i] = base_x + (btn_size + gap) * i;
 
 		btn_bg = xtext->palette[XTEXT_FG];
 		btn_bg.alpha = 0.15f;
 		fg = xtext->palette[XTEXT_FG];
 		fg.alpha = 0.7f;
 
-		for (i = 0; i < 3; i++)
+		for (i = 0; i < btn_count; i++)
 		{
 			int bx = btn_xs[i];
+			GdkRGBA this_bg = btn_bg;
+
+			if (has_redact && i == 3 &&
+			    xtext->redact_confirm_ent == ent &&
+			    (g_get_monotonic_time () - xtext->redact_confirm_time) < 3 * G_USEC_PER_SEC)
+			{
+				this_bg.alpha = 0.35f;
+			}
 
 			/* Rounded rect background */
 			cairo_new_sub_path (xtext->cr);
@@ -5790,7 +5805,7 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 			cairo_arc (xtext->cr, bx + 4, btn_y + btn_size - 4, 4, G_PI/2, G_PI);
 			cairo_arc (xtext->cr, bx + 4, btn_y + 4, 4, G_PI, 3*G_PI/2);
 			cairo_close_path (xtext->cr);
-			gdk_cairo_set_source_rgba (xtext->cr, &btn_bg);
+			gdk_cairo_set_source_rgba (xtext->cr, &this_bg);
 			cairo_fill (xtext->cr);
 
 			/* Emoji button: use sprite from cache for consistent Twemoji rendering */
@@ -5837,6 +5852,7 @@ gtk_xtext_render_line (GtkXText * xtext, textentry * ent, int line,
 		xtext->reply_btn_x = btn_xs[0];
 		xtext->react_text_btn_x = btn_xs[1];
 		xtext->react_emoji_btn_x = btn_xs[2];
+		xtext->redact_btn_x = has_redact ? btn_xs[3] : -1;
 		xtext->hover_btn_y = btn_y;
 		xtext->hover_btn_size = btn_size;
 	}
@@ -9746,6 +9762,15 @@ gtk_xtext_set_react_emoji_button_callback (GtkXText *xtext,
 {
 	xtext->react_emoji_button_cb = callback;
 	xtext->react_emoji_button_userdata = userdata;
+}
+
+void
+gtk_xtext_set_redact_button_callback (GtkXText *xtext,
+                                       void (*callback) (GtkXText *, const char *, const char *, gpointer),
+                                       gpointer userdata)
+{
+	xtext->redact_button_cb = callback;
+	xtext->redact_button_userdata = userdata;
 }
 
 void

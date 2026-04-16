@@ -2578,6 +2578,28 @@ inbound_identified (server *serv)	/* 'MODE +e MYSELF' on freenode */
 	}
 }
 
+void
+inbound_redact_fail (server *serv, session *sess, const char *code,
+                     const char *text, const message_tags_data *tags_data)
+{
+	const char *msg;
+
+	if (g_strcmp0 (code, "REDACT_FORBIDDEN") == 0)
+		msg = _("You don't have permission to delete that message");
+	else if (g_strcmp0 (code, "REDACT_WINDOW_EXPIRED") == 0)
+		msg = _("Message is too old to delete");
+	else if (g_strcmp0 (code, "UNKNOWN_MSGID") == 0)
+		msg = _("Message not found on server");
+	else if (g_strcmp0 (code, "INVALID_TARGET") == 0)
+		msg = _("Invalid target for message deletion");
+	else
+		msg = text;
+
+	EMIT_SIGNAL_TIMESTAMP (XP_TE_FAILCMD, sess, "REDACT", code, text, NULL,
+	                        NULL, tags_data->timestamp);
+	fe_toast_show (sess, msg, 5000, 5 /* TOAST_TYPE_ERROR */, 0);
+}
+
 static const char *sasl_mechanisms[] =
 {
 	"PLAIN",

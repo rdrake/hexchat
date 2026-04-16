@@ -1322,6 +1322,11 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 			{
 				chathistory_handle_fail (serv, word[5]);
 			}
+			else if (g_ascii_strcasecmp (word[3], "REDACT") == 0)
+			{
+				inbound_redact_fail (serv, sess, word[4], text, tags_data);
+				return;
+			}
 			if (g_strcmp0(word[3], "*") == 0)
 			{
 				EMIT_SIGNAL_TIMESTAMP (XP_TE_FAIL, sess, word[4], text, NULL, NULL, NULL, tags_data->timestamp);

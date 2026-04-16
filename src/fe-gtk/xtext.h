@@ -384,7 +384,7 @@ struct _GtkXText
 	                           gboolean is_self, gpointer userdata);
 	gpointer reaction_click_userdata;
 
-	/* Hover buttons: reply, react-text, react-emoji */
+	/* Hover buttons: reply, react-text, react-emoji, redact */
 	textentry *hover_ent;			/* entry the mouse is currently over (NULL = none) */
 	textentry *hover_reply_target;	/* entry referenced by hovered reply context (NULL = none) */
 	int hover_btn_y;				/* top edge of hover button row */
@@ -395,12 +395,20 @@ struct _GtkXText
 	int reply_btn_x;				/* left edge of reply button */
 	int react_text_btn_x;			/* left edge of react-text button */
 	int react_emoji_btn_x;			/* left edge of react-emoji button */
+	int redact_btn_x;				/* left edge of redact button (-1 = hidden) */
 	void (*reply_button_cb) (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata);
 	gpointer reply_button_userdata;
 	void (*react_text_button_cb) (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata);
 	gpointer react_text_button_userdata;
 	void (*react_emoji_button_cb) (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata);
 	gpointer react_emoji_button_userdata;
+	void (*redact_button_cb) (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata);
+	gpointer redact_button_userdata;
+	unsigned int redact_button_visible:1;	/* set by host when server supports redaction */
+
+	/* Redact hover-button confirmation (two-click) */
+	textentry *redact_confirm_ent;	/* entry awaiting second click (NULL = none) */
+	gint64 redact_confirm_time;		/* monotonic time of first click (µs) */
 
 	/* Picker mode: click a message to grab its msgid */
 	void (*picker_click_cb) (GtkXText *xtext, const char *msgid, gpointer userdata);
@@ -491,6 +499,7 @@ void gtk_xtext_reset_scroll_top_backoff (GtkXText *xtext);
 void gtk_xtext_set_reply_button_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gpointer), gpointer userdata);
 void gtk_xtext_set_react_text_button_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gpointer), gpointer userdata);
 void gtk_xtext_set_react_emoji_button_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gpointer), gpointer userdata);
+void gtk_xtext_set_redact_button_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gpointer), gpointer userdata);
 void gtk_xtext_set_reaction_click_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, const char *, gboolean, gpointer), gpointer userdata);
 void gtk_xtext_set_picker_click_callback (GtkXText *xtext, void (*callback) (GtkXText *, const char *, gpointer), gpointer userdata);
 

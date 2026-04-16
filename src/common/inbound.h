@@ -88,6 +88,8 @@ void inbound_action (session *sess, char *chan, char *from, char *ip,
 void inbound_newnick (server *serv, char *nick, char *newnick, int quiet,
 							 const message_tags_data *tags_data);
 void inbound_identified (server *serv);
+void inbound_redact_fail (server *serv, session *sess, const char *code,
+                          const char *text, const message_tags_data *tags_data);
 void inbound_cap_ack (server *serv, char *nick, char *extensions,
 							 const message_tags_data *tags_data);
 void inbound_cap_ls (server *serv, char *nick, char *extensions,

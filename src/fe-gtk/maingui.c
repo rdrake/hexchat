@@ -1091,6 +1091,12 @@ mg_populate (session *sess)
 	mg_focus (sess);
 	fe_set_title (sess);
 
+	if (gui->xtext)
+	{
+		GtkXText *xt = GTK_XTEXT (gui->xtext);
+		xt->redact_button_visible = (sess->server && sess->server->have_redact);
+	}
+
 	/* this one flickers, so only change if necessary */
 	{
 		GtkWidget *lbl = g_object_get_data (G_OBJECT (gui->nick_label), "nick-label");
@@ -2775,6 +2781,37 @@ mg_react_emoji_button_cb (GtkXText *xtext, const char *msgid, const char *nick, 
 	gtk_popover_popup (GTK_POPOVER (chooser));
 }
 
+/* Hover redact button clicked — two-click confirmation then send REDACT */
+static void
+mg_redact_button_cb (GtkXText *xtext, const char *msgid, const char *nick, gpointer userdata)
+{
+	session *sess = current_sess;
+	(void)nick;
+	(void)userdata;
+
+	if (!sess || !sess->server || !sess->server->have_redact ||
+	    !sess->server->connected || !sess->channel[0] || !msgid)
+		return;
+
+	/* Two-click: first click sets confirm state, second click sends */
+	if (xtext->redact_confirm_ent == xtext->hover_ent &&
+	    (g_get_monotonic_time () - xtext->redact_confirm_time) < 3 * G_USEC_PER_SEC)
+	{
+		char *cmd = g_strdup_printf ("REDACT %s %s", sess->channel, msgid);
+		handle_command (sess, cmd, FALSE);
+		g_free (cmd);
+		xtext->redact_confirm_ent = NULL;
+	}
+	else
+	{
+		xtext->redact_confirm_ent = xtext->hover_ent;
+		xtext->redact_confirm_time = g_get_monotonic_time ();
+		fe_toast_show (sess, _("Click \xc3\x97 again to delete this message"), 3000,
+		               TOAST_TYPE_ERROR, 0);
+		gtk_widget_queue_draw (GTK_WIDGET (xtext));
+	}
+}
+
 /* Reaction badge clicked — toggle reaction on/off */
 static void
 mg_reaction_click_cb (GtkXText *xtext, const char *msgid, const char *reaction_text,
@@ -2951,6 +2988,7 @@ mg_create_textarea (session *sess, GtkWidget *box)
 	gtk_xtext_set_reply_button_callback (xtext, mg_reply_button_cb, NULL);
 	gtk_xtext_set_react_text_button_callback (xtext, mg_react_text_button_cb, NULL);
 	gtk_xtext_set_react_emoji_button_callback (xtext, mg_react_emoji_button_cb, NULL);
+	gtk_xtext_set_redact_button_callback (xtext, mg_redact_button_cb, NULL);
 	gtk_xtext_set_reaction_click_callback (xtext, mg_reaction_click_cb, NULL);
 	gtk_frame_set_child (GTK_FRAME (frame), GTK_WIDGET (xtext));
 
