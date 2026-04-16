@@ -135,12 +135,17 @@ hexchat_common = static_library('hexchatcommon',
   pic: true
 )
 
+hexchat_common_public_deps = [libgio_dep]
+if libssl_dep.found()
+  hexchat_common_public_deps += libssl_dep
+endif
+
 hexchat_common_dep = declare_dependency(
   sources: [textevents] + marshal,
   link_with: hexchat_common,
   include_directories: common_includes,
   compile_args: common_cflags,
-  dependencies: libgio_dep,
+  dependencies: hexchat_common_public_deps,
 )
 
 hexchat_plugin_dep = declare_dependency(
