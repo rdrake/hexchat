@@ -43,6 +43,7 @@ typedef struct
 
 /* Forward declarations */
 static chan *cv_tree_get_parent (chan *ch);
+static void cv_tree_focus (chan *ch);
 
 /* Width of "nn" + U+2026 HORIZONTAL ELLIPSIS — the minimum ellipsized
  * label state (2 chars + ellipsis). Used by both the detent hint and
@@ -103,6 +104,54 @@ cv_tree_detent_min (GtkWidget *view)
  * GTK4: Row activated callback for GtkListView
  * Toggle expansion state of tree rows on double-click
  */
+/* Re-select cv->focused after an expand adds children back to the flat
+ * model.  Fires on every items-changed but bails quickly when selection
+ * is already correct or nothing was added.  Does NOT call cv_tree_focus
+ * because that force-expands the parent, which would undo a deliberate
+ * collapse. */
+static void
+cv_tree_items_changed_cb (GListModel *model, guint position, guint removed,
+                          guint added, chanview *cv)
+{
+	treeview *tv = (treeview *)cv;
+	GtkSelectionModel *sel_model;
+	GtkBitset *selection;
+	guint i;
+
+	if (added == 0 || !cv->focused)
+		return;
+
+	sel_model = gtk_list_view_get_model (tv->view);
+	selection = gtk_selection_model_get_selection (sel_model);
+	if (!gtk_bitset_is_empty (selection))
+	{
+		gtk_bitset_unref (selection);
+		return;
+	}
+	gtk_bitset_unref (selection);
+
+	/* Scan only the newly-added range for the focused channel */
+	for (i = position; i < position + added; i++)
+	{
+		GtkTreeListRow *row = g_list_model_get_item (G_LIST_MODEL (sel_model), i);
+		if (row)
+		{
+			HcChanItem *item = gtk_tree_list_row_get_item (row);
+			if (item && item->ch == cv->focused)
+			{
+				gtk_selection_model_select_item (sel_model, i, TRUE);
+				gtk_list_view_scroll_to (tv->view, i, GTK_LIST_SCROLL_NONE, NULL);
+				g_object_unref (item);
+				g_object_unref (row);
+				return;
+			}
+			if (item)
+				g_object_unref (item);
+			g_object_unref (row);
+		}
+	}
+}
+
 static void
 cv_tree_activated_cb (GtkListView *view, guint position, gpointer data)
 {
@@ -573,6 +622,8 @@ cv_tree_init (chanview *cv)
 	                  G_CALLBACK (cv_tree_sel_cb), cv);
 	g_signal_connect (view, "activate",
 	                  G_CALLBACK (cv_tree_activated_cb), cv);
+	g_signal_connect (G_LIST_MODEL (tree_model), "items-changed",
+	                  G_CALLBACK (cv_tree_items_changed_cb), cv);
 
 	/* Event controllers */
 	/* Left-click gesture for explicit selection (GtkListView doesn't auto-select reliably with GtkTreeExpander)
@@ -895,12 +946,16 @@ cv_tree_rebind_item (chanview *cv, GListStore *store, guint position, HcChanItem
 	GtkSelectionModel *sel_model;
 	GtkBitset *selection;
 	guint saved_selection = GTK_INVALID_LIST_POSITION;
+	gboolean was_expanded = TRUE;
+	gboolean is_server_rebind;
 
 	if (!tv || !tv->view || !store || !item)
 		return;
 
-	/* Save current selection */
 	sel_model = gtk_list_view_get_model (tv->view);
+	is_server_rebind = (store == cv->store);
+
+	/* Save current selection */
 	if (sel_model)
 	{
 		selection = gtk_selection_model_get_selection (sel_model);
@@ -909,9 +964,61 @@ cv_tree_rebind_item (chanview *cv, GListStore *store, guint position, HcChanItem
 		gtk_bitset_unref (selection);
 	}
 
+	/* For server rows, save expanded state before the remove/insert
+	 * cycle.  autoexpand will re-expand the row unconditionally;
+	 * we collapse it again afterwards if it was deliberately collapsed. */
+	if (is_server_rebind && sel_model)
+	{
+		guint n = g_list_model_get_n_items (G_LIST_MODEL (sel_model));
+		guint j;
+		for (j = 0; j < n; j++)
+		{
+			GtkTreeListRow *row = g_list_model_get_item (G_LIST_MODEL (sel_model), j);
+			if (row)
+			{
+				HcChanItem *ri = gtk_tree_list_row_get_item (row);
+				if (ri && ri->ch == item->ch)
+				{
+					was_expanded = gtk_tree_list_row_get_expanded (row);
+					g_object_unref (ri);
+					g_object_unref (row);
+					break;
+				}
+				if (ri)
+					g_object_unref (ri);
+				g_object_unref (row);
+			}
+		}
+	}
+
 	/* Perform the rebind via remove/insert */
 	g_list_store_remove (store, position);
 	g_list_store_insert (store, position, item);
+
+	/* Restore collapsed state if autoexpand forced it open */
+	if (is_server_rebind && !was_expanded && sel_model)
+	{
+		guint n = g_list_model_get_n_items (G_LIST_MODEL (sel_model));
+		guint j;
+		for (j = 0; j < n; j++)
+		{
+			GtkTreeListRow *row = g_list_model_get_item (G_LIST_MODEL (sel_model), j);
+			if (row)
+			{
+				HcChanItem *ri = gtk_tree_list_row_get_item (row);
+				if (ri && ri->ch == item->ch)
+				{
+					gtk_tree_list_row_set_expanded (row, FALSE);
+					g_object_unref (ri);
+					g_object_unref (row);
+					break;
+				}
+				if (ri)
+					g_object_unref (ri);
+				g_object_unref (row);
+			}
+		}
+	}
 
 	/* Restore selection if it was valid */
 	if (sel_model && saved_selection != GTK_INVALID_LIST_POSITION)

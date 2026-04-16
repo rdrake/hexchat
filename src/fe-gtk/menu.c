@@ -1166,11 +1166,14 @@ menu_setting_foreach (void (*callback) (session *), int id, guint state)
 	}
 }
 
+void menu_sync_toggle_states (void);
+
 void
 menu_bar_toggle (void)
 {
 	prefs.hex_gui_hide_menu = !prefs.hex_gui_hide_menu;
 	menu_setting_foreach (menu_showhide_cb, MENU_ID_MENUBAR, !prefs.hex_gui_hide_menu);
+	menu_sync_toggle_states ();
 }
 
 /* Action callbacks for middle-click menu */
@@ -3199,6 +3202,9 @@ menu_action_toggle_menubar (GSimpleAction *action, GVariant *parameter, gpointer
 	/* Update preference and apply to all sessions */
 	prefs.hex_gui_hide_menu = !active;
 	menu_setting_foreach (menu_showhide_cb, -1, 0);  /* -1 skips GTK3 widget state update */
+	/* When fired from the popup full menu (shown while menubar is hidden),
+	 * `action` belongs to the popup's action group — sync the main menu. */
+	menu_sync_toggle_states ();
 
 	if (prefs.hex_gui_hide_menu)
 		fe_message (_("The Menubar is now hidden. You can show it again"
@@ -3281,6 +3287,7 @@ menu_action_layout (GSimpleAction *action, GVariant *parameter, gpointer user_da
 		prefs.hex_gui_tab_layout = 2;
 
 	menu_change_layout ();
+	menu_sync_toggle_states ();
 }
 
 /* Network Meters radio actions */
@@ -3300,6 +3307,7 @@ menu_action_metres (GSimpleAction *action, GVariant *parameter, gpointer user_da
 		prefs.hex_gui_lagometer = 3;
 
 	menu_setting_foreach (menu_apply_metres_cb, -1, 0);
+	menu_sync_toggle_states ();
 }
 
 /* Server menu actions */
@@ -3908,6 +3916,63 @@ menu_create_main (void *accel_group, int bar, int away, int toplevel,
 	}
 
 	return menu_bar;
+}
+
+/* Sync toggle-action states with current prefs. Call after external
+ * changes (e.g. preferences dialog) that mutate the underlying prefs
+ * without going through the menu activate callbacks. */
+void
+menu_sync_toggle_states (void)
+{
+	GAction *action;
+
+	if (!main_menu_action_group)
+		return;
+
+	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "toggle-menubar");
+	if (action)
+		g_simple_action_set_state (G_SIMPLE_ACTION (action),
+			g_variant_new_boolean (!prefs.hex_gui_hide_menu));
+
+	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "toggle-topicbar");
+	if (action)
+		g_simple_action_set_state (G_SIMPLE_ACTION (action),
+			g_variant_new_boolean (prefs.hex_gui_topicbar));
+
+	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "toggle-userlist");
+	if (action)
+		g_simple_action_set_state (G_SIMPLE_ACTION (action),
+			g_variant_new_boolean (!prefs.hex_gui_ulist_hide));
+
+	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "toggle-ulbuttons");
+	if (action)
+		g_simple_action_set_state (G_SIMPLE_ACTION (action),
+			g_variant_new_boolean (prefs.hex_gui_ulist_buttons));
+
+	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "toggle-modebuttons");
+	if (action)
+		g_simple_action_set_state (G_SIMPLE_ACTION (action),
+			g_variant_new_boolean (prefs.hex_gui_mode_buttons));
+
+	/* Radio actions */
+	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "layout");
+	if (action)
+		g_simple_action_set_state (G_SIMPLE_ACTION (action),
+			g_variant_new_string ((prefs.hex_gui_tab_layout == 0) ? "tabs" : "tree"));
+
+	action = g_action_map_lookup_action (G_ACTION_MAP (main_menu_action_group), "metres");
+	if (action)
+	{
+		const char *s;
+		switch (prefs.hex_gui_lagometer)
+		{
+		case 0:  s = "off"; break;
+		case 1:  s = "graph"; break;
+		case 2:  s = "text"; break;
+		default: s = "both"; break;
+		}
+		g_simple_action_set_state (G_SIMPLE_ACTION (action), g_variant_new_string (s));
+	}
 }
 
 /* Map MENU_ID_* constants to GAction names */

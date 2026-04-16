@@ -4015,6 +4015,17 @@ mg_place_userlist_and_chanview (session_gui *gui)
 	gtk_widget_set_margin_start (gui->main_table, left_has_content ? 0 : GUI_PANE_MARGIN);
 	gtk_widget_set_margin_end (gui->main_table, right_has_content ? 0 : GUI_PANE_MARGIN);
 
+	/* Menu bar sits inside main_table and inherits its side margins.
+	 * When a side pane is present, main_table margin on that side is 0
+	 * (the vpane's own margin supplies the gap for pane content below).
+	 * Compensate on the menu so it always has the same visual padding
+	 * on both sides regardless of pane configuration. */
+	if (gui->menu)
+	{
+		gtk_widget_set_margin_start (gui->menu, left_has_content ? GUI_PANE_MARGIN : 0);
+		gtk_widget_set_margin_end (gui->menu, right_has_content ? GUI_PANE_MARGIN : 0);
+	}
+
 	if (gui->chanview)
 	{
 		pos = prefs.hex_gui_tab_pos;

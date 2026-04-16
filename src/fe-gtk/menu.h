@@ -46,6 +46,7 @@ void menu_change_layout (void);
 void menu_set_away (session_gui *gui, int away);
 void menu_set_fullscreen (session_gui *gui, int fullscreen);
 void menu_set_action_sensitive (session_gui *gui, int menu_id, int enabled);
+void menu_sync_toggle_states (void);
 
 /* for menu_quick functions */
 #define XCMENU_DOLIST 1

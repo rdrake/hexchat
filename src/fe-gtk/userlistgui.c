@@ -400,6 +400,13 @@ fe_userlist_insert (session *sess, struct User *newuser, gboolean sel)
 				gtk_selection_model_select_item (sel_model, n_items - 1, FALSE);
 		}
 	}
+
+	/* GTK4 workaround: column view model changes don't always propagate
+	 * resize requests correctly through the paned hierarchy, which can
+	 * leave the userlist rendered at a stale allocation offset (content
+	 * clips into the pane margin). Force the container to re-layout. */
+	if (sess->gui && sess->gui->user_box)
+		gtk_widget_queue_resize (sess->gui->user_box);
 }
 
 void
