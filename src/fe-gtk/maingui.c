@@ -2994,16 +2994,9 @@ mg_create_meters (session_gui *gui, GtkWidget *parent_box)
 {
 	GtkWidget *infbox, *wid, *box;
 
-	/* Wrap meters in a scrolled window with EXTERNAL policy to allow shrinking */
-	gui->meter_box = gtk_scrolled_window_new ();
-	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (gui->meter_box),
-									GTK_POLICY_EXTERNAL, GTK_POLICY_NEVER);
-	gtk_widget_set_size_request (gui->meter_box, 1, -1);
-	gtk_box_append (GTK_BOX (parent_box), gui->meter_box);
-
-	infbox = box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 1);
+	infbox = box = gui->meter_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 1);
 	gtk_widget_set_size_request (box, 1, -1);
-	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (gui->meter_box), box);
+	gtk_box_append (GTK_BOX (parent_box), box);
 
 	if ((prefs.hex_gui_lagometer & 2) || (prefs.hex_gui_throttlemeter & 2))
 	{

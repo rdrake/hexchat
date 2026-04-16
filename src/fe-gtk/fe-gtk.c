@@ -781,7 +781,8 @@ fe_init (void)
 				"  margin: 0; "
 				"  min-width: 0; "
 				"  min-height: 0; "
-				"}");
+				"}"
+				"progressbar trough { min-width: 1px; }");
 			gtk_style_context_add_provider_for_display (
 				gdk_display_get_default (),
 				GTK_STYLE_PROVIDER (layout_css),
