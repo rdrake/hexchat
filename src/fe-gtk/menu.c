@@ -3632,7 +3632,7 @@ menu_build_gmenu (void)
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
 
-	g_menu_append_submenu (menubar, _("He_xChat"), G_MENU_MODEL (menu));
+	g_menu_append_submenu (menubar, _("_File"), G_MENU_MODEL (menu));
 	g_object_unref (menu);
 
 	/* === View Menu === */
