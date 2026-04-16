@@ -451,12 +451,8 @@ static const setting alert_settings_nonotifications[] =
 
 	{ST_ALERTHEAD},
 	{ST_3OGGLE, N_("Blink tray icon on:"), 0, 0, (void *)trayblinklist, 0},
-#ifdef HAVE_GTK_MAC
-	{ST_3OGGLE, N_("Bounce dock icon on:"), 0, 0, (void *)taskbarlist, 0},
-#else
 #ifndef __APPLE__
 	{ST_3OGGLE, N_("Blink task bar on:"), 0, 0, (void *)taskbarlist, 0},
-#endif
 #endif
 #ifdef WIN32
 	{ST_3OGGLE, N_("Make a beep sound on:"), 0, N_("Play the \"Instant Message Notification\" system sound upon the selected events"), (void *)beeplist, 0},

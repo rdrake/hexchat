@@ -77,10 +77,6 @@ fe_get_application (void)
 static ca_context *ca_con;
 #endif
 
-#ifdef HAVE_GTK_MAC
-GtkosxApplication *osx_app;
-#endif
-
 /* === command-line parameter parsing : requires glib 2.6 === */
 
 static char *arg_cfgdir = NULL;
@@ -331,10 +327,6 @@ fe_args (int argc, char *argv[])
 	                  G_CALLBACK (on_app_startup), NULL);
 	g_signal_connect (hexchat_app, "activate",
 	                  G_CALLBACK (on_app_activate), NULL);
-
-#ifdef HAVE_GTK_MAC
-	osx_app = g_object_new(GTKOSX_TYPE_APPLICATION, NULL);
-#endif
 
 	return -1;
 }
@@ -724,9 +716,6 @@ fe_init (void)
 	key_init ();
 	pixmaps_init ();
 
-#ifdef HAVE_GTK_MAC
-	gtkosx_application_set_dock_icon_pixbuf (osx_app, pix_hexchat);
-#endif
 	channelwin_pix = pixmap_load_from_file (prefs.hex_text_background);
 
 	/* Merge hex_text_font_main + hex_text_font_alternative into hex_text_font
@@ -809,22 +798,9 @@ fe_init (void)
 	}
 }
 
-#ifdef HAVE_GTK_MAC
-static void
-gtkosx_application_terminate (GtkosxApplication *app, gpointer userdata)
-{
-	hexchat_exit();
-}
-#endif
-
 void
 fe_main (void)
 {
-#ifdef HAVE_GTK_MAC
-	gtkosx_application_ready(osx_app);
-	g_signal_connect (G_OBJECT(osx_app), "NSApplicationWillTerminate",
-					G_CALLBACK(gtkosx_application_terminate), NULL);
-#endif
 	g_application_run (G_APPLICATION (hexchat_app), 0, NULL);
 
 	/* sleep for 2 seconds so any QUIT messages are not lost. The  */

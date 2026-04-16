@@ -17,7 +17,6 @@
  */
 
 #import <Cocoa/Cocoa.h>
-#include <gtkosxapplication.h>
 
 void
 notification_backend_show (const char *title, const char *text)
@@ -50,5 +49,5 @@ notification_backend_deinit (void)
 int
 notification_backend_supported (void)
 {
-	return gtkosx_application_get_bundle_id () != NULL;
+	return [[NSBundle mainBundle] bundleIdentifier] != nil;
 }

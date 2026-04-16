@@ -88,7 +88,6 @@ textevents = custom_target('textevents',
 # TODO:
 #   LOOKUPD
 #   SIGACTION
-#   HAVE_GTK_MAC
 
 if libssl_dep.found()
   common_sources += 'ssl.c'
