@@ -1294,8 +1294,7 @@ fe_dcc_open_recv_win (int passive)
 	dccfwin.address_label = dcc_detail_label (_("Address:"), detailbox, 1);
 
 	bbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout_impl (GTK_WIDGET (bbox), HC_BUTTONBOX_SPREAD);
-	gtk_widget_set_margin_top (bbox, 6);
+	gtk_widget_set_margin_top (bbox, 12);
 	gtk_box_append (GTK_BOX (vbox), bbox);
 
 	dccfwin.abort_button = gtkutil_button (bbox, "process-stop", 0, abort_clicked, 0, _("Abort"));
@@ -1633,8 +1632,7 @@ fe_dcc_open_chat_win (int passive)
 	dcccwin.list = view;
 
 	bbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout_impl (GTK_WIDGET (bbox), HC_BUTTONBOX_SPREAD);
-	gtk_widget_set_margin_top (bbox, 6);
+	gtk_widget_set_margin_top (bbox, 12);
 	gtk_box_append (GTK_BOX (vbox), bbox);
 
 	dcccwin.abort_button = gtkutil_button (bbox, "process-stop", 0, abort_chat_clicked, 0, _("Abort"));

@@ -2560,7 +2560,7 @@ menu_join (GtkWidget * wid, gpointer none)
 	gtk_box_append (GTK_BOX (vbox), hbox);
 
 	/* Button row */
-	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
 	gtk_widget_set_halign (button_box, GTK_ALIGN_END);
 
 	button = gtk_button_new_with_label (_("Retrieve channel list"));

@@ -374,8 +374,7 @@ plugingui_open (void)
 	g_object_set_data (G_OBJECT (plugin_window), "store", store);
 
 	hbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout_impl (GTK_WIDGET (hbox), HC_BUTTONBOX_SPREAD);
-	gtk_widget_set_margin_top (hbox, 6);
+	gtk_widget_set_margin_top (hbox, 12);
 	gtk_box_append (GTK_BOX (vbox), hbox);
 
 	gtkutil_button (hbox, "document-revert", NULL,

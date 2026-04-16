@@ -986,8 +986,7 @@ banlist_opengui (struct session *sess)
 	}
 
 	bbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout_impl (GTK_WIDGET (bbox), HC_BUTTONBOX_SPREAD);
-	gtk_widget_set_margin_top (bbox, 6);
+	gtk_widget_set_margin_top (bbox, 12);
 	gtk_box_append (GTK_BOX (vbox), bbox);
 
 	banl->but_remove = gtkutil_button (bbox, "list-remove", 0, banlist_unban, banl,

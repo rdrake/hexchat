@@ -1412,12 +1412,11 @@ mg_open_quit_dialog (gboolean minimize_button)
 	gtk_window_set_destroy_with_parent (GTK_WINDOW (quit_dialog), TRUE);
 
 	dialog_vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
-	hc_widget_set_margin_all (dialog_vbox1, 6);
+	hc_widget_set_margin_all (dialog_vbox1, 12);
 	gtk_window_set_child (GTK_WINDOW (quit_dialog), dialog_vbox1);
 
 	table1 = gtk_grid_new ();
 	gtk_box_append (GTK_BOX (dialog_vbox1), table1);
-	hc_widget_set_margin_all (table1, 6);
 	gtk_grid_set_row_spacing (GTK_GRID (table1), 12);
 	gtk_grid_set_column_spacing (GTK_GRID (table1), 12);
 
@@ -1448,9 +1447,9 @@ mg_open_quit_dialog (gboolean minimize_button)
 
 	/* Button row */
 	{
-		GtkWidget *button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+		GtkWidget *button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
 		gtk_widget_set_halign (button_box, GTK_ALIGN_END);
-		hc_widget_set_margin_all (button_box, 6);
+		gtk_widget_set_margin_top (button_box, 12);
 
 		if (minimize_button && gtkutil_tray_icon_supported (GTK_WINDOW(quit_dialog)))
 		{
@@ -5008,7 +5007,7 @@ mg_create_generic_tab (char *name, char *title, int force_toplevel,
 	{
 		win = gtkutil_window_new (title, name, width, height, 2);
 		vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-		hc_widget_set_margin_all (vbox, 4);
+		hc_widget_set_margin_all (vbox, 12);
 		*vbox_ret = vbox;
 		gtk_window_set_child (GTK_WINDOW (win), vbox);
 		if (close_callback)
@@ -5020,7 +5019,7 @@ mg_create_generic_tab (char *name, char *title, int force_toplevel,
 	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
 	g_object_set_data (G_OBJECT (vbox), "w", GINT_TO_POINTER (width));
 	g_object_set_data (G_OBJECT (vbox), "h", GINT_TO_POINTER (height));
-	hc_widget_set_margin_all (vbox, 4);
+	hc_widget_set_margin_all (vbox, 12);
 	*vbox_ret = vbox;
 
 	if (close_callback)

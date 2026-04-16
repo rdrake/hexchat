@@ -447,6 +447,9 @@ editlist_columnview_new (GtkWidget *box, char *title1, char *title2, GListStore 
 	/* Add key controller for Shift+Up/Down row movement */
 	hc_add_key_controller (view, G_CALLBACK (editlist_keypress), NULL, NULL);
 
+	if (!title1 && !title2)
+		hc_column_view_hide_headers (GTK_COLUMN_VIEW (view));
+
 	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), view);
 	gtk_widget_set_vexpand (scroll, TRUE);
 	gtk_box_append (GTK_BOX (box), scroll);
@@ -482,15 +485,21 @@ editlist_gui_open (char *title1, char *title2, GSList *list, char *title, char *
 	if (help)
 		gtk_widget_set_tooltip_text (view, help);
 
-	box = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout_impl (GTK_WIDGET (box), HC_BUTTONBOX_SPREAD);
-	gtk_widget_set_margin_top (box, 6);
+	box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+	gtk_widget_set_margin_top (box, 12);
 	gtk_box_append (GTK_BOX (vbox), box);
 
 	gtkutil_button (box, "document-new", 0, editlist_add,
 					NULL, _("Add"));
 	gtkutil_button (box, "edit-delete", 0, editlist_delete,
 					NULL, _("Delete"));
+
+	{
+		GtkWidget *spacer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+		gtk_widget_set_hexpand (spacer, TRUE);
+		gtk_box_append (GTK_BOX (box), spacer);
+	}
+
 	gtkutil_button (box, "process-stop", 0, editlist_close,
 					NULL, _("Cancel"));
 	gtkutil_button (box, "document-save", 0, editlist_save,

@@ -1078,15 +1078,21 @@ key_dialog_show ()
 	g_object_set_data (G_OBJECT (key_dialog), "view", view);
 	g_object_set_data (G_OBJECT (key_dialog), "xtext", xtext);
 
-	box = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout_impl (GTK_WIDGET (box), HC_BUTTONBOX_SPREAD);
-	gtk_widget_set_margin_top (box, 6);
+	box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+	gtk_widget_set_margin_top (box, 12);
 	gtk_box_append (GTK_BOX (vbox), box);
 
 	gtkutil_button (box, "document-new", NULL, key_dialog_add,
 					NULL, _("Add"));
 	gtkutil_button (box, "edit-delete", NULL, key_dialog_delete,
 					NULL, _("Delete"));
+
+	{
+		GtkWidget *spacer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+		gtk_widget_set_hexpand (spacer, TRUE);
+		gtk_box_append (GTK_BOX (box), spacer);
+	}
+
 	gtkutil_button (box, "process-stop", NULL, key_dialog_close,
 					NULL, _("Cancel"));
 	gtkutil_button (box, "document-save", NULL, key_dialog_save,

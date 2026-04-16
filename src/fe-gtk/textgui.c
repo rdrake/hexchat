@@ -934,9 +934,8 @@ pevent_dialog_show ()
 	gtk_paned_set_shrink_end_child (GTK_PANED (pane), FALSE);
 	gtk_xtext_set_font (GTK_XTEXT (pevent_dialog_twid), prefs.hex_text_font);
 
-	hbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout_impl (hbox, HC_BUTTONBOX_SPREAD);
-	gtk_widget_set_margin_top (hbox, 6);
+	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+	gtk_widget_set_margin_top (hbox, 12);
 	gtk_box_append (GTK_BOX (vbox), hbox);
 	gtkutil_button (hbox, "document-save-as", NULL, pevent_save_cb,
 						 (void *) 1, _("Save As..."));
@@ -944,6 +943,13 @@ pevent_dialog_show ()
 						 NULL, _("Load From..."));
 	gtkutil_button (hbox, NULL, NULL, pevent_test_cb,
 						pevent_dialog_twid, _("Test All"));
+
+	{
+		GtkWidget *spacer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+		gtk_widget_set_hexpand (spacer, TRUE);
+		gtk_box_append (GTK_BOX (hbox), spacer);
+	}
+
 	gtkutil_button (hbox, "emblem-ok", NULL, pevent_ok_cb,
 						NULL, _("OK"));
 

@@ -95,7 +95,7 @@ hc_box_pack_end_impl (GtkBox *box, GtkWidget *child, gboolean expand)
 static inline GtkWidget *
 hc_button_box_new_impl (GtkOrientation orientation)
 {
-	GtkWidget *box = gtk_box_new (orientation, 6);
+	GtkWidget *box = gtk_box_new (orientation, 12);
 	if (orientation == GTK_ORIENTATION_HORIZONTAL)
 		gtk_widget_set_halign (box, GTK_ALIGN_END);
 	else

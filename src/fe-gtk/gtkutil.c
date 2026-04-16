@@ -410,7 +410,7 @@ fe_get_str (char *msg, char *def, void *callback, void *userdata)
 	gtk_box_append (GTK_BOX (vbox), hbox);
 
 	/* Button row */
-	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
 	gtk_widget_set_halign (button_box, GTK_ALIGN_END);
 
 	button = gtk_button_new_with_mnemonic (_("_Cancel"));
@@ -506,7 +506,7 @@ fe_get_int (char *msg, int def, void *callback, void *userdata)
 	gtk_box_append (GTK_BOX (vbox), hbox);
 
 	/* Button row */
-	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
 	gtk_widget_set_halign (button_box, GTK_ALIGN_END);
 
 	button = gtk_button_new_with_mnemonic (_("_Cancel"));

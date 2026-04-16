@@ -105,23 +105,18 @@ static void
 joind_show_dialog (server *serv)
 {
 	GtkWidget *dialog1;
-	GtkWidget *dialog_vbox1;
-	GtkWidget *vbox1;
-	GtkWidget *hbox1;
-	GtkWidget *image1;
-	GtkWidget *vbox2;
+	GtkWidget *vbox;
 	GtkWidget *label;
 	GtkWidget *radiobutton1;
 	GtkWidget *radiobutton2;
 	GtkWidget *radiobutton3;
-	GtkWidget *hbox2;
+	GtkWidget *hbox;
 	GtkWidget *entry1;
 	GtkWidget *checkbutton1;
 	GtkWidget *okbutton1;
 	char buf[256];
 	char buf2[256];
 
-	/* GTK4: GtkDialog is deprecated, use GtkWindow with manual layout */
 	if (fe_get_application ())
 		dialog1 = GTK_WIDGET (gtk_application_window_new (fe_get_application ()));
 	else
@@ -133,96 +128,74 @@ joind_show_dialog (server *serv)
 	gtk_window_set_modal (GTK_WINDOW (dialog1), TRUE);
 	gtk_window_set_resizable (GTK_WINDOW (dialog1), FALSE);
 
-	/* Create content area manually */
-	dialog_vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-	gtk_window_set_child (GTK_WINDOW (dialog1), dialog_vbox1);
-
-	vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-	gtk_widget_set_vexpand (vbox1, TRUE);
-	gtk_box_append (GTK_BOX (dialog_vbox1), vbox1);
-
-	hbox1 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-	gtk_widget_set_vexpand (hbox1, TRUE);
-	gtk_box_append (GTK_BOX (vbox1), hbox1);
-
-	image1 = hc_image_new_from_icon_name ("network-workgroup", GTK_ICON_SIZE_LARGE_TOOLBAR);
-	gtk_box_append (GTK_BOX (hbox1), image1);
-	gtk_widget_set_halign (image1, GTK_ALIGN_CENTER);
-	gtk_widget_set_valign (image1, GTK_ALIGN_START);
-
-	vbox2 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 10);
-	hc_widget_set_margin_all (vbox2, 6);
-	gtk_widget_set_hexpand (vbox2, TRUE);
-	gtk_box_append (GTK_BOX (hbox1), vbox2);
+	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+	hc_widget_set_margin_all (vbox, 12);
+	gtk_window_set_child (GTK_WINDOW (dialog1), vbox);
 
 	g_snprintf (buf2, sizeof (buf2), _("Connection to %s complete."),
 				 server_get_network (serv, TRUE));
-	g_snprintf (buf, sizeof (buf), "\n<b>%s</b>", buf2);
+	g_snprintf (buf, sizeof (buf), "<b>%s</b>", buf2);
 	label = gtk_label_new (buf);
-	gtk_box_append (GTK_BOX (vbox2), label);
+	gtk_box_append (GTK_BOX (vbox), label);
 	gtk_label_set_use_markup (GTK_LABEL (label), TRUE);
 	gtk_widget_set_halign (label, GTK_ALIGN_START);
-	gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
 
 	label = gtk_label_new (_("In the server list window, no channel (chat room) has been entered to be automatically joined for this network."));
-	gtk_box_append (GTK_BOX (vbox2), label);
+	gtk_box_append (GTK_BOX (vbox), label);
 	gtk_label_set_wrap (GTK_LABEL (label), TRUE);
 	gtk_widget_set_halign (label, GTK_ALIGN_START);
-	gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
 
 	label = gtk_label_new (_("What would you like to do next?"));
-	gtk_box_append (GTK_BOX (vbox2), label);
+	gtk_box_append (GTK_BOX (vbox), label);
 	gtk_widget_set_halign (label, GTK_ALIGN_START);
-	gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
+	gtk_widget_set_margin_top (label, 4);
 
 	serv->gui->joind_radio1 = radiobutton1 = gtk_check_button_new_with_mnemonic (_("_Nothing, I'll join a channel later."));
-	gtk_box_append (GTK_BOX (vbox2), radiobutton1);
+	gtk_box_append (GTK_BOX (vbox), radiobutton1);
 
-	hbox2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-	gtk_box_append (GTK_BOX (vbox2), hbox2);
+	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	gtk_box_append (GTK_BOX (vbox), hbox);
 
 	serv->gui->joind_radio2 = radiobutton2 = gtk_check_button_new_with_mnemonic (_("_Join this channel:"));
-	gtk_box_append (GTK_BOX (hbox2), radiobutton2);
+	gtk_box_append (GTK_BOX (hbox), radiobutton2);
 	gtk_check_button_set_group (GTK_CHECK_BUTTON (radiobutton2), GTK_CHECK_BUTTON (radiobutton1));
 
 	serv->gui->joind_entry = entry1 = gtk_entry_new ();
 	hc_entry_set_text (entry1, "#");
 	gtk_widget_set_hexpand (entry1, TRUE);
-	gtk_box_append (GTK_BOX (hbox2), entry1);
+	gtk_box_append (GTK_BOX (hbox), entry1);
 
-	g_snprintf (buf, sizeof (buf), "<small>     %s</small>",
+	label = gtk_label_new (NULL);
+	g_snprintf (buf, sizeof (buf), "<small>%s</small>",
 				 _("If you know the name of the channel you want to join, enter it here."));
-	label = gtk_label_new (buf);
-	gtk_box_append (GTK_BOX (vbox2), label);
-	gtk_label_set_use_markup (GTK_LABEL (label), TRUE);
+	gtk_label_set_markup (GTK_LABEL (label), buf);
 	gtk_widget_set_halign (label, GTK_ALIGN_START);
-	gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
+	gtk_widget_set_margin_start (label, 32);
+	gtk_box_append (GTK_BOX (vbox), label);
 
 	radiobutton3 = gtk_check_button_new_with_mnemonic (_("O_pen the channel list."));
-	gtk_box_append (GTK_BOX (vbox2), radiobutton3);
+	gtk_box_append (GTK_BOX (vbox), radiobutton3);
 	gtk_check_button_set_group (GTK_CHECK_BUTTON (radiobutton3), GTK_CHECK_BUTTON (radiobutton1));
 
-	g_snprintf (buf, sizeof (buf), "<small>     %s</small>",
+	label = gtk_label_new (NULL);
+	g_snprintf (buf, sizeof (buf), "<small>%s</small>",
 				 _("Retrieving the channel list may take a minute or two."));
-	label = gtk_label_new (buf);
-	gtk_box_append (GTK_BOX (vbox2), label);
-	gtk_label_set_use_markup (GTK_LABEL (label), TRUE);
+	gtk_label_set_markup (GTK_LABEL (label), buf);
 	gtk_widget_set_halign (label, GTK_ALIGN_START);
-	gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
+	gtk_widget_set_margin_start (label, 32);
+	gtk_box_append (GTK_BOX (vbox), label);
 
 	serv->gui->joind_check = checkbutton1 = gtk_check_button_new_with_mnemonic (_("_Always show this dialog after connecting."));
 	if (prefs.hex_gui_join_dialog)
 		gtk_check_button_set_active (GTK_CHECK_BUTTON (checkbutton1), TRUE);
-	gtk_box_append (GTK_BOX (vbox1), checkbutton1);
+	gtk_widget_set_margin_top (checkbutton1, 8);
+	gtk_box_append (GTK_BOX (vbox), checkbutton1);
 
-	/* GTK4: Create OK button manually since we're using GtkWindow */
 	{
-		GtkWidget *button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+		GtkWidget *button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
 		gtk_widget_set_halign (button_box, GTK_ALIGN_END);
 		gtk_widget_set_margin_top (button_box, 12);
-		gtk_widget_set_margin_bottom (button_box, 12);
-		gtk_widget_set_margin_end (button_box, 12);
-		gtk_box_append (GTK_BOX (dialog_vbox1), button_box);
+		gtk_box_append (GTK_BOX (vbox), button_box);
 
 		okbutton1 = gtk_button_new_with_mnemonic (_("_OK"));
 		gtk_box_append (GTK_BOX (button_box), okbutton1);

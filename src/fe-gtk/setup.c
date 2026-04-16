@@ -2238,8 +2238,10 @@ setup_create_tree (GtkWidget *box, GtkWidget *book)
 	g_signal_connect (sel_model, "selection-changed",
 	                  G_CALLBACK (setup_tree_sel_cb), book);
 
-	frame = gtk_frame_new (NULL);
-	gtk_frame_set_child (GTK_FRAME (frame), view);
+	frame = gtk_scrolled_window_new ();
+	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (frame),
+	                                GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (frame), view);
 	gtk_widget_set_vexpand (frame, TRUE);
 	gtk_box_append (GTK_BOX (box), frame);
 	hc_box_reorder_child (GTK_BOX (box), frame, 0);
@@ -2508,7 +2510,7 @@ setup_window_open (void)
 	win = gtkutil_window_new (buf, "prefs", 0, 600, 2);
 
 	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 5);
-	hc_widget_set_margin_all (vbox, 6);
+	hc_widget_set_margin_all (vbox, 12);
 	gtk_window_set_child (GTK_WINDOW (win), vbox);
 
 	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
@@ -2520,8 +2522,7 @@ setup_window_open (void)
 
 	/* prepare the button box */
 	hbbox = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
-	hc_button_box_set_layout_impl (hbbox, HC_BUTTONBOX_END);
-	gtk_box_set_spacing (GTK_BOX (hbbox), 4);
+	gtk_widget_set_margin_top (hbbox, 12);
 	gtk_box_append (GTK_BOX (vbox), hbbox);
 
 	cancel_button = wid = gtk_button_new_with_mnemonic (_("_Cancel"));

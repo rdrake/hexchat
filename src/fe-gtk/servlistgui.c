@@ -2062,15 +2062,13 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	gtk_window_set_modal (GTK_WINDOW (editwindow), TRUE);
 
 	vbox5 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-	hc_widget_set_margin_all (vbox5, 4);
+	hc_widget_set_margin_all (vbox5, 12);
 	gtk_window_set_child (GTK_WINDOW (editwindow), vbox5);
 
 
 	/* Tabs and buttons */
 	hbox1 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_widget_set_vexpand (hbox1, TRUE);
-	gtk_widget_set_margin_top (hbox1, 4);
-	gtk_widget_set_margin_bottom (hbox1, 4);
 	gtk_box_append (GTK_BOX (vbox5), hbox1);
 
 	scrolledwindow2 = gtk_scrolled_window_new ();
@@ -2319,13 +2317,12 @@ gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolledwindow5), treeview_c
 
 	/* Rule and Close button */
 	hseparator2 = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-	gtk_widget_set_margin_top (hseparator2, 8);
-	gtk_widget_set_margin_bottom (hseparator2, 8);
+	gtk_widget_set_margin_top (hseparator2, 12);
+	gtk_widget_set_margin_bottom (hseparator2, 12);
 	gtk_box_append (GTK_BOX (vbox5), hseparator2);
 
 	hbuttonbox4 = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
 	gtk_box_append (GTK_BOX (vbox5), hbuttonbox4);
-	hc_button_box_set_layout_impl (hbuttonbox4, HC_BUTTONBOX_END);
 
 	button10 = gtk_button_new_with_mnemonic (_("_Close"));
 	g_signal_connect (G_OBJECT (button10), "clicked",
@@ -2407,7 +2404,7 @@ servlist_open_networks (void)
 	}
 
 	vbox1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-	hc_widget_set_margin_all (vbox1, 4);
+	hc_widget_set_margin_all (vbox1, 12);
 	gtk_window_set_child (GTK_WINDOW (servlist), vbox1);
 
 	label2 = bold_label (_("User Information"));
@@ -2415,7 +2412,6 @@ servlist_open_networks (void)
 
 	table1 = gtk_grid_new ();
 	gtk_box_append (GTK_BOX (vbox1), table1);
-	hc_widget_set_margin_all (table1, 8);
 	gtk_grid_set_row_spacing (GTK_GRID (table1), 2);
 	gtk_grid_set_column_spacing (GTK_GRID (table1), 4);
 
@@ -2554,15 +2550,12 @@ servlist_open_networks (void)
 	gtk_box_append (GTK_BOX (vbuttonbox2), button_sort);
 
 	hseparator1 = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-	gtk_widget_set_margin_top (hseparator1, 4);
-	gtk_widget_set_margin_bottom (hseparator1, 4);
+	gtk_widget_set_margin_top (hseparator1, 12);
+	gtk_widget_set_margin_bottom (hseparator1, 12);
 	gtk_box_append (GTK_BOX (vbox1), hseparator1);
 
-	hbuttonbox1 = hc_button_box_new_impl (GTK_ORIENTATION_HORIZONTAL);
+	hbuttonbox1 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
 	gtk_box_append (GTK_BOX (vbox1), hbuttonbox1);
-	hc_widget_set_margin_all (hbuttonbox1, 8);
-	/* GTK4: Use FILL alignment with spacer to get Close on left, Connect on right */
-	gtk_widget_set_halign (hbuttonbox1, GTK_ALIGN_FILL);
 
 	button_close = gtk_button_new_with_mnemonic (_("_Close"));
 	g_signal_connect (G_OBJECT (button_close), "clicked",

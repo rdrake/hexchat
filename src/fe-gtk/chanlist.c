@@ -1130,10 +1130,13 @@ chanlist_opengui (server *serv, int do_refresh)
 	serv->gui->chanlist_window =
 		mg_create_generic_tab ("ChanList", tbuf, FALSE, TRUE, chanlist_closegui,
 								serv, 640, 480, &vbox, serv);
+	gtk_widget_set_margin_top (vbox, 8);
+	gtk_widget_set_margin_bottom (vbox, 4);
 	gtkutil_destroy_on_esc (serv->gui->chanlist_window);
 
 	/* make a label to store the user/channel info */
 	wid = gtk_label_new (NULL);
+	gtk_widget_set_margin_bottom (wid, 4);
 	gtk_box_append (GTK_BOX (vbox), wid);
 	serv->gui->chanlist_label = wid;
 
@@ -1163,28 +1166,32 @@ chanlist_opengui (server *serv, int do_refresh)
 
 	table = gtk_grid_new ();
 	gtk_grid_set_column_spacing (GTK_GRID (table), 12);
-	gtk_grid_set_row_spacing (GTK_GRID (table), 3);
-	gtk_widget_set_margin_top (table, 6);
+	gtk_grid_set_row_spacing (GTK_GRID (table), 8);
+	gtk_widget_set_margin_top (table, 12);
 	gtk_box_append (GTK_BOX (vbox), table);
 
 	wid = gtkutil_button (NULL, "edit-find", 0, chanlist_search_pressed, serv,
 								 _("_Search"));
 	serv->gui->chanlist_search = wid;
+	gtk_widget_set_valign (wid, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table), wid, 3, 3, 1, 1);
 
 	wid = gtkutil_button (NULL, "view-refresh", 0, chanlist_refresh, serv,
 								 _("_Download List"));
 	serv->gui->chanlist_refresh = wid;
+	gtk_widget_set_valign (wid, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table), wid, 3, 2, 1, 1);
 
 	wid = gtkutil_button (NULL, "document-save-as", 0, chanlist_save, serv,
 								 _("Save _List..."));
 	serv->gui->chanlist_savelist = wid;
+	gtk_widget_set_valign (wid, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table), wid, 3, 1, 1, 1);
 
 	wid = gtkutil_button (NULL, "go-jump", 0, chanlist_join, serv,
 						 _("_Join Channel"));
 	serv->gui->chanlist_join = wid;
+	gtk_widget_set_valign (wid, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table), wid, 3, 0, 1, 1);
 
 	/* ============================================================= */
@@ -1194,8 +1201,8 @@ chanlist_opengui (server *serv, int do_refresh)
 	gtk_widget_set_valign (wid, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table), wid, 0, 3, 1, 1);
 
-	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-	gtk_box_set_spacing (GTK_BOX (hbox), 9);
+	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+	gtk_widget_set_valign (hbox, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table), hbox, 1, 3, 1, 1);
 
 	wid = gtk_label_new (_("channels with"));
@@ -1229,8 +1236,8 @@ chanlist_opengui (server *serv, int do_refresh)
 	gtk_widget_set_valign (wid, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table), wid, 0, 2, 1, 1);
 
-	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-	gtk_box_set_spacing (GTK_BOX (hbox), 12);
+	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+	gtk_widget_set_valign (hbox, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table), hbox, 1, 2, 1, 1);
 
 	wid = gtk_check_button_new_with_label (_("Channel name"));
@@ -1261,6 +1268,8 @@ chanlist_opengui (server *serv, int do_refresh)
 			(const char *[]){ _("Simple Search"), _("Pattern Match (Wildcards)"),
 			                   _("Regular Expression"), NULL });
 		wid = gtk_drop_down_new (G_LIST_MODEL (model), NULL);
+		gtk_widget_set_hexpand (wid, TRUE);
+		gtk_widget_set_valign (wid, GTK_ALIGN_CENTER);
 		gtk_drop_down_set_selected (GTK_DROP_DOWN (wid), serv->gui->chanlist_search_type);
 		gtk_grid_attach (GTK_GRID (table), wid, 1, 1, 1, 1);
 		g_signal_connect (wid, "notify::selected",
@@ -1282,6 +1291,7 @@ chanlist_opengui (server *serv, int do_refresh)
 							  G_CALLBACK (chanlist_search_pressed),
 							  (gpointer) serv);
 	gtk_widget_set_hexpand (wid, TRUE);
+	gtk_widget_set_valign (wid, GTK_ALIGN_CENTER);
 	gtk_grid_attach (GTK_GRID (table), wid, 1, 0, 1, 1);
 	serv->gui->chanlist_wild = wid;
 
@@ -1290,7 +1300,6 @@ chanlist_opengui (server *serv, int do_refresh)
 	/* ============================================================= */
 
 	wid = gtk_separator_new (GTK_ORIENTATION_VERTICAL);
-	gtk_widget_set_vexpand (wid, TRUE);
 	gtk_grid_attach (GTK_GRID (table), wid, 2, 0, 1, 5);
 
 	g_signal_connect (G_OBJECT (serv->gui->chanlist_window), "destroy",
