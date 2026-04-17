@@ -41,7 +41,11 @@
 #include "../common/outbound.h"
 #include "../common/util.h"
 #include "../common/fe.h"
+#include "apple-callback-log.h"
 #include "apple-runtime.h"
+
+#define HC_APPLE_LOG_NOOP(name) \
+	do { hc_apple_callback_log ((name), HC_APPLE_CALLBACK_SAFE_NOOP); } while (0)
 
 
 static int done = FALSE;		  /* finished ? */
@@ -79,6 +83,7 @@ void
 fe_new_window (struct session *sess, int focus)
 {
 	char buf[512];
+	hc_apple_callback_log ("fe_new_window", HC_APPLE_CALLBACK_REQUIRED);
 
 	current_sess = sess;
 
@@ -562,6 +567,7 @@ void
 fe_main (void)
 {
 	GIOChannel *keyboard_input;
+	hc_apple_callback_log ("fe_main", HC_APPLE_CALLBACK_REQUIRED);
 
 	main_loop = g_main_loop_new(NULL, FALSE);
 
@@ -582,6 +588,7 @@ fe_main (void)
 void
 fe_exit (void)
 {
+	hc_apple_callback_log ("fe_exit", HC_APPLE_CALLBACK_REQUIRED);
 	done = TRUE;
 	g_main_loop_quit(main_loop);
 }
@@ -589,12 +596,16 @@ fe_exit (void)
 void
 fe_new_server (struct server *serv)
 {
+	HC_APPLE_LOG_NOOP ("fe_new_server");
 }
 
 void
 fe_message (char *msg, int flags)
 {
-	puts (msg);
+	(void)flags;
+	hc_apple_callback_log ("fe_message", HC_APPLE_CALLBACK_REQUIRED);
+	if (msg)
+		puts (msg);
 }
 
 void
@@ -613,6 +624,7 @@ fe_beep (session *sess)
 void
 fe_typing_update (session *sess)
 {
+	HC_APPLE_LOG_NOOP ("fe_typing_update");
 }
 
 time_t
@@ -625,31 +637,40 @@ void
 fe_status_update (session *sess, const char *key, const char *text,
                   int priority, int timeout_ms)
 {
+	HC_APPLE_LOG_NOOP ("fe_status_update");
 }
 
 void
 fe_toast_show (session *sess, const char *text, int linger_ms, int type,
                unsigned int flags)
 {
+	HC_APPLE_LOG_NOOP ("fe_toast_show");
 }
 
 void
 fe_set_marker_from_timestamp (session *sess, time_t timestamp)
 {
+	HC_APPLE_LOG_NOOP ("fe_set_marker_from_timestamp");
 }
 
 void
 fe_clear_server_read_marker (session *sess)
 {
+	HC_APPLE_LOG_NOOP ("fe_clear_server_read_marker");
 }
 
 void
 fe_add_rawlog (struct server *serv, char *text, int len, int outbound)
 {
+	HC_APPLE_LOG_NOOP ("fe_add_rawlog");
 }
 void
 fe_set_topic (struct session *sess, char *topic, char *stripped_topic)
 {
+	(void)sess;
+	(void)topic;
+	(void)stripped_topic;
+	hc_apple_callback_log ("fe_set_topic", HC_APPLE_CALLBACK_V1_UI);
 }
 void
 fe_cleanup (void)
@@ -658,18 +679,22 @@ fe_cleanup (void)
 void
 fe_set_tab_color (struct session *sess, tabcolor col)
 {
+	HC_APPLE_LOG_NOOP ("fe_set_tab_color");
 }
 void
 fe_update_mode_buttons (struct session *sess, char mode, char sign)
 {
+	HC_APPLE_LOG_NOOP ("fe_update_mode_buttons");
 }
 void
 fe_update_channel_key (struct session *sess)
 {
+	HC_APPLE_LOG_NOOP ("fe_update_channel_key");
 }
 void
 fe_update_channel_limit (struct session *sess)
 {
+	HC_APPLE_LOG_NOOP ("fe_update_channel_limit");
 }
 int
 fe_is_chanwindow (struct server *serv)
@@ -680,10 +705,12 @@ fe_is_chanwindow (struct server *serv)
 void
 fe_add_chan_list (struct server *serv, char *chan, char *users, char *topic)
 {
+	HC_APPLE_LOG_NOOP ("fe_add_chan_list");
 }
 void
 fe_chan_list_end (struct server *serv)
 {
+	HC_APPLE_LOG_NOOP ("fe_chan_list_end");
 }
 gboolean
 fe_add_ban_list (struct session *sess, char *mask, char *who, char *when, int rplcode)
@@ -698,26 +725,35 @@ fe_ban_list_end (struct session *sess, int rplcode)
 void
 fe_notify_update (char *name)
 {
+	(void)name;
+	HC_APPLE_LOG_NOOP ("fe_notify_update");
 }
 void
 fe_notify_ask (char *name, char *networks)
 {
+	(void)name;
+	(void)networks;
+	HC_APPLE_LOG_NOOP ("fe_notify_ask");
 }
 void
 fe_text_clear (struct session *sess, int lines)
 {
+	HC_APPLE_LOG_NOOP ("fe_text_clear");
 }
 void
 fe_progressbar_start (struct session *sess)
 {
+	HC_APPLE_LOG_NOOP ("fe_progressbar_start");
 }
 void
 fe_progressbar_end (struct server *serv)
 {
+	HC_APPLE_LOG_NOOP ("fe_progressbar_end");
 }
 void
 fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel)
 {
+	HC_APPLE_LOG_NOOP ("fe_userlist_insert");
 }
 int
 fe_userlist_remove (struct session *sess, struct User *user)
@@ -727,50 +763,62 @@ fe_userlist_remove (struct session *sess, struct User *user)
 void
 fe_userlist_rehash (struct session *sess, struct User *user)
 {
+	HC_APPLE_LOG_NOOP ("fe_userlist_rehash");
 }
 void
 fe_userlist_numbers (struct session *sess)
 {
+	HC_APPLE_LOG_NOOP ("fe_userlist_numbers");
 }
 void
 fe_userlist_clear (struct session *sess)
 {
+	HC_APPLE_LOG_NOOP ("fe_userlist_clear");
 }
 void
 fe_userlist_set_selected (struct session *sess)
 {
+	HC_APPLE_LOG_NOOP ("fe_userlist_set_selected");
 }
 void
 fe_dcc_add (struct DCC *dcc)
 {
+	HC_APPLE_LOG_NOOP ("fe_dcc_add");
 }
 void
 fe_dcc_update (struct DCC *dcc)
 {
+	HC_APPLE_LOG_NOOP ("fe_dcc_update");
 }
 void
 fe_dcc_remove (struct DCC *dcc)
 {
+	HC_APPLE_LOG_NOOP ("fe_dcc_remove");
 }
 void
 fe_clear_channel (struct session *sess)
 {
+	HC_APPLE_LOG_NOOP ("fe_clear_channel");
 }
 void
 fe_session_callback (struct session *sess)
 {
+	HC_APPLE_LOG_NOOP ("fe_session_callback");
 }
 void
 fe_server_callback (struct server *serv)
 {
+	HC_APPLE_LOG_NOOP ("fe_server_callback");
 }
 void
 fe_url_add (const char *text)
 {
+	HC_APPLE_LOG_NOOP ("fe_url_add");
 }
 void
 fe_pluginlist_update (void)
 {
+	HC_APPLE_LOG_NOOP ("fe_pluginlist_update");
 }
 void
 fe_buttons_update (struct session *sess)
