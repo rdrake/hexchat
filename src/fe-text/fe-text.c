@@ -844,6 +844,10 @@ fe_set_throttle (server * serv)
 {
 }
 void
+fe_set_batch_mode (struct session *sess, gboolean on)
+{
+}
+void
 fe_set_away (server *serv)
 {
 }
@@ -855,9 +859,10 @@ void
 fe_get_bool (char *title, char *prompt, void *callback, void *userdata)
 {
 }
-void
+void *
 fe_get_str (char *prompt, char *def, void *callback, void *ud)
 {
+	return NULL;
 }
 void
 fe_get_int (char *prompt, int def, void *callback, void *ud)
