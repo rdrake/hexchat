@@ -586,6 +586,11 @@ void
 fe_main (void)
 {
 	hc_apple_callback_log ("fe_main", HC_APPLE_CALLBACK_REQUIRED);
+	if (!hc_apple_runtime.lifecycle_ready_emitted)
+	{
+		hc_apple_runtime.lifecycle_ready_emitted = TRUE;
+		hc_apple_runtime_emit_lifecycle (HC_APPLE_LIFECYCLE_READY, "ready");
+	}
 	g_main_loop_run (hc_apple_runtime.loop);
 }
 

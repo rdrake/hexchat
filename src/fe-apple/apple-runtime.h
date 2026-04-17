@@ -16,6 +16,7 @@ typedef struct
 	void *callback_userdata;
 	gboolean ready;
 	gboolean running;
+	gboolean lifecycle_ready_emitted;
 	int no_auto;
 	int skip_plugins;
 } hc_apple_runtime_state;
@@ -23,3 +24,5 @@ typedef struct
 extern hc_apple_runtime_state hc_apple_runtime;
 
 void hc_apple_runtime_emit_log_line (const char *text);
+void hc_apple_runtime_emit_lifecycle (hc_apple_lifecycle_phase phase, const char *text);
+void hc_apple_runtime_emit_command (const char *text, int code);
