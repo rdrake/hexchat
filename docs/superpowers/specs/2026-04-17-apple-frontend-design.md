@@ -49,7 +49,7 @@ the SwiftUI app directly to the full legacy frontend surface.
 - `src/common` does not directly depend on GTK widgets in its core C sources,
   but it does depend on a large frontend callback surface declared in
   `src/common/fe.h`.
-- `src/common/fe.h` currently exposes 108 `fe_*` functions, spanning both
+- `src/common/fe.h` currently exposes over 100 `fe_*` functions, spanning both
   real application behavior and legacy desktop UI affordances.
 - Core structs such as `session` and `server` still contain opaque
   frontend-owned pointers such as `session_gui *` and `server_gui *`.
@@ -151,6 +151,29 @@ The adapter should keep raw `session *`, `server *`, and other engine internals
 private. Swift should receive opaque identifiers and value-like data snapshots,
 not direct pointers into engine memory.
 
+### Runtime and threading model
+
+The production adapter should own a dedicated engine thread with its own
+private `GMainContext` and `GMainLoop`.
+
+The threading invariant is:
+
+- all calls into `src/common` run on the engine thread
+- all engine timers, socket watches, and idle callbacks are attached to that
+  private GLib main context
+- all app-facing events and snapshots are copied into plain C data structures
+  before leaving the engine thread
+- all delivery into SwiftUI is marshaled back onto the main thread or main
+  actor
+
+This is the chosen design, not an implementation-time decision. It keeps the
+engine's single-threaded assumptions intact while keeping SwiftUI updates on the
+Apple UI thread.
+
+The early macOS smoke harness may temporarily run the same adapter logic in a
+single-threaded bring-up mode, but the adapter API and ownership model should
+be designed around the dedicated engine-thread architecture from the start.
+
 ### Layer 3: shared SwiftUI app
 
 This layer owns:
@@ -209,6 +232,31 @@ The event model should be designed so that SwiftUI can drive most rendering
 from adapter-owned observable state, not from dozens of one-off imperative
 callbacks.
 
+## Public C import surface
+
+The adapter's public C header must be POD-only.
+
+That means the Swift-imported surface should expose only:
+
+- primitive scalars
+- enums
+- fixed-layout structs
+- opaque integer or string identifiers
+- callback function pointers over POD payloads
+
+The public header must not expose:
+
+- `GSList`
+- `GHashTable`
+- `session *`
+- `server *`
+- GLib container ownership rules
+- frontend-private engine structs
+
+If a module map is needed for Xcode or SwiftPM integration, it should point at
+that narrow public header only. Any broader GLib-facing or engine-facing
+headers remain private to the adapter implementation.
+
 ## Feature scope
 
 ### v1 supported features
@@ -243,6 +291,38 @@ The first Apple milestone should explicitly stub, disable, or defer:
 
 The design assumes macOS is dock-based, not tray-based.
 
+## Config and filesystem strategy
+
+The Apple adapter should own config-path resolution explicitly rather than
+relying on the engine's default desktop paths.
+
+For Apple builds:
+
+- macOS should use an app-owned Application Support location
+- iOS should use the app container's writable data location
+- the adapter should supply the chosen config directory to the engine before
+  configuration load happens
+
+The current engine already has a `--cfgdir` bootstrap path, but the Apple
+integration should prefer a programmatic configuration-path hook or equivalent
+bootstrap helper so the app does not depend on command-line argument tricks.
+
+This is a targeted engine change that belongs in scope for the adapter work.
+
+## Plugin strategy
+
+Plugins remain a non-goal for the Apple frontend, but the current engine still
+routes through plugin code in multiple hot paths even when plugin loading is
+reduced.
+
+The initial Apple strategy should therefore be:
+
+- disable dynamic plugin loading and plugin UI affordances for Apple builds
+- tolerate the remaining built-in plugin dispatch sites as engine internals
+  during phase 1
+- only consider deeper plugin extraction or removal if those hot paths become a
+  proven bring-up problem
+
 ## Callback classification strategy
 
 The Apple bring-up should not begin by implementing every `fe_*` function
@@ -265,21 +345,27 @@ This is necessary because some callbacks that look cosmetic can still affect:
 The adapter must log real callback traffic during early bring-up so this
 classification is based on observed execution paths rather than guesswork.
 
+The logging mechanism should be cheap and uniform: a small helper or macro used
+by each frontend hook to record callback name, invocation count, classification,
+and any minimal identifying detail needed during bring-up.
+
 ## Execution strategy
 
 The recommended order of work is:
 
 1. Add a new Apple adapter target that links against `src/common`.
-2. Implement the minimum runtime hooks needed to start the engine and record
+2. Implement the chosen runtime ownership model: dedicated engine thread,
+   private `GMainContext`, and app-facing main-thread dispatch.
+3. Implement the minimum runtime hooks needed to start the engine and record
    every `fe_*` call.
-3. Drive a single happy path on macOS first: launch, connect, join, receive,
-   send.
 4. Classify hooks into required implementation, safe stub, or deferred work.
-5. Expose a smaller stable C API from the adapter.
-6. Build the shared SwiftUI shell against that smaller adapter API.
-7. Stabilize the basic chat flow on macOS.
-8. Bring the shared UI to iOS with foreground-only behavior first.
-9. Treat durable iOS background connectivity as a separate later project.
+5. Drive a single happy path on macOS first: launch, connect, join, receive,
+   send.
+6. Expose a smaller stable POD-only C API from the adapter.
+7. Build the shared SwiftUI shell against that smaller adapter API.
+8. Stabilize the basic chat flow on macOS.
+9. Bring the shared UI to iOS with foreground-only behavior first.
+10. Treat durable iOS background connectivity as a separate later project.
 
 This sequence is designed to prevent a long speculative refactor before a real
 working Apple client exists.
@@ -301,7 +387,8 @@ Platform-specific handling should remain outside the engine where possible:
 
 If Apple platform APIs later require Objective-C bridging for notifications,
 background tasks, or deep platform integration, that should be introduced only
-at the edge, not as the default adapter language.
+at the edge, not as the default adapter language. `UserNotifications` and
+`BGTaskScheduler` integration are acceptable examples of that edge.
 
 ## Testing and verification
 
