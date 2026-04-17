@@ -7,11 +7,12 @@
 
 ## Summary
 
-Deliver a proper runnable `HexChat.app` on macOS first, then extend that app
-bundle to carry the Python plugin runtime. The baseline app work should happen
-in a separate worktree based on the main repository branch that already owns
-the macOS GTK4 modernization work. The current `python-native-embed` worktree
-should stay focused on Python-specific runtime and packaging changes.
+Deliver a proper runnable macOS HexChat launch path first, then extend that
+into a proper `HexChat.app` bundle, and only then add the Python plugin
+runtime. The baseline app work should happen in a separate worktree based on
+the main repository branch that already owns the macOS GTK4 modernization
+work. The current `python-native-embed` worktree should stay focused on
+Python-specific runtime and packaging changes.
 
 This separates two concerns that have different failure modes:
 
@@ -20,7 +21,9 @@ This separates two concerns that have different failure modes:
 
 ## Goals
 
-- Produce a proper `HexChat.app` that launches on macOS outside the terminal.
+- Produce a macOS HexChat launch path that stays running outside the Codex
+  sandbox, first as the plain frontend binary and then as a proper
+  `HexChat.app`.
 - Keep generic macOS bundle fixes isolated from Python runtime work.
 - Reuse the existing `osx/` bundle machinery already present in the repo.
 - Make the Python worktree consume a known-good app bundle foundation instead
@@ -39,9 +42,17 @@ This separates two concerns that have different failure modes:
 - `./builddir/src/fe-gtk/hexchat` crashes immediately when launched inside the
   Codex sandbox because sandboxed macOS GUI execution yields an invalid GTK
   window frame before HexChat-specific logic matters.
-- The same binary runs outside the sandbox.
+- Outside the Codex sandbox, the same binary currently launches and then exits
+  immediately before any visible window remains on screen.
 - `/opt/homebrew/bin/gtk4-demo` shows the same sandbox-only failure, which
   isolates the immediate crash to sandboxed GTK/macOS execution.
+- Outside the Codex sandbox, HexChat currently emits GTK criticals during
+  application startup and exits cleanly rather than staying open.
+- The strongest current hypothesis for the non-sandbox exit is an application
+  lifecycle bug around `GtkApplication` usage. HexChat currently calls
+  `gtk_init()` manually before constructing `GtkApplication`, even though GTK
+  documentation says that when using `GtkApplication`, `gtk_init()` is normally
+  performed by the default `GApplication::startup` handler.
 - The repository already contains macOS bundling assets under `osx/`:
   `Info.plist.in`, `launcher.sh`, `hexchat.bundle`, `makebundle.sh`, and a
   Meson `bundle` target.
@@ -53,12 +64,14 @@ This separates two concerns that have different failure modes:
 
 Use a two-phase workflow with separate worktrees.
 
-### Phase 1: baseline app bundle
+### Phase 1: baseline macOS launch path and app bundle
 
 Create a dedicated worktree from the main repository branch
 `macos-gtk4-cleanup` and finish the proper macOS app bundle there. The target
 for this phase is:
 
+- `./builddir/src/fe-gtk/hexchat` stays running outside the Codex sandbox
+- the initial UI can be shown without the process immediately exiting
 - `meson compile -C builddir bundle` succeeds
 - `builddir/osx/HexChat.app` launches via Finder or `open`
 - the app can open its initial UI without requiring a terminal wrapper
@@ -116,27 +129,32 @@ history and lowest review friction.
 
 ### Build and bundle flow
 
-Phase 1 uses the existing path:
+Phase 1 uses the existing path, but only after stabilizing the raw binary
+launch:
 
 1. Meson builds the GTK frontend binary.
-2. The `bundle` custom target stages `meson install` output.
-3. `osx/makebundle.sh` runs `gtk-mac-bundler`, copies app resources, compiles
+2. The raw binary launch path is stabilized so the process stays alive outside
+   the Codex sandbox.
+3. The `bundle` custom target stages `meson install` output.
+4. `osx/makebundle.sh` runs `gtk-mac-bundler`, copies app resources, compiles
    schema caches, and codesigns the resulting app.
-4. `osx/launcher.sh` provides the runtime environment the bundled app needs.
-5. The result is `builddir/osx/HexChat.app`.
+5. `osx/launcher.sh` provides the runtime environment the bundled app needs.
+6. The result is `builddir/osx/HexChat.app`.
 
 ### Integration flow between phases
 
 1. Stabilize `HexChat.app` on `macos-gtk4-cleanup`.
-2. Verify the app launches outside the sandbox.
-3. Import those commits into `worktree-python-native-embed`.
-4. Extend bundle contents and launcher/runtime logic for Python.
-5. Re-run app bundle verification with Python enabled.
+2. First verify the raw frontend binary stays running outside the sandbox.
+3. Then verify the app bundle launches outside the sandbox.
+4. Import those commits into `worktree-python-native-embed`.
+5. Extend bundle contents and launcher/runtime logic for Python.
+6. Re-run app bundle verification with Python enabled.
 
 ## Error handling and debugging strategy
 
 Phase 1 debugging should focus on baseline app-launch failures only:
 
+- raw binary startup and lifecycle failures
 - bundle build failures
 - missing dylibs or resources
 - launcher environment mistakes
@@ -158,6 +176,9 @@ failure harder to reason about.
 ### Phase 1 verification
 
 - `meson compile -C builddir`
+- launch `./builddir/src/fe-gtk/hexchat` outside the sandbox
+- confirm the process does not immediately exit
+- confirm the main UI or server list appears
 - `meson compile -C builddir bundle`
 - launch `builddir/osx/HexChat.app` outside the sandbox
 - confirm the main UI or server list appears and the app stays running
