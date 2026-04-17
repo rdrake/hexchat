@@ -49,13 +49,19 @@ install_data('py/xchat/__init__.py',
 # Full install prefix path, resolved at build time, so the plugin can
 # hand it to PyConfig without guessing at runtime. The HEXCHAT_PYTHON_DIR
 # environment variable overrides this (useful for tests and for running
-# from a build tree without installing).
+# from a build tree without installing); HEXCHAT_PYTHON_SOURCEDIR is
+# the source-tree fallback used automatically when the install location
+# does not yet exist.
 python_pkgdir_install = join_paths(get_option('prefix'), python_pkgdir)
+python_pkgdir_source = join_paths(meson.current_source_dir(), 'py')
 
 python_plugin_module = shared_module('python', python3_sources,
   include_directories: python3_inc,
   dependencies: [libgio_dep, hexchat_plugin_dep, python_dep],
-  c_args: ['-DHEXCHAT_PYTHONDIR="' + python_pkgdir_install + '"'],
+  c_args: [
+    '-DHEXCHAT_PYTHONDIR="' + python_pkgdir_install + '"',
+    '-DHEXCHAT_PYTHON_SOURCEDIR="' + python_pkgdir_source + '"',
+  ],
   install: true,
   install_dir: plugindir,
   name_prefix: '',

@@ -24,6 +24,10 @@
 #define HEXCHAT_PYTHONDIR ""
 #endif
 
+#ifndef HEXCHAT_PYTHON_SOURCEDIR
+#define HEXCHAT_PYTHON_SOURCEDIR ""
+#endif
+
 static gboolean interp_running = FALSE;
 
 static PyStatus
@@ -55,14 +59,29 @@ configure (PyConfig *config)
 	return status;
 }
 
+static gboolean
+pkgdir_has_hexchat (const char *dir)
+{
+	char *init = g_build_filename (dir, "hexchat", "__init__.py", NULL);
+	gboolean ok = g_file_test (init, G_FILE_TEST_EXISTS);
+	g_free (init);
+	return ok;
+}
+
 static const char *
 python_pkgdir (void)
 {
 	const char *envp = g_getenv ("HEXCHAT_PYTHON_DIR");
 	if (envp != NULL && *envp != '\0')
 		return envp;
-	if (HEXCHAT_PYTHONDIR[0] != '\0')
+	if (HEXCHAT_PYTHONDIR[0] != '\0' && pkgdir_has_hexchat (HEXCHAT_PYTHONDIR))
 		return HEXCHAT_PYTHONDIR;
+	/* Fallback for running from the build tree without installing. */
+	if (HEXCHAT_PYTHON_SOURCEDIR[0] != '\0'
+	    && pkgdir_has_hexchat (HEXCHAT_PYTHON_SOURCEDIR))
+		return HEXCHAT_PYTHON_SOURCEDIR;
+	if (HEXCHAT_PYTHONDIR[0] != '\0')
+		return HEXCHAT_PYTHONDIR;  /* let caller report a useful error */
 	return NULL;
 }
 
