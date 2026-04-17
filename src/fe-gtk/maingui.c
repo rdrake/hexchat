@@ -1754,22 +1754,63 @@ tab_action_autoconnect (GSimpleAction *action, GVariant *parameter, gpointer use
 	}
 }
 
+typedef struct {
+	GtkWidget *popover;
+	GSimpleActionGroup *action_group;
+} TabMenuCleanupData;
+
+static void
+tab_menu_popover_weak_notify (gpointer data, GObject *where_the_object_was)
+{
+	TabMenuCleanupData *cleanup = data;
+	(void)where_the_object_was;
+	cleanup->popover = NULL;
+}
+
+static gboolean
+tab_menu_popover_cleanup_idle (gpointer user_data)
+{
+	TabMenuCleanupData *cleanup = user_data;
+
+	if (cleanup->action_group)
+		g_object_unref (cleanup->action_group);
+
+	/* Unparent the popover if still alive with a parent — without this,
+	 * stale popovers accumulate on the parent widget and eventually prevent
+	 * new ones from opening. The parent check guards against window-teardown
+	 * races where the hierarchy is already being dismantled. */
+	if (cleanup->popover != NULL)
+	{
+		g_object_weak_unref (G_OBJECT (cleanup->popover), tab_menu_popover_weak_notify, cleanup);
+		if (gtk_widget_get_parent (cleanup->popover))
+			gtk_widget_unparent (cleanup->popover);
+	}
+
+	g_free (cleanup);
+	return G_SOURCE_REMOVE;
+}
+
 static void
 tab_menu_popover_closed_cb (GtkPopover *popover, gpointer user_data)
 {
 	GSimpleActionGroup *action_group = G_SIMPLE_ACTION_GROUP (user_data);
+	TabMenuCleanupData *cleanup;
 	chanview *cv;
 
 	cv = g_object_get_data (G_OBJECT (popover), "chanview");
 	if (cv)
 		chanview_restore_focus_selection (cv);
 
-	if (action_group)
-		g_object_unref (action_group);
+	/* Defer action-group unref and popover unparent to an idle callback so
+	 * that action activations triggered by the menu item click have time to
+	 * run before the muxer/action group goes away. Synchronous cleanup here
+	 * kills action resolution mid-flight, making every menu item a no-op. */
+	cleanup = g_new0 (TabMenuCleanupData, 1);
+	cleanup->popover = GTK_WIDGET (popover);
+	cleanup->action_group = action_group;
 
-	/* Destroy the popover — without this, stale popovers accumulate on the
-	 * parent widget and eventually prevent new ones from opening */
-	gtk_widget_unparent (GTK_WIDGET (popover));
+	g_object_weak_ref (G_OBJECT (popover), tab_menu_popover_weak_notify, cleanup);
+	g_idle_add (tab_menu_popover_cleanup_idle, cleanup);
 }
 
 /* Helper to get the effective boolean state for per-channel settings */
@@ -5305,12 +5346,66 @@ mg_scrollbar_drop_cb (GtkDropTarget *target, const GValue *value,
 	return TRUE;
 }
 
+/* Build a scaled-down static snapshot of widget for use as a drag icon.
+ * Without an explicit icon, GTK4 falls back to rendering the drag payload
+ * (a G_TYPE_STRING) as text, which looks ugly and has been seen to leave
+ * stuck ghosts on Windows when the drag ends. An explicit paintable is
+ * owned by the drag operation and cleaned up with it. */
+static GdkPaintable *
+mg_drag_snapshot_icon (GtkWidget *widget, double scale)
+{
+	int w = gtk_widget_get_width (widget);
+	int h = gtk_widget_get_height (widget);
+	if (w <= 0 || h <= 0)
+		return NULL;
+
+	int sw = MAX (1, (int) (w * scale));
+	int sh = MAX (1, (int) (h * scale));
+
+	GdkPaintable *live = gtk_widget_paintable_new (widget);
+	if (!live)
+		return NULL;
+
+	/* Render the live paintable into a snapshot at the scaled target size,
+	 * then detach into a static paintable so nothing references the widget
+	 * once the drag is underway. */
+	GtkSnapshot *snap = gtk_snapshot_new ();
+	gdk_paintable_snapshot (live, GDK_SNAPSHOT (snap), sw, sh);
+	g_object_unref (live);
+
+	graphene_size_t size = GRAPHENE_SIZE_INIT ((float) sw, (float) sh);
+	return gtk_snapshot_free_to_paintable (snap, &size);
+}
+
+/* Set a scaled-down widget snapshot as the drag icon on source, with the
+ * hotspot placed at the user's click coordinates (scaled to match). */
+static void
+mg_drag_set_snapshot_icon (GtkDragSource *source, double x, double y, double scale)
+{
+	GtkWidget *widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (source));
+	GdkPaintable *icon;
+
+	if (!widget)
+		return;
+
+	icon = mg_drag_snapshot_icon (widget, scale);
+	if (!icon)
+		return;
+
+	gtk_drag_source_set_icon (source, icon,
+	                          (int) (x * scale), (int) (y * scale));
+	g_object_unref (icon);
+}
+
+#define MG_DRAG_ICON_SCALE 0.5
+
 /* Prepare callback for userlist drag source */
 static GdkContentProvider *
 mg_userlist_drag_prepare_cb (GtkDragSource *source, double x, double y, gpointer user_data)
 {
-	(void)source; (void)x; (void)y; (void)user_data;
+	(void)user_data;
 
+	mg_drag_set_snapshot_icon (source, x, y, MG_DRAG_ICON_SCALE);
 	return gdk_content_provider_new_typed (G_TYPE_STRING, DND_TARGET_USERLIST);
 }
 
@@ -5318,8 +5413,9 @@ mg_userlist_drag_prepare_cb (GtkDragSource *source, double x, double y, gpointer
 static GdkContentProvider *
 mg_chanview_drag_prepare_cb (GtkDragSource *source, double x, double y, gpointer user_data)
 {
-	(void)source; (void)x; (void)y; (void)user_data;
+	(void)user_data;
 
+	mg_drag_set_snapshot_icon (source, x, y, MG_DRAG_ICON_SCALE);
 	return gdk_content_provider_new_typed (G_TYPE_STRING, DND_TARGET_CHANVIEW);
 }
 

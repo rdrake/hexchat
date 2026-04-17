@@ -827,36 +827,51 @@ found:
 }
 
 /*
- * Left-click handler for userlist (released signal).
- * Handles double-click command execution.
+ * Left-click handler for userlist: return focus to the input box so the
+ * user can keep typing after clicking a nick.  Double-click activation is
+ * handled separately via the GtkColumnView "activate" signal — rolling
+ * our own n_press == 2 detection here was unreliable because the view's
+ * internal selection gesture and the layout-swap GtkDragSource on the
+ * same widget race for the event sequence.
  */
 static void
 userlist_left_click_cb (GtkGestureClick *gesture, int n_press, double x, double y, gpointer userdata)
 {
-	GtkWidget *widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (gesture));
-	GtkColumnView *view = GTK_COLUMN_VIEW (widget);
-	GdkModifierType state = gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (gesture));
+	(void)gesture; (void)n_press; (void)x; (void)y; (void)userdata;
+
+	if (current_sess && current_sess->gui)
+		gtk_widget_grab_focus (current_sess->gui->input_box);
+}
+
+/*
+ * Row activation (double-click or Enter) — runs the per-nick double-click
+ * command from hex_gui_ulist_doubleclick.  Using GtkColumnView's own
+ * "activate" signal avoids the gesture-racing issues that made a custom
+ * double-click detector unreliable.
+ */
+static void
+userlist_activate_cb (GtkColumnView *view, guint position, gpointer user_data)
+{
 	char **nicks;
 	int i;
+	(void)position; (void)user_data;
 
-	if (!(state & GDK_CONTROL_MASK) &&
-		n_press == 2 && prefs.hex_gui_ulist_doubleclick[0])
+	if (!prefs.hex_gui_ulist_doubleclick[0])
+		return;
+
+	nicks = userlist_selection_list_gtk4 (view, &i);
+	if (nicks)
 	{
-		nicks = userlist_selection_list_gtk4 (view, &i);
-		if (nicks)
+		nick_command_parse (current_sess, prefs.hex_gui_ulist_doubleclick, nicks[0],
+								  nicks[0]);
+		while (i)
 		{
-			nick_command_parse (current_sess, prefs.hex_gui_ulist_doubleclick, nicks[0],
-									  nicks[0]);
-			while (i)
-			{
-				i--;
-				g_free (nicks[i]);
-			}
-			g_free (nicks);
+			i--;
+			g_free (nicks[i]);
 		}
+		g_free (nicks);
 	}
 
-	/* Return focus to input box */
 	if (current_sess && current_sess->gui)
 		gtk_widget_grab_focus (current_sess->gui->input_box);
 }
@@ -1025,8 +1040,12 @@ userlist_create (GtkWidget *box)
 	/* Layout swapping drag source (drag userlist to reposition) */
 	mg_setup_userlist_drag_source (view);
 
+	/* Row activation (double-click or Enter) — view's own signal, immune to
+	 * gesture races with the drag source / internal selection handlers. */
+	g_signal_connect (view, "activate", G_CALLBACK (userlist_activate_cb), NULL);
+
 	/* Event controllers for click and key events */
-	/* Left-click gesture for double-click handling (use "released" for reliable detection) */
+	/* Left-click gesture: return focus to the input box after a single click */
 	{
 		GtkGesture *gesture = gtk_gesture_click_new ();
 		gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), 1); /* Left-click only */
