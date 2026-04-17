@@ -21,22 +21,40 @@ void hc_test_stubs_reset (void);
 void hc_test_set_info (const char *id, const char *value);
 
 /* Access registered hooks (in registration order). Tests invoke a
- * stored trampoline by calling hc_test_hook_fire(). */
-typedef int (*hc_test_hook_cmd_cb) (char *word[], char *word_eol[], void *userdata);
+ * stored trampoline through one of the hc_test_hook_fire_* helpers. */
+typedef enum
+{
+	HC_TEST_HOOK_COMMAND,
+	HC_TEST_HOOK_SERVER,
+	HC_TEST_HOOK_PRINT,
+	HC_TEST_HOOK_TIMER,
+} hc_test_hook_kind;
+
+typedef int (*hc_test_hook_word_pair_cb) (char *word[], char *word_eol[], void *userdata);
+typedef int (*hc_test_hook_word_cb) (char *word[], void *userdata);
+typedef int (*hc_test_hook_timer_cb) (void *userdata);
 
 typedef struct
 {
-	char *name;
+	hc_test_hook_kind kind;
+	char *name;       /* NULL for timer */
 	int pri;
-	hc_test_hook_cmd_cb callback;
+	int timeout_ms;   /* timer only */
+	void *callback;   /* cast based on kind */
 	void *userdata;
-	char *help;
+	char *help;       /* command only, may be NULL */
 	gboolean alive;
 } hc_test_hook_entry;
 
 guint hc_test_n_hooks (void);
 hc_test_hook_entry *hc_test_hook_at (guint index);
-int hc_test_hook_fire (guint index, char *word[], char *word_eol[]);
+
+/* Fire word-pair hooks (command, server). Returns HEXCHAT_EAT_*. */
+int hc_test_hook_fire_word_pair (guint index, char *word[], char *word_eol[]);
+/* Fire a print hook — HexChat only supplies word at this layer. */
+int hc_test_hook_fire_print (guint index, char *word[]);
+/* Fire a timer. Returns 1 to keep firing, 0 to unhook. */
+int hc_test_hook_fire_timer (guint index);
 
 /* Accessors over recorded hexchat_print / hexchat_printf calls. */
 guint hc_test_n_prints (void);

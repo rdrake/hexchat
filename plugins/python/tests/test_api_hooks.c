@@ -102,6 +102,8 @@ main (void)
 	    "hook registered under name 'foo'");
 	ok (entry != NULL && entry->pri == HEXCHAT_PRI_NORM,
 	    "default priority is PRI_NORM");
+	ok (entry != NULL && entry->kind == HC_TEST_HOOK_COMMAND,
+	    "hook registered as command kind");
 
 	/* Fire the hook. */
 	hc_test_stubs_reset ();
@@ -109,7 +111,7 @@ main (void)
 	char *word_eol[32];
 	const char *const tokens[] = {"foo", "bar", "baz", NULL};
 	prime_words (word, word_eol, tokens);
-	int eat = hc_test_hook_fire (0, word, word_eol);
+	int eat = hc_test_hook_fire_word_pair (0, word, word_eol);
 	ok (eat == HEXCHAT_EAT_ALL, "callback return value maps to EAT_ALL");
 	ok (hc_test_n_prints () == 3, "callback printed three lines");
 	ok (hc_test_print_at (0) != NULL
@@ -134,7 +136,7 @@ main (void)
 	hc_test_stubs_reset ();
 	const char *const none_toks[] = {"none", NULL};
 	prime_words (word, word_eol, none_toks);
-	eat = hc_test_hook_fire (1, word, word_eol);
+	eat = hc_test_hook_fire_word_pair (1, word, word_eol);
 	ok (eat == HEXCHAT_EAT_NONE, "None return maps to EAT_NONE");
 
 	/* unhook() removes the registration and is reported to the stub. */
@@ -171,6 +173,126 @@ main (void)
 	    "EAT_ALL equals 3");
 	g_free (err); err = NULL;
 	g_free (repr); repr = NULL;
+
+	/* hook_server: registers with correct kind. */
+	guint hooks_before = hc_test_n_hooks ();
+	st = hc_python_interp_exec (
+	    "import _hexchat\n"
+	    "_hexchat.hook_server('PRIVMSG', lambda w, we, ud: _hexchat.EAT_NONE)\n",
+	    NULL, &err);
+	ok (st == HC_PY_EXEC_OK_NO_VALUE, "hook_server registers");
+	g_free (err); err = NULL;
+	ok (hc_test_n_hooks () == hooks_before + 1, "server hook recorded");
+	{
+		hc_test_hook_entry *se = hc_test_hook_at (hooks_before);
+		ok (se != NULL && se->kind == HC_TEST_HOOK_SERVER,
+		    "server hook has SERVER kind");
+		ok (se != NULL && se->name != NULL
+		    && strcmp (se->name, "PRIVMSG") == 0,
+		    "server hook name is PRIVMSG");
+
+		hc_test_stubs_reset ();
+		const char *const srv_toks[] = {":nick!u@h", "PRIVMSG", "#chan", ":hi", NULL};
+		prime_words (word, word_eol, srv_toks);
+		int srv_eat = hc_test_hook_fire_word_pair (hooks_before,
+		                                            word, word_eol);
+		ok (srv_eat == HEXCHAT_EAT_NONE, "server trampoline returns EAT_NONE");
+	}
+
+	/* hook_print: word_eol is synthesized from word. */
+	hc_test_stubs_reset ();
+	hooks_before = hc_test_n_hooks ();
+	st = hc_python_interp_exec (
+	    "import _hexchat\n"
+	    "def pcb(word, word_eol, ud):\n"
+	    "    _hexchat.print('w=' + '|'.join(word))\n"
+	    "    _hexchat.print('we=' + '|'.join(word_eol))\n"
+	    "    return _hexchat.EAT_ALL\n"
+	    "_hexchat.hook_print('Channel Message', pcb)\n",
+	    NULL, &err);
+	ok (st == HC_PY_EXEC_OK_NO_VALUE, "hook_print registers");
+	g_free (err); err = NULL;
+	ok (hc_test_n_hooks () == hooks_before + 1, "print hook recorded");
+	{
+		hc_test_hook_entry *pe = hc_test_hook_at (hooks_before);
+		ok (pe != NULL && pe->kind == HC_TEST_HOOK_PRINT,
+		    "print hook has PRINT kind");
+
+		char *pword[32];
+		for (int i = 0; i < 32; i++)
+			pword[i] = (char *) "";
+		pword[1] = (char *) "alice";
+		pword[2] = (char *) "hello";
+		pword[3] = (char *) "there";
+		int p_eat = hc_test_hook_fire_print (hooks_before, pword);
+		ok (p_eat == HEXCHAT_EAT_ALL, "print trampoline returns EAT_ALL");
+		ok (hc_test_n_prints () == 2, "callback printed both lines");
+		ok (hc_test_print_at (0) != NULL
+		    && strcmp (hc_test_print_at (0), "w=alice|hello|there") == 0,
+		    "print hook word matches input");
+		ok (hc_test_print_at (1) != NULL
+		    && strcmp (hc_test_print_at (1),
+		               "we=alice hello there|hello there|there") == 0,
+		    "print hook word_eol is suffix join");
+	}
+
+	/* hook_timer: callback returning False stops the timer. */
+	hc_test_stubs_reset ();
+	hooks_before = hc_test_n_hooks ();
+	st = hc_python_interp_exec (
+	    "import _hexchat\n"
+	    "state = {'n': 0}\n"
+	    "def tcb(ud):\n"
+	    "    state['n'] += 1\n"
+	    "    _hexchat.print('tick ' + str(state['n']))\n"
+	    "    return state['n'] < 3\n"
+	    "_hexchat.hook_timer(500, tcb)\n",
+	    NULL, &err);
+	ok (st == HC_PY_EXEC_OK_NO_VALUE, "hook_timer registers");
+	g_free (err); err = NULL;
+	ok (hc_test_n_hooks () == hooks_before + 1, "timer hook recorded");
+	{
+		hc_test_hook_entry *te = hc_test_hook_at (hooks_before);
+		ok (te != NULL && te->kind == HC_TEST_HOOK_TIMER,
+		    "timer hook has TIMER kind");
+		ok (te != NULL && te->timeout_ms == 500,
+		    "timer timeout stored");
+
+		int keep1 = hc_test_hook_fire_timer (hooks_before);
+		int keep2 = hc_test_hook_fire_timer (hooks_before);
+		int keep3 = hc_test_hook_fire_timer (hooks_before);
+		ok (keep1 == 1 && keep2 == 1, "first two ticks keep firing");
+		ok (keep3 == 0, "third tick returns 0 (stop)");
+		/* Stub auto-unhooks on falsy return; a fourth call is a no-op. */
+		int keep4 = hc_test_hook_fire_timer (hooks_before);
+		ok (keep4 == 0, "timer stays stopped after falsy return");
+		ok (hc_test_n_prints () == 3, "exactly three timer prints");
+	}
+
+	/* hook_unload: only fires via fire_unload. */
+	hc_test_stubs_reset ();
+	hooks_before = hc_test_n_hooks ();
+	st = hc_python_interp_exec (
+	    "import _hexchat\n"
+	    "_hexchat.hook_unload(lambda ud: _hexchat.print('bye'))\n",
+	    NULL, &err);
+	ok (st == HC_PY_EXEC_OK_NO_VALUE, "hook_unload registers");
+	g_free (err); err = NULL;
+	/* Unload hooks aren't HexChat hooks — stubs don't see them. */
+	ok (hc_test_n_hooks () == hooks_before,
+	    "unload hook not visible to hexchat_hook_* stubs");
+	ok (hc_test_n_prints () == 0, "unload callback has not fired yet");
+
+	hc_python_hooks_fire_unload ();
+	ok (hc_test_n_prints () == 1, "fire_unload invokes the callback");
+	ok (hc_test_last_print () != NULL
+	    && strcmp (hc_test_last_print (), "bye") == 0,
+	    "unload callback printed 'bye'");
+
+	/* A second fire_unload is idempotent: the registration is released. */
+	hc_test_stubs_reset ();
+	hc_python_hooks_fire_unload ();
+	ok (hc_test_n_prints () == 0, "fire_unload is idempotent");
 
 	hc_python_interp_stop ();
 

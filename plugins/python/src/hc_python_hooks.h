@@ -37,6 +37,40 @@ PyObject *hc_python_hooks_register_command (const char *name,
                                              PyObject *userdata,
                                              const char *help);
 
+/* Registers a raw-IRC server hook. Same callback signature as
+ * hook_command: (word, word_eol, userdata) -> EAT_*. */
+PyObject *hc_python_hooks_register_server (const char *name,
+                                            int pri,
+                                            PyObject *callable,
+                                            PyObject *userdata);
+
+/* Registers a text-event hook. The callback receives
+ * (word, word_eol, userdata); HexChat's hook_print only supplies
+ * word, so word_eol is synthesized client-side (word_eol[i] is
+ * " ".join(word[i:])). */
+PyObject *hc_python_hooks_register_print (const char *name,
+                                           int pri,
+                                           PyObject *callable,
+                                           PyObject *userdata);
+
+/* Registers a periodic timer firing every `timeout_ms` milliseconds.
+ * The callback receives (userdata,). Returning a falsy value stops
+ * the timer (HexChat auto-unhooks). */
+PyObject *hc_python_hooks_register_timer (int timeout_ms,
+                                           PyObject *callable,
+                                           PyObject *userdata);
+
+/* Registers a callback to run when the script is about to unload.
+ * There is no HexChat-level counterpart; the callback fires in
+ * hc_python_hooks_fire_unload, driven by the loader during teardown
+ * in step 4. */
+PyObject *hc_python_hooks_register_unload (PyObject *callable,
+                                            PyObject *userdata);
+
+/* Fires every registered unload hook and releases the registrations.
+ * Exposed for the eventual per-script teardown path and for tests. */
+void hc_python_hooks_fire_unload (void);
+
 /* Removes a hook previously returned by one of the register functions.
  * Returns Py_True / Py_False (new reference). Raises TypeError if
  * `capsule` is not a capsule this module issued. */

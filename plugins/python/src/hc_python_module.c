@@ -198,6 +198,80 @@ hc_py_hook_command (PyObject *self, PyObject *args, PyObject *kwargs)
 }
 
 static PyObject *
+hc_py_hook_server (PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	(void) self;
+	static char *kwlist[] = {"name", "callback", "userdata",
+	                          "priority", NULL};
+	const char *name;
+	PyObject *callback;
+	PyObject *userdata = Py_None;
+	int priority = HEXCHAT_PRI_NORM;
+
+	if (!PyArg_ParseTupleAndKeywords (args, kwargs, "sO|Oi:hook_server",
+	                                   kwlist,
+	                                   &name, &callback, &userdata,
+	                                   &priority))
+		return NULL;
+
+	return hc_python_hooks_register_server (name, priority,
+	                                         callback, userdata);
+}
+
+static PyObject *
+hc_py_hook_print (PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	(void) self;
+	static char *kwlist[] = {"name", "callback", "userdata",
+	                          "priority", NULL};
+	const char *name;
+	PyObject *callback;
+	PyObject *userdata = Py_None;
+	int priority = HEXCHAT_PRI_NORM;
+
+	if (!PyArg_ParseTupleAndKeywords (args, kwargs, "sO|Oi:hook_print",
+	                                   kwlist,
+	                                   &name, &callback, &userdata,
+	                                   &priority))
+		return NULL;
+
+	return hc_python_hooks_register_print (name, priority,
+	                                        callback, userdata);
+}
+
+static PyObject *
+hc_py_hook_timer (PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	(void) self;
+	static char *kwlist[] = {"timeout", "callback", "userdata", NULL};
+	int timeout_ms;
+	PyObject *callback;
+	PyObject *userdata = Py_None;
+
+	if (!PyArg_ParseTupleAndKeywords (args, kwargs, "iO|O:hook_timer",
+	                                   kwlist,
+	                                   &timeout_ms, &callback, &userdata))
+		return NULL;
+
+	return hc_python_hooks_register_timer (timeout_ms, callback, userdata);
+}
+
+static PyObject *
+hc_py_hook_unload (PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	(void) self;
+	static char *kwlist[] = {"callback", "userdata", NULL};
+	PyObject *callback;
+	PyObject *userdata = Py_None;
+
+	if (!PyArg_ParseTupleAndKeywords (args, kwargs, "O|O:hook_unload",
+	                                   kwlist, &callback, &userdata))
+		return NULL;
+
+	return hc_python_hooks_register_unload (callback, userdata);
+}
+
+static PyObject *
 hc_py_unhook (PyObject *self, PyObject *args)
 {
 	(void) self;
@@ -304,6 +378,33 @@ PyDoc_STRVAR (hook_command_doc,
 "EAT_* constants. The returned hook object is passed to unhook() to\n"
 "remove the binding.");
 
+PyDoc_STRVAR (hook_server_doc,
+"hook_server(name, callback, userdata=None, priority=PRI_NORM) -> hook\n"
+"\n"
+"Register `callback` to fire on every incoming IRC message whose\n"
+"command matches `name` (or '*' for all). Callback signature matches\n"
+"hook_command.");
+
+PyDoc_STRVAR (hook_print_doc,
+"hook_print(name, callback, userdata=None, priority=PRI_NORM) -> hook\n"
+"\n"
+"Register `callback` to fire when HexChat emits a text event named\n"
+"`name` (e.g. 'Channel Message'). The callback receives\n"
+"(word, word_eol, userdata); word_eol is synthesised client-side.");
+
+PyDoc_STRVAR (hook_timer_doc,
+"hook_timer(timeout, callback, userdata=None) -> hook\n"
+"\n"
+"Register `callback` to fire every `timeout` milliseconds. The\n"
+"callback receives (userdata,). Returning a falsy value stops the\n"
+"timer.");
+
+PyDoc_STRVAR (hook_unload_doc,
+"hook_unload(callback, userdata=None) -> hook\n"
+"\n"
+"Register `callback` to fire when the script is about to be unloaded.\n"
+"The callback receives (userdata,).");
+
 PyDoc_STRVAR (unhook_doc,
 "unhook(hook) -> bool\n"
 "\n"
@@ -331,6 +432,14 @@ static PyMethodDef _hexchat_methods[] = {
 	                        pluginpref_list_doc},
 	{"hook_command",       (PyCFunction) hc_py_hook_command,
 	                        METH_VARARGS | METH_KEYWORDS, hook_command_doc},
+	{"hook_server",        (PyCFunction) hc_py_hook_server,
+	                        METH_VARARGS | METH_KEYWORDS, hook_server_doc},
+	{"hook_print",         (PyCFunction) hc_py_hook_print,
+	                        METH_VARARGS | METH_KEYWORDS, hook_print_doc},
+	{"hook_timer",         (PyCFunction) hc_py_hook_timer,
+	                        METH_VARARGS | METH_KEYWORDS, hook_timer_doc},
+	{"hook_unload",        (PyCFunction) hc_py_hook_unload,
+	                        METH_VARARGS | METH_KEYWORDS, hook_unload_doc},
 	{"unhook",             hc_py_unhook,             METH_VARARGS,
 	                        unhook_doc},
 	{NULL, NULL, 0, NULL}

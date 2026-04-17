@@ -79,12 +79,46 @@ hc_test_hook_at (guint index)
 }
 
 int
-hc_test_hook_fire (guint index, char *word[], char *word_eol[])
+hc_test_hook_fire_word_pair (guint index, char *word[], char *word_eol[])
 {
 	hc_test_hook_entry *h = hc_test_hook_at (index);
 	if (h == NULL || !h->alive || h->callback == NULL)
 		return 0;
-	return h->callback (word, word_eol, h->userdata);
+	if (h->kind != HC_TEST_HOOK_COMMAND && h->kind != HC_TEST_HOOK_SERVER)
+		return 0;
+	hc_test_hook_word_pair_cb cb = (hc_test_hook_word_pair_cb) h->callback;
+	return cb (word, word_eol, h->userdata);
+}
+
+int
+hc_test_hook_fire_print (guint index, char *word[])
+{
+	hc_test_hook_entry *h = hc_test_hook_at (index);
+	if (h == NULL || !h->alive || h->callback == NULL)
+		return 0;
+	if (h->kind != HC_TEST_HOOK_PRINT)
+		return 0;
+	hc_test_hook_word_cb cb = (hc_test_hook_word_cb) h->callback;
+	return cb (word, h->userdata);
+}
+
+int
+hc_test_hook_fire_timer (guint index)
+{
+	hc_test_hook_entry *h = hc_test_hook_at (index);
+	if (h == NULL || !h->alive || h->callback == NULL)
+		return 0;
+	if (h->kind != HC_TEST_HOOK_TIMER)
+		return 0;
+	hc_test_hook_timer_cb cb = (hc_test_hook_timer_cb) h->callback;
+	int keep = cb (h->userdata);
+	if (!keep)
+	{
+		/* Match HexChat's auto-unhook behaviour. */
+		h->alive = FALSE;
+		h->callback = NULL;
+	}
+	return keep;
 }
 
 static GHashTable *
@@ -291,16 +325,64 @@ hooks_array (void)
 
 hexchat_hook *
 hexchat_hook_command (hexchat_plugin *plugin, const char *name, int pri,
-                       hc_test_hook_cmd_cb callback,
+                       hc_test_hook_word_pair_cb callback,
                        const char *help, void *userdata)
 {
 	(void) plugin;
 	hc_test_hook_entry *h = g_new0 (hc_test_hook_entry, 1);
+	h->kind = HC_TEST_HOOK_COMMAND;
 	h->name = g_strdup (name);
 	h->pri = pri;
-	h->callback = callback;
+	h->callback = (void *) callback;
 	h->userdata = userdata;
 	h->help = g_strdup (help);
+	h->alive = TRUE;
+	g_ptr_array_add (hooks_array (), h);
+	return (hexchat_hook *) h;
+}
+
+hexchat_hook *
+hexchat_hook_server (hexchat_plugin *plugin, const char *name, int pri,
+                      hc_test_hook_word_pair_cb callback, void *userdata)
+{
+	(void) plugin;
+	hc_test_hook_entry *h = g_new0 (hc_test_hook_entry, 1);
+	h->kind = HC_TEST_HOOK_SERVER;
+	h->name = g_strdup (name);
+	h->pri = pri;
+	h->callback = (void *) callback;
+	h->userdata = userdata;
+	h->alive = TRUE;
+	g_ptr_array_add (hooks_array (), h);
+	return (hexchat_hook *) h;
+}
+
+hexchat_hook *
+hexchat_hook_print (hexchat_plugin *plugin, const char *name, int pri,
+                     hc_test_hook_word_cb callback, void *userdata)
+{
+	(void) plugin;
+	hc_test_hook_entry *h = g_new0 (hc_test_hook_entry, 1);
+	h->kind = HC_TEST_HOOK_PRINT;
+	h->name = g_strdup (name);
+	h->pri = pri;
+	h->callback = (void *) callback;
+	h->userdata = userdata;
+	h->alive = TRUE;
+	g_ptr_array_add (hooks_array (), h);
+	return (hexchat_hook *) h;
+}
+
+hexchat_hook *
+hexchat_hook_timer (hexchat_plugin *plugin, int timeout,
+                     hc_test_hook_timer_cb callback, void *userdata)
+{
+	(void) plugin;
+	hc_test_hook_entry *h = g_new0 (hc_test_hook_entry, 1);
+	h->kind = HC_TEST_HOOK_TIMER;
+	h->timeout_ms = timeout;
+	h->callback = (void *) callback;
+	h->userdata = userdata;
 	h->alive = TRUE;
 	g_ptr_array_add (hooks_array (), h);
 	return (hexchat_hook *) h;
