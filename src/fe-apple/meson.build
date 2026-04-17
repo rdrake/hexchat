@@ -1,23 +1,29 @@
-hexchat_apple_sources = [
-  'apple-smoke.c',
+hexchat_apple_core = static_library('hexchatapplecore',
+  sources: [
   'apple-runtime.c',
   'apple-frontend.c',
   'apple-callback-log.c',
-]
+  ],
+  dependencies: [hexchat_common_dep, dependency('openssl')],
+  install: false,
+)
+
+hexchat_apple_adapter = shared_library('hexchatappleadapter',
+  link_with: hexchat_apple_core,
+  dependencies: [hexchat_common_dep, dependency('openssl')],
+  install: false,
+)
 
 executable('hexchat-apple-smoke',
-  sources: hexchat_apple_sources,
+  sources: 'apple-smoke.c',
+  link_with: hexchat_apple_core,
   dependencies: [hexchat_common_dep, dependency('openssl')],
   install: false,
 )
 
 test_cfgdir = executable('test-fe-apple-cfgdir',
-  sources: [
-    'test-cfgdir.c',
-    'apple-frontend.c',
-    'apple-runtime.c',
-    'apple-callback-log.c',
-  ],
+  sources: 'test-cfgdir.c',
+  link_with: hexchat_apple_core,
   dependencies: [hexchat_common_dep, dependency('openssl')],
 )
 
@@ -31,7 +37,8 @@ test_callback_log = executable('test-fe-apple-callback-log',
 test('fe-apple-callback-log', test_callback_log)
 
 test_runtime = executable('test-fe-apple-runtime',
-  sources: ['test-runtime.c', 'apple-runtime.c', 'apple-frontend.c', 'apple-callback-log.c'],
+  sources: 'test-runtime.c',
+  link_with: hexchat_apple_core,
   dependencies: [hexchat_common_dep, dependency('openssl')],
 )
 
