@@ -932,9 +932,20 @@ inbound_kick (server *serv, char *chan, char *user, char *kicker, char *reason,
 	session *sess = find_channel (serv, chan);
 	if (sess)
 	{
+		char *kick_account = NULL;
+		struct User *u = userlist_find (sess, user);
+		if (u && u->account)
+			kick_account = g_strdup (u->account);
+
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_KICK, sess, kicker, user, chan, reason, 0,
 									  tags_data->timestamp);
 		userlist_remove (sess, user);
+
+		if (kick_account)
+		{
+			notify_account_cleared (serv, kick_account, tags_data);
+			g_free (kick_account);
+		}
 	}
 }
 
@@ -945,6 +956,11 @@ inbound_part (server *serv, char *chan, char *user, char *ip, char *reason,
 	session *sess = find_channel (serv, chan);
 	if (sess)
 	{
+		char *part_account = NULL;
+		struct User *u = userlist_find (sess, user);
+		if (u && u->account)
+			part_account = g_strdup (u->account);
+
 		if (*reason)
 			EMIT_SIGNAL_TIMESTAMP (XP_TE_PARTREASON, sess, user, ip, chan, reason,
 										  0, tags_data->timestamp);
@@ -952,6 +968,16 @@ inbound_part (server *serv, char *chan, char *user, char *ip, char *reason,
 			EMIT_SIGNAL_TIMESTAMP (XP_TE_PART, sess, user, ip, chan, NULL, 0,
 										  tags_data->timestamp);
 		userlist_remove (sess, user);
+
+		/* After the user leaves this channel, they may still be in other
+		 * channels with us (still "online") — notify_account_cleared does
+		 * the server-wide scan and only flips offline if nobody else on
+		 * the server carries the account. */
+		if (part_account)
+		{
+			notify_account_cleared (serv, part_account, tags_data);
+			g_free (part_account);
+		}
 	}
 }
 
@@ -980,6 +1006,7 @@ inbound_quit (server *serv, char *nick, char *ip, char *reason,
 	session *sess;
 	struct User *user;
 	int was_on_front_session = FALSE;
+	char *quit_account = NULL;
 
 	while (list)
 	{
@@ -990,6 +1017,8 @@ inbound_quit (server *serv, char *nick, char *ip, char *reason,
  				was_on_front_session = TRUE;
 			if ((user = userlist_find (sess, nick)))
 			{
+				if (!quit_account && user->account)
+					quit_account = g_strdup (user->account);
 				EMIT_SIGNAL_TIMESTAMP (XP_TE_QUIT, sess, nick, reason, ip, NULL, 0,
 											  tags_data->timestamp);
 				userlist_remove_user (sess, user);
@@ -1002,6 +1031,15 @@ inbound_quit (server *serv, char *nick, char *ip, char *reason,
 		list = list->next;
 	}
 
+	/* After the user is fully removed, their account may no longer be
+	 * carried by anyone on the server — trigger the friend-offline
+	 * transition (guarded against multi-nick-per-account). */
+	if (quit_account)
+	{
+		notify_account_cleared (serv, quit_account, tags_data);
+		g_free (quit_account);
+	}
+
 	notify_set_offline (serv, nick, was_on_front_session, tags_data);
 }
 
@@ -1011,6 +1049,27 @@ inbound_account (server *serv, char *nick, char *account,
 {
 	session *sess = NULL;
 	GSList *list;
+	char *old_account = NULL;
+
+	/* Snapshot the current account before propagation overwrites it, so
+	 * we can detect logout / change transitions for friend presence.
+	 * user->account is the same across channels for a given nick on a
+	 * server, so the first match suffices. */
+	list = sess_list;
+	while (list)
+	{
+		sess = list->data;
+		if (sess->server == serv)
+		{
+			struct User *user = userlist_find (sess, nick);
+			if (user && user->account)
+			{
+				old_account = g_strdup (user->account);
+				break;
+			}
+		}
+		list = list->next;
+	}
 
 	list = sess_list;
 	while (list)
@@ -1022,6 +1081,17 @@ inbound_account (server *serv, char *nick, char *account,
 	}
 
 	notify_account_observed (serv, nick, account, tags_data);
+
+	/* If the account just cleared or switched, the previous account may
+	 * need to go offline — notify_account_cleared checks that no other
+	 * nick on the server is still carrying it. */
+	if (old_account
+	    && (!account || !*account
+	        || !strcmp (account, "*") || !strcmp (account, "0")
+	        || strcmp (account, old_account) != 0))
+		notify_account_cleared (serv, old_account, tags_data);
+
+	g_free (old_account);
 }
 
 void

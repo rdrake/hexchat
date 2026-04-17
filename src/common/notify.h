@@ -64,6 +64,14 @@ void notify_account_observed (server *serv, const char *nick,
                               const char *account,
                               const message_tags_data *tags_data);
 
+/* Logout hook: call when a user's account transitions away from
+ * `was_account` (logout via ACCOUNT *, or account-tag dropping, etc.).
+ * If nobody else on the server still carries that account, matching
+ * friend entries flip offline. Silently no-ops when another user on the
+ * same server is still authenticated as that account. */
+void notify_account_cleared (server *serv, const char *was_account,
+                             const message_tags_data *tags_data);
+
 /* the general stuff */
 void notify_adduser (char *name, char *account, char *networks);
 int notify_deluser (char *name);

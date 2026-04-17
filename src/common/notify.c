@@ -36,6 +36,8 @@
 #include "fe.h"
 #include "server.h"
 #include "text.h"
+#include "tree.h"
+#include "userlist.h"
 #include "util.h"
 #include "hexchatc.h"
 
@@ -807,6 +809,81 @@ notify_adduser (char *name, char *account, char *networks)
 	 * account-notify / account-tag / extended-join. */
 	if (notify->name)
 		notify_watch_all (notify, TRUE);
+}
+
+/* tree_foreach callback: given the target account in `data` cast as a
+ * (const char **), scan a userlist and set *data to NULL if any user
+ * carries that account. Returning FALSE stops the traversal early. */
+static int
+notify_user_has_account_cb (const void *key, void *data)
+{
+	const struct User *user = key;
+	const char **target = data;
+	if (user->account && *target && !strcmp (user->account, *target))
+	{
+		*target = NULL;
+		return FALSE; /* stop traversal */
+	}
+	return TRUE;
+}
+
+/* Returns TRUE if any user on `serv` (in any channel we see) currently
+ * carries `account`. Used to guard offline transitions so a logout from
+ * one nick doesn't mark a friend offline while other nicks on the same
+ * account are still present. */
+static gboolean
+notify_account_still_present (server *serv, const char *account)
+{
+	GSList *slist;
+	const char *probe = account;
+
+	for (slist = sess_list; slist && probe; slist = slist->next)
+	{
+		session *sess = slist->data;
+		if (sess->server != serv || !sess->usertree)
+			continue;
+		tree_foreach (sess->usertree,
+			(tree_traverse_func *) notify_user_has_account_cb, &probe);
+	}
+
+	/* probe is NULL if the callback found a match and cleared it. */
+	return probe == NULL;
+}
+
+/* Mirror of notify_account_observed for the logout direction. If a user's
+ * account just transitioned away from `was_account`, and nobody else on
+ * the server still carries that account, any matching friend entries go
+ * offline. Silently no-ops if the account is still present on the server
+ * (multi-nick-per-account case). */
+void
+notify_account_cleared (server *serv, const char *was_account,
+                        const message_tags_data *tags_data)
+{
+	struct notify *notify;
+	struct notify_per_server *servnot;
+	GSList *list;
+
+	if (!was_account || !*was_account
+	    || !strcmp (was_account, "*") || !strcmp (was_account, "0"))
+		return;
+
+	if (notify_account_still_present (serv, was_account))
+		return;
+
+	for (list = notify_list; list; list = list->next)
+	{
+		notify = list->data;
+		if (!notify->account)
+			continue;
+		if (strcmp (notify->account, was_account) != 0)
+			continue;
+
+		servnot = notify_find_server_entry (notify, serv);
+		if (servnot && servnot->ison)
+			notify_announce_offline (serv, servnot,
+				notify->name ? notify->name : notify->account,
+				FALSE, tags_data);
+	}
 }
 
 void
