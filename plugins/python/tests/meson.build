@@ -20,6 +20,8 @@ test('Python Empty Module', python_empty_module_test,
   protocol: 'tap',
   timeout: 30,
 )
+# (no env — this test never starts a full interpreter, so it doesn't
+# need to find the hexchat package.)
 
 python_interp_test = executable('python_interp_lifecycle_test',
   ['test_interp_lifecycle.c', '../src/hc_python_interp.c', python_test_common_sources],
@@ -27,7 +29,13 @@ python_interp_test = executable('python_interp_lifecycle_test',
   include_directories: python_test_common_inc,
 )
 
+# Every test that starts the interpreter needs to find the hexchat
+# package; out-of-install, point at the in-tree source dir.
+python_source_pkgdir = meson.project_source_root() / 'plugins' / 'python' / 'py'
+python_test_env = {'HEXCHAT_PYTHON_DIR': python_source_pkgdir}
+
 test('Python Interpreter Lifecycle', python_interp_test,
+  env: python_test_env,
   protocol: 'tap',
   timeout: 30,
 )
@@ -39,6 +47,7 @@ python_api_core_test = executable('python_api_core_test',
 )
 
 test('Python API core', python_api_core_test,
+  env: python_test_env,
   protocol: 'tap',
   timeout: 30,
 )
@@ -50,6 +59,7 @@ python_api_hooks_test = executable('python_api_hooks_test',
 )
 
 test('Python API hooks', python_api_hooks_test,
+  env: python_test_env,
   protocol: 'tap',
   timeout: 30,
 )
@@ -64,12 +74,13 @@ python_integration_test = executable('python_integration_test',
   export_dynamic: true,
 )
 
-# The plugin target is declared in plugins/python/meson.build; grab
-# its built path so the integration test can dlopen it.
+# Tests run out of the source tree, so point the plugin at the in-tree
+# py/ package directory instead of the install location.
 test('Python integration (dlopen)',
   python_integration_test,
   args: [meson.project_build_root() / 'plugins' / 'python' / 'python.dylib'],
   depends: [python_plugin_module],
+  env: python_test_env,
   protocol: 'tap',
   timeout: 30,
 )

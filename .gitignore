@@ -4,6 +4,8 @@ src/htm/.vs/*
 /build
 builddir/
 hexchat-build-gtk4/
+__pycache__/
+*.pyc
 doxygen*.tmp
 html/
 *.patch

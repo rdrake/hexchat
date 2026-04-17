@@ -85,6 +85,14 @@ main (void)
 	ok (err == NULL, "import _hexchat has no error");
 	free_outs (&repr, &err);
 
+	status = hc_python_interp_exec ("__import__('hexchat').__version__",
+	                                 &repr, &err);
+	ok (status == HC_PY_EXEC_OK_WITH_VALUE,
+	    "import hexchat succeeds and exposes __version__");
+	ok (repr != NULL && strcmp (repr, "'3.0'") == 0,
+	    "hexchat.__version__ == '3.0'");
+	free_outs (&repr, &err);
+
 	hc_python_interp_stop ();
 	ok (!hc_python_interp_is_running (),
 	    "is_running false after stop");

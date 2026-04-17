@@ -20,6 +20,10 @@
 #include "hc_python_interp.h"
 #include "hc_python_module.h"
 
+#ifndef HEXCHAT_PYTHONDIR
+#define HEXCHAT_PYTHONDIR ""
+#endif
+
 static gboolean interp_running = FALSE;
 
 static PyStatus
@@ -51,6 +55,44 @@ configure (PyConfig *config)
 	return status;
 }
 
+static const char *
+python_pkgdir (void)
+{
+	const char *envp = g_getenv ("HEXCHAT_PYTHON_DIR");
+	if (envp != NULL && *envp != '\0')
+		return envp;
+	if (HEXCHAT_PYTHONDIR[0] != '\0')
+		return HEXCHAT_PYTHONDIR;
+	return NULL;
+}
+
+/* Prepends the hexchat/ package directory to sys.path so `import
+ * hexchat` resolves to our shipped package rather than anything the
+ * user might have on PYTHONPATH (isolated config already drops env,
+ * but explicit is safer). Returns 0 on success. */
+static int
+install_sys_path (void)
+{
+	const char *dir = python_pkgdir ();
+	if (dir == NULL)
+		return 0;  /* nothing to add; caller will get ImportError */
+
+	PyObject *sys_path = PySys_GetObject ("path");
+	if (sys_path == NULL || !PyList_Check (sys_path))
+	{
+		PyErr_SetString (PyExc_RuntimeError,
+		                 "sys.path unavailable at startup");
+		return -1;
+	}
+
+	PyObject *entry = PyUnicode_FromString (dir);
+	if (entry == NULL)
+		return -1;
+	int rc = PyList_Insert (sys_path, 0, entry);
+	Py_DECREF (entry);
+	return rc;
+}
+
 int
 hc_python_interp_start (void)
 {
@@ -75,6 +117,25 @@ hc_python_interp_start (void)
 	PyConfig_Clear (&config);
 	if (PyStatus_Exception (status))
 		return -1;
+
+	if (install_sys_path () < 0)
+	{
+		PyErr_Print ();
+		Py_Finalize ();
+		return -1;
+	}
+
+	/* Proactively import the hexchat package so any packaging problem
+	 * (missing file, broken re-export, etc.) surfaces at plugin load
+	 * time rather than when the first user script runs. */
+	PyObject *hx = PyImport_ImportModule ("hexchat");
+	if (hx == NULL)
+	{
+		PyErr_Print ();
+		Py_Finalize ();
+		return -1;
+	}
+	Py_DECREF (hx);
 
 	interp_running = TRUE;
 	return 0;
