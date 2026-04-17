@@ -5,20 +5,13 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
-#include "hexchat-plugin.h"
+#include "hc_python.h"
+#include "hc_python_console.h"
+#include "hc_python_interp.h"
 
-#define PLUGIN_NAME    "Python"
-#define PLUGIN_DESC    "Python scripting interface"
-#define PLUGIN_VERSION "3.0"
-
-static hexchat_plugin *ph;
+hexchat_plugin *ph;
 
 int
 hexchat_plugin_init (hexchat_plugin *plugin_handle,
@@ -30,19 +23,31 @@ hexchat_plugin_init (hexchat_plugin *plugin_handle,
 	(void) arg;
 
 	ph = plugin_handle;
-	*plugin_name = PLUGIN_NAME;
-	*plugin_desc = PLUGIN_DESC;
-	*plugin_version = PLUGIN_VERSION;
+	*plugin_name = HC_PYTHON_PLUGIN_NAME;
+	*plugin_desc = HC_PYTHON_PLUGIN_DESC;
+	*plugin_version = HC_PYTHON_PLUGIN_VERSION;
 
-	/* Step 1 scaffold: no interpreter yet. Subsequent steps initialize
-	 * CPython, register the _hexchat module, wire up the /py command,
-	 * and load user scripts. */
+	if (hc_python_interp_start () != 0)
+	{
+		hexchat_print (ph, "Python: failed to start embedded interpreter");
+		return 0;
+	}
+
+	if (hc_python_console_init (ph) != 0)
+	{
+		hc_python_interp_stop ();
+		hexchat_print (ph, "Python: failed to register /py command");
+		return 0;
+	}
+
 	return 1;
 }
 
 int
 hexchat_plugin_deinit (void)
 {
+	hc_python_console_deinit ();
+	hc_python_interp_stop ();
 	ph = NULL;
 	return 1;
 }
