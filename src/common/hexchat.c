@@ -813,13 +813,6 @@ sigusr2_handler (int signal, siginfo_t *si, void *un)
 }
 #endif
 
-static gint
-xchat_auto_connect (gpointer userdata)
-{
-	servlist_auto_connect (NULL);
-	return 0;
-}
-
 void
 xchat_init (void)
 {
@@ -991,7 +984,12 @@ xchat_init (void)
 				new_ircwindow (NULL, NULL, SESS_SERVER, 0);
 		} else
 		{
-			fe_idle_add (xchat_auto_connect, NULL);
+			/* Run autoconnect synchronously so at least one
+			 * GtkApplicationWindow exists when the GtkApplication's
+			 * activate signal returns; deferring via g_idle_add let
+			 * GApplication's use_count hit zero in GTK 4.22+, which
+			 * unregistered the app before the idle dispatched. */
+			servlist_auto_connect (NULL);
 		}
 	} else
 	{
