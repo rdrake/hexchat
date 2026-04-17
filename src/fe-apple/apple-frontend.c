@@ -417,13 +417,27 @@ fe_timeout_remove (int tag)
 int
 fe_timeout_add (int interval, void *callback, void *userdata)
 {
-	return g_timeout_add (interval, (GSourceFunc) callback, userdata);
+	GSource *source = g_timeout_source_new (interval);
+	guint tag;
+
+	g_source_set_callback (source, (GSourceFunc)callback, userdata, NULL);
+	tag = g_source_attach (source, hc_apple_runtime.context);
+	g_source_unref (source);
+
+	return tag;
 }
 
 int
 fe_timeout_add_seconds (int interval, void *callback, void *userdata)
 {
-	return g_timeout_add_seconds (interval, (GSourceFunc) callback, userdata);
+	GSource *source = g_timeout_source_new_seconds (interval);
+	guint tag;
+
+	g_source_set_callback (source, (GSourceFunc)callback, userdata, NULL);
+	tag = g_source_attach (source, hc_apple_runtime.context);
+	g_source_unref (source);
+
+	return tag;
 }
 
 void
@@ -435,7 +449,9 @@ fe_input_remove (int tag)
 int
 fe_input_add (int sok, int flags, void *func, void *data)
 {
-	int tag, type = 0;
+	GIOCondition cond = 0;
+	GSource *source;
+	guint tag;
 	GIOChannel *channel;
 
 #ifdef G_OS_WIN32
@@ -448,14 +464,17 @@ fe_input_add (int sok, int flags, void *func, void *data)
 #endif
 
 	if (flags & FIA_READ)
-		type |= G_IO_IN | G_IO_HUP | G_IO_ERR;
+		cond |= G_IO_IN | G_IO_HUP | G_IO_ERR;
 	if (flags & FIA_WRITE)
-		type |= G_IO_OUT | G_IO_ERR;
+		cond |= G_IO_OUT | G_IO_ERR;
 	if (flags & FIA_EX)
-		type |= G_IO_PRI;
+		cond |= G_IO_PRI;
 
-	tag = g_io_add_watch (channel, type, (GIOFunc) func, data);
+	source = g_io_create_watch (channel, cond);
+	g_source_set_callback (source, (GSourceFunc)func, data, NULL);
 	g_io_channel_unref (channel);
+	tag = g_source_attach (source, hc_apple_runtime.context);
+	g_source_unref (source);
 
 	return tag;
 }
@@ -566,23 +585,8 @@ fe_init (void)
 void
 fe_main (void)
 {
-	GIOChannel *keyboard_input;
 	hc_apple_callback_log ("fe_main", HC_APPLE_CALLBACK_REQUIRED);
-
-	main_loop = g_main_loop_new(NULL, FALSE);
-
-	/* Keyboard Entry Setup */
-#ifdef G_OS_WIN32
-	keyboard_input = g_io_channel_win32_new_fd(STDIN_FILENO);
-#else
-	keyboard_input = g_io_channel_unix_new(STDIN_FILENO);
-#endif
-
-	g_io_add_watch(keyboard_input, G_IO_IN, handle_line, NULL);
-
-	g_main_loop_run(main_loop);
-
-	return;
+	g_main_loop_run (hc_apple_runtime.loop);
 }
 
 void
@@ -590,7 +594,8 @@ fe_exit (void)
 {
 	hc_apple_callback_log ("fe_exit", HC_APPLE_CALLBACK_REQUIRED);
 	done = TRUE;
-	g_main_loop_quit(main_loop);
+	if (hc_apple_runtime.loop)
+		g_main_loop_quit (hc_apple_runtime.loop);
 }
 
 void
@@ -605,7 +610,10 @@ fe_message (char *msg, int flags)
 	(void)flags;
 	hc_apple_callback_log ("fe_message", HC_APPLE_CALLBACK_REQUIRED);
 	if (msg)
+	{
+		hc_apple_runtime_emit_log_line (msg);
 		puts (msg);
+	}
 }
 
 void
@@ -915,7 +923,10 @@ fe_get_int (char *prompt, int def, void *callback, void *ud)
 void
 fe_idle_add (void *func, void *data)
 {
-	g_idle_add (func, data);
+	GSource *source = g_idle_source_new ();
+	g_source_set_callback (source, (GSourceFunc)func, data, NULL);
+	g_source_attach (source, hc_apple_runtime.context);
+	g_source_unref (source);
 }
 void
 fe_ctrl_gui (session *sess, fe_gui_action action, int arg)

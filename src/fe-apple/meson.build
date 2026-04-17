@@ -29,3 +29,10 @@ test_callback_log = executable('test-fe-apple-callback-log',
 )
 
 test('fe-apple-callback-log', test_callback_log)
+
+test_runtime = executable('test-fe-apple-runtime',
+  sources: ['test-runtime.c', 'apple-runtime.c', 'apple-frontend.c', 'apple-callback-log.c'],
+  dependencies: [hexchat_common_dep, dependency('openssl')],
+)
+
+test('fe-apple-runtime', test_runtime)
