@@ -35,7 +35,9 @@ install_data(['_hexchat.py', 'hexchat.py', 'xchat.py'],
 # compatibility alias. Installed alongside the legacy .py files;
 # sys.path ordering decides which wins at import time.
 python_pkgdir = join_paths(get_option('libdir'), 'hexchat/python')
-install_data('py/hexchat/__init__.py',
+install_data(
+  'py/hexchat/__init__.py',
+  'py/hexchat/_stdio.py',
   install_dir: join_paths(python_pkgdir, 'hexchat')
 )
 install_data('py/xchat/__init__.py',

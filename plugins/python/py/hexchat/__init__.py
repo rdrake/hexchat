@@ -10,4 +10,10 @@ of the API lands).
 
 from _hexchat import *  # noqa: F401,F403 — intentional re-export.
 
+from . import _stdio as _stdio
+
 __version__ = "3.0"
+
+# Redirect sys.stdout / sys.stderr through _hexchat.print so `print()`
+# and uncaught traceback output land in the user's HexChat window.
+_stdio.install()

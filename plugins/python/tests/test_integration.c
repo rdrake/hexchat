@@ -133,6 +133,26 @@ main (int argc, char **argv)
 	    && strcmp (hc_test_last_print (), "2") == 0,
 	    "/py exec 1+1 prints '2'");
 
+	/* Python-side print() now routes through hexchat_print. */
+	hc_test_stubs_reset ();
+	empty_words (word, word_eol);
+	word[1] = (char *) "py";
+	word[2] = (char *) "exec";
+	word[3] = (char *) "print('hello'); print('world')";
+	word_eol[1] = (char *) "py exec print('hello'); print('world')";
+	word_eol[2] = (char *) "exec print('hello'); print('world')";
+	word_eol[3] = (char *) "print('hello'); print('world')";
+	eat = hc_test_hook_fire_word_pair (0, word, word_eol);
+	ok (eat == HEXCHAT_EAT_ALL, "print() snippet executes");
+	ok (hc_test_n_prints () == 2,
+	    "two Python prints route to hexchat_print");
+	ok (hc_test_print_at (0) != NULL
+	    && strcmp (hc_test_print_at (0), "hello") == 0,
+	    "first print is 'hello'");
+	ok (hc_test_print_at (1) != NULL
+	    && strcmp (hc_test_print_at (1), "world") == 0,
+	    "second print is 'world'");
+
 	/* /py exec for a statement returns no output. */
 	hc_test_stubs_reset ();
 	word[3] = (char *) "x";
