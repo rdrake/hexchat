@@ -839,7 +839,7 @@ userlist_left_click_cb (GtkGestureClick *gesture, int n_press, double x, double 
 	char **nicks;
 	int i;
 
-	if (!(state & GDK_CONTROL_MASK) &&
+	if (!(state & STATE_CTRL) &&
 		n_press == 2 && prefs.hex_gui_ulist_doubleclick[0])
 	{
 		nicks = userlist_selection_list_gtk4 (view, &i);
@@ -877,7 +877,7 @@ userlist_right_click_cb (GtkGestureClick *gesture, int n_press, double x, double
 	guint clicked_pos;
 
 	/* Check for multi-selection (Ctrl held) */
-	if (state & GDK_CONTROL_MASK)
+	if (state & STATE_CTRL)
 	{
 		/* With Ctrl held, add to selection rather than replacing */
 		nicks = userlist_selection_list_gtk4 (view, &i);

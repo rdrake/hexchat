@@ -42,6 +42,7 @@
 #include "xtext-render.h"
 #include "xtext-emoji.h"
 #include "palette.h"
+#include "fkeys.h"
 
 #ifdef WIN32
 #include <windows.h>
@@ -1449,7 +1450,7 @@ key_pressed_cb (GtkEventControllerKey *controller, guint keyval,
 	HexInputEdit *edit = HEX_INPUT_EDIT (data);
 	HexInputEditPriv *priv = edit->priv;
 	gboolean shift = (state & GDK_SHIFT_MASK) != 0;
-	gboolean ctrl = (state & GDK_CONTROL_MASK) != 0;
+	gboolean ctrl = (state & STATE_CTRL) != 0;
 
 	/* Let IMContext handle first */
 	if (gtk_im_context_filter_keypress (priv->im_context,
@@ -1784,7 +1785,7 @@ click_pressed_cb (GtkGestureClick *gesture, int n_press, double x, double y,
 	{
 		GdkModifierType state = gtk_event_controller_get_current_event_state (
 			GTK_EVENT_CONTROLLER (gesture));
-		if ((state & GDK_CONTROL_MASK) && n_press == 1)
+		if ((state & STATE_CTRL) && n_press == 1)
 		{
 			char *word = word_at_byte (priv->text->str, priv->text->len, byte_off);
 			if (word)
@@ -2400,7 +2401,7 @@ motion_cb (GtkEventControllerMotion *controller, double x, double y, gpointer da
 
 	GdkModifierType state = gtk_event_controller_get_current_event_state (
 		GTK_EVENT_CONTROLLER (controller));
-	update_url_cursor (edit, x, y, (state & GDK_CONTROL_MASK) != 0);
+	update_url_cursor (edit, x, y, (state & STATE_CTRL) != 0);
 }
 
 static void
