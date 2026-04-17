@@ -53,6 +53,22 @@ PyObject *hc_python_hooks_register_print (const char *name,
                                            PyObject *callable,
                                            PyObject *userdata);
 
+/* Like hook_print, but the callback additionally receives a new
+ * hexchat.Attribute wrapping the event's server_time and any other
+ * IRCv3 metadata:
+ *   (word, word_eol, attrs, userdata) -> EAT_*. */
+PyObject *hc_python_hooks_register_print_attrs (const char *name,
+                                                 int pri,
+                                                 PyObject *callable,
+                                                 PyObject *userdata);
+
+/* Like hook_server, plus the Attribute argument:
+ *   (word, word_eol, attrs, userdata) -> EAT_*. */
+PyObject *hc_python_hooks_register_server_attrs (const char *name,
+                                                  int pri,
+                                                  PyObject *callable,
+                                                  PyObject *userdata);
+
 /* Registers a periodic timer firing every `timeout_ms` milliseconds.
  * The callback receives (userdata,). Returning a falsy value stops
  * the timer (HexChat auto-unhooks). */

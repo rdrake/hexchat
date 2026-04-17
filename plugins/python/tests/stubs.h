@@ -12,6 +12,8 @@
 
 #include <glib.h>
 
+#include "hexchat-plugin.h"
+
 /* Resets captured state between cases. */
 void hc_test_stubs_reset (void);
 
@@ -26,12 +28,20 @@ typedef enum
 {
 	HC_TEST_HOOK_COMMAND,
 	HC_TEST_HOOK_SERVER,
+	HC_TEST_HOOK_SERVER_ATTRS,
 	HC_TEST_HOOK_PRINT,
+	HC_TEST_HOOK_PRINT_ATTRS,
 	HC_TEST_HOOK_TIMER,
 } hc_test_hook_kind;
 
 typedef int (*hc_test_hook_word_pair_cb) (char *word[], char *word_eol[], void *userdata);
 typedef int (*hc_test_hook_word_cb) (char *word[], void *userdata);
+typedef int (*hc_test_hook_print_attrs_cb) (char *word[],
+                                             hexchat_event_attrs *attrs,
+                                             void *userdata);
+typedef int (*hc_test_hook_server_attrs_cb) (char *word[], char *word_eol[],
+                                              hexchat_event_attrs *attrs,
+                                              void *userdata);
 typedef int (*hc_test_hook_timer_cb) (void *userdata);
 
 typedef struct
@@ -53,6 +63,13 @@ hc_test_hook_entry *hc_test_hook_at (guint index);
 int hc_test_hook_fire_word_pair (guint index, char *word[], char *word_eol[]);
 /* Fire a print hook — HexChat only supplies word at this layer. */
 int hc_test_hook_fire_print (guint index, char *word[]);
+/* Fire a print-attrs hook. `server_time_utc` is written into a
+ * hexchat_event_attrs the stub passes to the trampoline. */
+int hc_test_hook_fire_print_attrs (guint index, char *word[],
+                                    long long server_time_utc);
+/* Fire a server-attrs hook. */
+int hc_test_hook_fire_server_attrs (guint index, char *word[], char *word_eol[],
+                                     long long server_time_utc);
 /* Fire a timer. Returns 1 to keep firing, 0 to unhook. */
 int hc_test_hook_fire_timer (guint index);
 

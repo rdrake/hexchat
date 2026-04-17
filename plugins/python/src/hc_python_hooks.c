@@ -10,6 +10,7 @@
 #include <glib.h>
 
 #include "hc_python.h"
+#include "hc_python_attrs.h"
 #include "hc_python_hooks.h"
 
 #define HC_PYTHON_CAPSULE_NAME "_hexchat.hook"
@@ -18,7 +19,9 @@ typedef enum
 {
 	HC_PY_HOOK_COMMAND,
 	HC_PY_HOOK_SERVER,
+	HC_PY_HOOK_SERVER_ATTRS,
 	HC_PY_HOOK_PRINT,
+	HC_PY_HOOK_PRINT_ATTRS,
 	HC_PY_HOOK_TIMER,
 	HC_PY_HOOK_UNLOAD,
 } py_hook_kind;
@@ -164,6 +167,74 @@ word_pair_trampoline (char *word[], char *word_eol[], void *user)
 
 	Py_XDECREF (w);
 	Py_XDECREF (we);
+
+	PyGILState_Release (gil);
+	return eat;
+}
+
+/* hook_print_attrs trampoline. Same shape as print_trampoline plus
+ * an Attribute argument wrapping hexchat_event_attrs. */
+static int
+print_attrs_trampoline (char *word[], hexchat_event_attrs *attrs, void *user)
+{
+	py_hook *h = user;
+	PyGILState_STATE gil = PyGILState_Ensure ();
+
+	PyObject *w = wordlist_to_pylist (word);
+	PyObject *we = w != NULL ? synthesize_word_eol (w) : NULL;
+	PyObject *a = hc_python_attrs_new (attrs ? attrs->server_time_utc : 0);
+	int eat = HEXCHAT_EAT_NONE;
+
+	if (w != NULL && we != NULL && a != NULL)
+	{
+		PyObject *ret = PyObject_CallFunctionObjArgs (h->callable,
+		                                              w, we, a,
+		                                              h->userdata, NULL);
+		eat = map_return_value (ret);
+		Py_XDECREF (ret);
+	}
+	else
+	{
+		PyErr_Print ();
+	}
+
+	Py_XDECREF (w);
+	Py_XDECREF (we);
+	Py_XDECREF (a);
+
+	PyGILState_Release (gil);
+	return eat;
+}
+
+/* hook_server_attrs trampoline. (word, word_eol, attrs, userdata). */
+static int
+server_attrs_trampoline (char *word[], char *word_eol[],
+                          hexchat_event_attrs *attrs, void *user)
+{
+	py_hook *h = user;
+	PyGILState_STATE gil = PyGILState_Ensure ();
+
+	PyObject *w = wordlist_to_pylist (word);
+	PyObject *we = wordlist_to_pylist (word_eol);
+	PyObject *a = hc_python_attrs_new (attrs ? attrs->server_time_utc : 0);
+	int eat = HEXCHAT_EAT_NONE;
+
+	if (w != NULL && we != NULL && a != NULL)
+	{
+		PyObject *ret = PyObject_CallFunctionObjArgs (h->callable,
+		                                              w, we, a,
+		                                              h->userdata, NULL);
+		eat = map_return_value (ret);
+		Py_XDECREF (ret);
+	}
+	else
+	{
+		PyErr_Print ();
+	}
+
+	Py_XDECREF (w);
+	Py_XDECREF (we);
+	Py_XDECREF (a);
 
 	PyGILState_Release (gil);
 	return eat;
@@ -407,6 +478,48 @@ hc_python_hooks_register_print (const char *name,
 	if (h->handle == NULL)
 	{
 		abort_hook (h, "hexchat_hook_print");
+		return NULL;
+	}
+	return finish_hook (h);
+}
+
+PyObject *
+hc_python_hooks_register_print_attrs (const char *name,
+                                       int pri,
+                                       PyObject *callable,
+                                       PyObject *userdata)
+{
+	py_hook *h = begin_hook (HC_PY_HOOK_PRINT_ATTRS, callable, userdata,
+	                          "hook_print_attrs");
+	if (h == NULL)
+		return NULL;
+
+	h->handle = hexchat_hook_print_attrs (ph, name, pri,
+	                                      print_attrs_trampoline, h);
+	if (h->handle == NULL)
+	{
+		abort_hook (h, "hexchat_hook_print_attrs");
+		return NULL;
+	}
+	return finish_hook (h);
+}
+
+PyObject *
+hc_python_hooks_register_server_attrs (const char *name,
+                                        int pri,
+                                        PyObject *callable,
+                                        PyObject *userdata)
+{
+	py_hook *h = begin_hook (HC_PY_HOOK_SERVER_ATTRS, callable, userdata,
+	                          "hook_server_attrs");
+	if (h == NULL)
+		return NULL;
+
+	h->handle = hexchat_hook_server_attrs (ph, name, pri,
+	                                       server_attrs_trampoline, h);
+	if (h->handle == NULL)
+	{
+		abort_hook (h, "hexchat_hook_server_attrs");
 		return NULL;
 	}
 	return finish_hook (h);

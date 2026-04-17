@@ -16,6 +16,7 @@
 #include <glib.h>
 
 #include "hc_python.h"
+#include "hc_python_attrs.h"
 #include "hc_python_hooks.h"
 #include "hc_python_module.h"
 
@@ -240,6 +241,48 @@ hc_py_hook_print (PyObject *self, PyObject *args, PyObject *kwargs)
 }
 
 static PyObject *
+hc_py_hook_print_attrs (PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	(void) self;
+	static char *kwlist[] = {"name", "callback", "userdata",
+	                          "priority", NULL};
+	const char *name;
+	PyObject *callback;
+	PyObject *userdata = Py_None;
+	int priority = HEXCHAT_PRI_NORM;
+
+	if (!PyArg_ParseTupleAndKeywords (args, kwargs, "sO|Oi:hook_print_attrs",
+	                                   kwlist,
+	                                   &name, &callback, &userdata,
+	                                   &priority))
+		return NULL;
+
+	return hc_python_hooks_register_print_attrs (name, priority,
+	                                              callback, userdata);
+}
+
+static PyObject *
+hc_py_hook_server_attrs (PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	(void) self;
+	static char *kwlist[] = {"name", "callback", "userdata",
+	                          "priority", NULL};
+	const char *name;
+	PyObject *callback;
+	PyObject *userdata = Py_None;
+	int priority = HEXCHAT_PRI_NORM;
+
+	if (!PyArg_ParseTupleAndKeywords (args, kwargs, "sO|Oi:hook_server_attrs",
+	                                   kwlist,
+	                                   &name, &callback, &userdata,
+	                                   &priority))
+		return NULL;
+
+	return hc_python_hooks_register_server_attrs (name, priority,
+	                                               callback, userdata);
+}
+
+static PyObject *
 hc_py_hook_timer (PyObject *self, PyObject *args, PyObject *kwargs)
 {
 	(void) self;
@@ -392,6 +435,19 @@ PyDoc_STRVAR (hook_print_doc,
 "`name` (e.g. 'Channel Message'). The callback receives\n"
 "(word, word_eol, userdata); word_eol is synthesised client-side.");
 
+PyDoc_STRVAR (hook_print_attrs_doc,
+"hook_print_attrs(name, callback, userdata=None, priority=PRI_NORM) -> hook\n"
+"\n"
+"Like hook_print, but the callback additionally receives a\n"
+"hexchat.Attribute exposing IRCv3 server-time and friends:\n"
+"(word, word_eol, attrs, userdata).");
+
+PyDoc_STRVAR (hook_server_attrs_doc,
+"hook_server_attrs(name, callback, userdata=None, priority=PRI_NORM) -> hook\n"
+"\n"
+"Like hook_server, plus the Attribute argument:\n"
+"(word, word_eol, attrs, userdata).");
+
 PyDoc_STRVAR (hook_timer_doc,
 "hook_timer(timeout, callback, userdata=None) -> hook\n"
 "\n"
@@ -436,6 +492,10 @@ static PyMethodDef _hexchat_methods[] = {
 	                        METH_VARARGS | METH_KEYWORDS, hook_server_doc},
 	{"hook_print",         (PyCFunction) hc_py_hook_print,
 	                        METH_VARARGS | METH_KEYWORDS, hook_print_doc},
+	{"hook_print_attrs",   (PyCFunction) hc_py_hook_print_attrs,
+	                        METH_VARARGS | METH_KEYWORDS, hook_print_attrs_doc},
+	{"hook_server_attrs",  (PyCFunction) hc_py_hook_server_attrs,
+	                        METH_VARARGS | METH_KEYWORDS, hook_server_attrs_doc},
 	{"hook_timer",         (PyCFunction) hc_py_hook_timer,
 	                        METH_VARARGS | METH_KEYWORDS, hook_timer_doc},
 	{"hook_unload",        (PyCFunction) hc_py_hook_unload,
@@ -502,6 +562,11 @@ PyInit__hexchat (void)
 	if (m == NULL)
 		return NULL;
 	if (populate_module (m) < 0)
+	{
+		Py_DECREF (m);
+		return NULL;
+	}
+	if (hc_python_attrs_init (m) < 0)
 	{
 		Py_DECREF (m);
 		return NULL;

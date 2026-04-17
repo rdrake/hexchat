@@ -269,6 +269,86 @@ main (void)
 		ok (hc_test_n_prints () == 3, "exactly three timer prints");
 	}
 
+	/* hook_print_attrs: Attribute wraps server_time_utc. */
+	hc_test_stubs_reset ();
+	hooks_before = hc_test_n_hooks ();
+	st = hc_python_interp_exec (
+	    "import _hexchat\n"
+	    "def apcb(w, we, attrs, ud):\n"
+	    "    _hexchat.print('attr.time=' + str(attrs.time))\n"
+	    "    _hexchat.print('attr.repr=' + repr(attrs))\n"
+	    "    return _hexchat.EAT_ALL\n"
+	    "_hexchat.hook_print_attrs('Channel Message', apcb)\n",
+	    NULL, &err);
+	ok (st == HC_PY_EXEC_OK_NO_VALUE, "hook_print_attrs registers");
+	g_free (err); err = NULL;
+	ok (hc_test_n_hooks () == hooks_before + 1,
+	    "print_attrs hook recorded");
+	{
+		hc_test_hook_entry *pe = hc_test_hook_at (hooks_before);
+		ok (pe != NULL && pe->kind == HC_TEST_HOOK_PRINT_ATTRS,
+		    "print_attrs hook has PRINT_ATTRS kind");
+
+		char *pword[32];
+		for (int i = 0; i < 32; i++)
+			pword[i] = (char *) "";
+		pword[1] = (char *) "alice";
+		pword[2] = (char *) "hi";
+		int p_eat = hc_test_hook_fire_print_attrs (hooks_before, pword,
+		                                            1700000000LL);
+		ok (p_eat == HEXCHAT_EAT_ALL,
+		    "print_attrs trampoline returns EAT_ALL");
+		ok (hc_test_n_prints () == 2, "print_attrs callback printed two lines");
+		ok (hc_test_print_at (0) != NULL
+		    && strcmp (hc_test_print_at (0), "attr.time=1700000000") == 0,
+		    "attrs.time round-trips to 1700000000");
+		ok (hc_test_print_at (1) != NULL
+		    && strstr (hc_test_print_at (1), "<hexchat.Attribute") != NULL,
+		    "attrs repr is <hexchat.Attribute ...>");
+	}
+
+	/* hook_server_attrs. */
+	hc_test_stubs_reset ();
+	hooks_before = hc_test_n_hooks ();
+	st = hc_python_interp_exec (
+	    "import _hexchat\n"
+	    "def sacb(w, we, attrs, ud):\n"
+	    "    _hexchat.print('srv.time=' + str(attrs.time))\n"
+	    "    return _hexchat.EAT_NONE\n"
+	    "_hexchat.hook_server_attrs('PRIVMSG', sacb)\n",
+	    NULL, &err);
+	ok (st == HC_PY_EXEC_OK_NO_VALUE, "hook_server_attrs registers");
+	g_free (err); err = NULL;
+	{
+		hc_test_hook_entry *se = hc_test_hook_at (hooks_before);
+		ok (se != NULL && se->kind == HC_TEST_HOOK_SERVER_ATTRS,
+		    "server_attrs hook has SERVER_ATTRS kind");
+
+		char *sword[32];
+		char *seol[32];
+		for (int i = 0; i < 32; i++) { sword[i] = (char *)""; seol[i] = (char *)""; }
+		sword[1] = (char *) ":nick";
+		sword[2] = (char *) "PRIVMSG";
+		int eat_sa = hc_test_hook_fire_server_attrs (hooks_before, sword,
+		                                              seol, 42);
+		ok (eat_sa == HEXCHAT_EAT_NONE,
+		    "server_attrs trampoline returns EAT_NONE");
+		ok (hc_test_n_prints () == 1, "server_attrs printed one line");
+		ok (hc_test_last_print () != NULL
+		    && strcmp (hc_test_last_print (), "srv.time=42") == 0,
+		    "attrs.time passed through to server_attrs callback");
+	}
+
+	/* _hexchat.Attribute is constructible from scripts too. */
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').Attribute(time=99).time",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "Attribute() constructor works");
+	ok (repr != NULL && strcmp (repr, "99") == 0,
+	    "constructed Attribute.time == 99");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
 	/* hook_unload: only fires via fire_unload. */
 	hc_test_stubs_reset ();
 	hooks_before = hc_test_n_hooks ();

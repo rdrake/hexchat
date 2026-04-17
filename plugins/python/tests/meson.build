@@ -5,6 +5,7 @@ python_test_common_deps = [libgio_dep, hexchat_plugin_dep, python_dep]
 python_test_common_inc = [python3_inc, include_directories('.')]
 python_test_common_sources = files(
   'stubs.c',
+  '../src/hc_python_attrs.c',
   '../src/hc_python_hooks.c',
   '../src/hc_python_module.c',
 )

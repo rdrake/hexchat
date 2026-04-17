@@ -103,6 +103,34 @@ hc_test_hook_fire_print (guint index, char *word[])
 }
 
 int
+hc_test_hook_fire_print_attrs (guint index, char *word[],
+                                long long server_time_utc)
+{
+	hc_test_hook_entry *h = hc_test_hook_at (index);
+	if (h == NULL || !h->alive || h->callback == NULL)
+		return 0;
+	if (h->kind != HC_TEST_HOOK_PRINT_ATTRS)
+		return 0;
+	hexchat_event_attrs attrs = { .server_time_utc = (time_t) server_time_utc };
+	hc_test_hook_print_attrs_cb cb = (hc_test_hook_print_attrs_cb) h->callback;
+	return cb (word, &attrs, h->userdata);
+}
+
+int
+hc_test_hook_fire_server_attrs (guint index, char *word[], char *word_eol[],
+                                 long long server_time_utc)
+{
+	hc_test_hook_entry *h = hc_test_hook_at (index);
+	if (h == NULL || !h->alive || h->callback == NULL)
+		return 0;
+	if (h->kind != HC_TEST_HOOK_SERVER_ATTRS)
+		return 0;
+	hexchat_event_attrs attrs = { .server_time_utc = (time_t) server_time_utc };
+	hc_test_hook_server_attrs_cb cb = (hc_test_hook_server_attrs_cb) h->callback;
+	return cb (word, word_eol, &attrs, h->userdata);
+}
+
+int
 hc_test_hook_fire_timer (guint index)
 {
 	hc_test_hook_entry *h = hc_test_hook_at (index);
@@ -364,6 +392,40 @@ hexchat_hook_print (hexchat_plugin *plugin, const char *name, int pri,
 	(void) plugin;
 	hc_test_hook_entry *h = g_new0 (hc_test_hook_entry, 1);
 	h->kind = HC_TEST_HOOK_PRINT;
+	h->name = g_strdup (name);
+	h->pri = pri;
+	h->callback = (void *) callback;
+	h->userdata = userdata;
+	h->alive = TRUE;
+	g_ptr_array_add (hooks_array (), h);
+	return (hexchat_hook *) h;
+}
+
+hexchat_hook *
+hexchat_hook_print_attrs (hexchat_plugin *plugin, const char *name, int pri,
+                            hc_test_hook_print_attrs_cb callback,
+                            void *userdata)
+{
+	(void) plugin;
+	hc_test_hook_entry *h = g_new0 (hc_test_hook_entry, 1);
+	h->kind = HC_TEST_HOOK_PRINT_ATTRS;
+	h->name = g_strdup (name);
+	h->pri = pri;
+	h->callback = (void *) callback;
+	h->userdata = userdata;
+	h->alive = TRUE;
+	g_ptr_array_add (hooks_array (), h);
+	return (hexchat_hook *) h;
+}
+
+hexchat_hook *
+hexchat_hook_server_attrs (hexchat_plugin *plugin, const char *name, int pri,
+                             hc_test_hook_server_attrs_cb callback,
+                             void *userdata)
+{
+	(void) plugin;
+	hc_test_hook_entry *h = g_new0 (hc_test_hook_entry, 1);
+	h->kind = HC_TEST_HOOK_SERVER_ATTRS;
 	h->name = g_strdup (name);
 	h->pri = pri;
 	h->callback = (void *) callback;

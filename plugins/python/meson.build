@@ -16,7 +16,9 @@ endif
 
 python3_sources = files(
   'src/hc_python.c',
+  'src/hc_python_attrs.c',
   'src/hc_python_console.c',
+  'src/hc_python_hooks.c',
   'src/hc_python_interp.c',
   'src/hc_python_module.c',
 )
