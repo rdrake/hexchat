@@ -299,6 +299,22 @@ char *xdir = NULL;	/* utf-8 encoding */
 #include <shlobj.h>
 #endif
 
+void
+cfgfiles_set_config_dir (const char *path)
+{
+	size_t len;
+
+	g_free (xdir);
+	xdir = g_strdup (path);
+
+	if (!xdir)
+		return;
+
+	len = strlen (xdir);
+	if (len > 1 && xdir[len - 1] == G_DIR_SEPARATOR)
+		xdir[len - 1] = 0;
+}
+
 char *
 get_xdir (void)
 {

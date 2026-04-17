@@ -30,6 +30,7 @@ extern char *xdir;
 extern const char * const languages[LANGUAGES_LENGTH];
 
 char *cfg_get_str (char *cfg, const char *var, char *dest, int dest_len);
+void cfgfiles_set_config_dir (const char *path);
 int cfg_get_bool (char *var);
 int cfg_get_int_with_result (char *cfg, char *var, int *result);
 int cfg_get_int (char *cfg, char *var);
