@@ -13,6 +13,8 @@
  * directly.
  */
 
+#include <glib.h>
+
 #include "hc_python.h"
 #include "hc_python_module.h"
 
@@ -67,6 +69,109 @@ hc_py_nickcmp (PyObject *self, PyObject *args)
 
 	int rc = ph != NULL ? hexchat_nickcmp (ph, s1, s2) : 0;
 	return PyLong_FromLong (rc);
+}
+
+static PyObject *
+hc_py_pluginpref_set_str (PyObject *self, PyObject *args)
+{
+	(void) self;
+	const char *name;
+	const char *value;
+	if (!PyArg_ParseTuple (args, "ss:pluginpref_set_str", &name, &value))
+		return NULL;
+
+	int rc = ph != NULL ? hexchat_pluginpref_set_str (ph, name, value) : 0;
+	return PyBool_FromLong (rc != 0);
+}
+
+static PyObject *
+hc_py_pluginpref_get_str (PyObject *self, PyObject *args)
+{
+	(void) self;
+	const char *name;
+	if (!PyArg_ParseTuple (args, "s:pluginpref_get_str", &name))
+		return NULL;
+
+	/* Real API requires a 512-byte buffer. */
+	char buf[512] = {0};
+	if (ph == NULL || hexchat_pluginpref_get_str (ph, name, buf) != 1)
+		Py_RETURN_NONE;
+	return PyUnicode_FromString (buf);
+}
+
+static PyObject *
+hc_py_pluginpref_set_int (PyObject *self, PyObject *args)
+{
+	(void) self;
+	const char *name;
+	int value;
+	if (!PyArg_ParseTuple (args, "si:pluginpref_set_int", &name, &value))
+		return NULL;
+
+	int rc = ph != NULL ? hexchat_pluginpref_set_int (ph, name, value) : 0;
+	return PyBool_FromLong (rc != 0);
+}
+
+static PyObject *
+hc_py_pluginpref_get_int (PyObject *self, PyObject *args)
+{
+	(void) self;
+	const char *name;
+	if (!PyArg_ParseTuple (args, "s:pluginpref_get_int", &name))
+		return NULL;
+
+	int rc = ph != NULL ? hexchat_pluginpref_get_int (ph, name) : -1;
+	return PyLong_FromLong (rc);
+}
+
+static PyObject *
+hc_py_pluginpref_delete (PyObject *self, PyObject *args)
+{
+	(void) self;
+	const char *name;
+	if (!PyArg_ParseTuple (args, "s:pluginpref_delete", &name))
+		return NULL;
+
+	int rc = ph != NULL ? hexchat_pluginpref_delete (ph, name) : 0;
+	return PyBool_FromLong (rc != 0);
+}
+
+static PyObject *
+hc_py_pluginpref_list (PyObject *self, PyObject *args)
+{
+	(void) self;
+	(void) args;
+
+	/* Real API requires a 4096-byte buffer; the result is a comma-
+	 * separated list of preference names. */
+	char buf[4096] = {0};
+	if (ph == NULL || hexchat_pluginpref_list (ph, buf) != 1)
+		return PyList_New (0);
+
+	PyObject *result = PyList_New (0);
+	if (result == NULL)
+		return NULL;
+
+	if (buf[0] == '\0')
+		return result;
+
+	char **parts = g_strsplit (buf, ",", 0);
+	for (char **p = parts; *p != NULL; p++)
+	{
+		if ((*p)[0] == '\0')
+			continue;
+		PyObject *item = PyUnicode_FromString (*p);
+		if (item == NULL)
+		{
+			g_strfreev (parts);
+			Py_DECREF (result);
+			return NULL;
+		}
+		PyList_Append (result, item);
+		Py_DECREF (item);
+	}
+	g_strfreev (parts);
+	return result;
 }
 
 static PyObject *
@@ -125,6 +230,37 @@ PyDoc_STRVAR (strip_doc,
 "2 strips attributes, 3 (default) strips both. A negative length\n"
 "processes the whole string.");
 
+PyDoc_STRVAR (pluginpref_set_str_doc,
+"pluginpref_set_str(name, value) -> bool\n"
+"\n"
+"Set a string-valued plugin preference. Returns True on success.");
+
+PyDoc_STRVAR (pluginpref_get_str_doc,
+"pluginpref_get_str(name) -> str | None\n"
+"\n"
+"Retrieve a plugin preference as a string, or None if unset.");
+
+PyDoc_STRVAR (pluginpref_set_int_doc,
+"pluginpref_set_int(name, value) -> bool\n"
+"\n"
+"Set an integer-valued plugin preference. Returns True on success.");
+
+PyDoc_STRVAR (pluginpref_get_int_doc,
+"pluginpref_get_int(name) -> int\n"
+"\n"
+"Retrieve a plugin preference as an integer. Returns -1 when the\n"
+"preference is unset or cannot be parsed.");
+
+PyDoc_STRVAR (pluginpref_delete_doc,
+"pluginpref_delete(name) -> bool\n"
+"\n"
+"Delete a plugin preference. Returns True if the preference existed.");
+
+PyDoc_STRVAR (pluginpref_list_doc,
+"pluginpref_list() -> list[str]\n"
+"\n"
+"Return the list of currently-set plugin preference names.");
+
 static PyMethodDef _hexchat_methods[] = {
 	{"print",    hc_py_print,    METH_VARARGS, print_doc},
 	{"command",  hc_py_command,  METH_VARARGS, command_doc},
@@ -132,6 +268,18 @@ static PyMethodDef _hexchat_methods[] = {
 	{"nickcmp",  hc_py_nickcmp,  METH_VARARGS, nickcmp_doc},
 	{"strip",    (PyCFunction) hc_py_strip,
 	             METH_VARARGS | METH_KEYWORDS, strip_doc},
+	{"pluginpref_set_str", hc_py_pluginpref_set_str, METH_VARARGS,
+	                        pluginpref_set_str_doc},
+	{"pluginpref_get_str", hc_py_pluginpref_get_str, METH_VARARGS,
+	                        pluginpref_get_str_doc},
+	{"pluginpref_set_int", hc_py_pluginpref_set_int, METH_VARARGS,
+	                        pluginpref_set_int_doc},
+	{"pluginpref_get_int", hc_py_pluginpref_get_int, METH_VARARGS,
+	                        pluginpref_get_int_doc},
+	{"pluginpref_delete",  hc_py_pluginpref_delete,  METH_VARARGS,
+	                        pluginpref_delete_doc},
+	{"pluginpref_list",    hc_py_pluginpref_list,    METH_NOARGS,
+	                        pluginpref_list_doc},
 	{NULL, NULL, 0, NULL}
 };
 

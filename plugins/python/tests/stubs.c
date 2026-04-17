@@ -23,7 +23,8 @@ hexchat_plugin *ph = &fake_plugin;
 
 static GPtrArray *captured_prints;
 static GPtrArray *captured_commands;
-static GHashTable *info_table;  /* id -> value (borrowed) */
+static GHashTable *info_table;      /* id -> value (borrowed) */
+static GHashTable *pluginpref_table; /* char* -> char* (owned) */
 
 static GPtrArray *
 ensure_array (GPtrArray **p)
@@ -42,6 +43,17 @@ hc_test_stubs_reset (void)
 		g_ptr_array_set_size (captured_commands, 0);
 	if (info_table != NULL)
 		g_hash_table_remove_all (info_table);
+	if (pluginpref_table != NULL)
+		g_hash_table_remove_all (pluginpref_table);
+}
+
+static GHashTable *
+prefs_table (void)
+{
+	if (pluginpref_table == NULL)
+		pluginpref_table = g_hash_table_new_full (g_str_hash, g_str_equal,
+		                                          g_free, g_free);
+	return pluginpref_table;
 }
 
 void
@@ -173,4 +185,82 @@ hexchat_free (hexchat_plugin *plugin, void *ptr)
 {
 	(void) plugin;
 	g_free (ptr);
+}
+
+int
+hexchat_pluginpref_set_str (hexchat_plugin *plugin, const char *var,
+                            const char *value)
+{
+	(void) plugin;
+	g_hash_table_insert (prefs_table (), g_strdup (var), g_strdup (value));
+	return 1;
+}
+
+int
+hexchat_pluginpref_get_str (hexchat_plugin *plugin, const char *var,
+                            char *dest)
+{
+	(void) plugin;
+	if (pluginpref_table == NULL)
+		return 0;
+	const char *v = g_hash_table_lookup (pluginpref_table, var);
+	if (v == NULL)
+		return 0;
+	/* Real API's dest buffer is 512 bytes; emulate the same contract. */
+	g_strlcpy (dest, v, 512);
+	return 1;
+}
+
+int
+hexchat_pluginpref_set_int (hexchat_plugin *plugin, const char *var,
+                            int value)
+{
+	char buf[32];
+	g_snprintf (buf, sizeof buf, "%d", value);
+	return hexchat_pluginpref_set_str (plugin, var, buf);
+}
+
+int
+hexchat_pluginpref_get_int (hexchat_plugin *plugin, const char *var)
+{
+	(void) plugin;
+	if (pluginpref_table == NULL)
+		return -1;
+	const char *v = g_hash_table_lookup (pluginpref_table, var);
+	if (v == NULL)
+		return -1;
+	return (int) g_ascii_strtoll (v, NULL, 10);
+}
+
+int
+hexchat_pluginpref_delete (hexchat_plugin *plugin, const char *var)
+{
+	(void) plugin;
+	if (pluginpref_table == NULL)
+		return 0;
+	return g_hash_table_remove (pluginpref_table, var) ? 1 : 0;
+}
+
+int
+hexchat_pluginpref_list (hexchat_plugin *plugin, char *dest)
+{
+	(void) plugin;
+	GString *s = g_string_new (NULL);
+	if (pluginpref_table != NULL)
+	{
+		GHashTableIter it;
+		gpointer key;
+		g_hash_table_iter_init (&it, pluginpref_table);
+		while (g_hash_table_iter_next (&it, &key, NULL))
+		{
+			if (s->len > 0)
+				g_string_append_c (s, ',');
+			g_string_append (s, (const char *) key);
+		}
+	}
+	/* Real API: 4096-byte dest, returns 1 on success, 0 on failure.
+	 * Empty table still returns 1 with an empty string. */
+	g_strlcpy (dest, s->str, 4096);
+	g_string_free (s, TRUE);
+	return 1;
 }

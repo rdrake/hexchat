@@ -184,6 +184,84 @@ main (void)
 	g_free (err); err = NULL;
 	g_free (repr); repr = NULL;
 
+	/* pluginpref_set_str / _get_str round-trip. */
+	hc_test_stubs_reset ();
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').pluginpref_set_str('greeting', 'hi')",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "pluginpref_set_str returns");
+	ok (repr != NULL && strcmp (repr, "True") == 0,
+	    "pluginpref_set_str -> True");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').pluginpref_get_str('greeting')",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "pluginpref_get_str returns");
+	ok (repr != NULL && strcmp (repr, "'hi'") == 0,
+	    "round-tripped greeting is 'hi'");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	/* Missing key -> None. */
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').pluginpref_get_str('missing') is None",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "pluginpref_get_str on missing returns");
+	ok (repr != NULL && strcmp (repr, "True") == 0,
+	    "missing pref yields None");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	/* pluginpref_set_int / _get_int. */
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').pluginpref_set_int('count', 42)",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "pluginpref_set_int returns");
+	ok (repr != NULL && strcmp (repr, "True") == 0,
+	    "pluginpref_set_int -> True");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').pluginpref_get_int('count')",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "pluginpref_get_int returns");
+	ok (repr != NULL && strcmp (repr, "42") == 0,
+	    "round-tripped count is 42");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	/* pluginpref_list returns a list of keys. */
+	st = hc_python_interp_exec (
+	    "sorted(__import__('_hexchat').pluginpref_list())",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "pluginpref_list returns");
+	ok (repr != NULL && strcmp (repr, "['count', 'greeting']") == 0,
+	    "pluginpref_list enumerates both keys");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	/* pluginpref_delete removes the key. */
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').pluginpref_delete('count')",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "pluginpref_delete returns");
+	ok (repr != NULL && strcmp (repr, "True") == 0,
+	    "pluginpref_delete existing -> True");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').pluginpref_delete('missing')",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "pluginpref_delete missing returns");
+	ok (repr != NULL && strcmp (repr, "False") == 0,
+	    "pluginpref_delete missing -> False");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
 	hc_python_interp_stop ();
 
 	printf ("1..%d\n", n_tests);
