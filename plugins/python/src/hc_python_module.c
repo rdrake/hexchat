@@ -19,6 +19,9 @@
 #include "hc_python_attrs.h"
 #include "hc_python_hooks.h"
 #include "hc_python_module.h"
+#include "hc_python_plugin.h"
+
+#define HC_PLUGIN_CAPSULE "_hexchat.plugin"
 
 static PyObject *
 hc_py_print (PyObject *self, PyObject *args)
@@ -325,6 +328,200 @@ hc_py_unhook (PyObject *self, PyObject *args)
 	return hc_python_hooks_unregister (hook);
 }
 
+/* ------------------------------------------------------------------ */
+/* Loader bridge. These functions are prefixed with an underscore and  */
+/* are meant to be consumed by hexchat._loader, not by user scripts.   */
+/* Each plugin handle is a PyCapsule wrapping a py_plugin *.           */
+/* ------------------------------------------------------------------ */
+
+static void
+plugin_capsule_destructor (PyObject *capsule)
+{
+	/* The Python loader is responsible for calling _unregister_plugin.
+	 * If the capsule is dropped without that, do nothing — leaving the
+	 * entry in the registry is preferable to freeing it and leaving
+	 * stale py_plugin pointers in hook owners. */
+	(void) capsule;
+}
+
+static py_plugin *
+plugin_from_capsule (PyObject *capsule)
+{
+	if (!PyCapsule_CheckExact (capsule)
+	    || !PyCapsule_IsValid (capsule, HC_PLUGIN_CAPSULE))
+	{
+		PyErr_SetString (PyExc_TypeError,
+		                 "expected a plugin handle from _register_plugin");
+		return NULL;
+	}
+	py_plugin *p = PyCapsule_GetPointer (capsule, HC_PLUGIN_CAPSULE);
+	if (p == NULL && !PyErr_Occurred ())
+		PyErr_SetString (PyExc_RuntimeError,
+		                 "plugin handle is invalid (already unregistered?)");
+	return p;
+}
+
+static PyObject *
+hc_py_register_plugin (PyObject *self, PyObject *args)
+{
+	(void) self;
+	const char *filename;
+	PyObject *module;
+	if (!PyArg_ParseTuple (args, "sO:_register_plugin",
+	                        &filename, &module))
+		return NULL;
+
+	py_plugin *p = hc_python_plugin_new (filename, module);
+	if (p == NULL)
+	{
+		PyErr_SetString (PyExc_RuntimeError,
+		                 "failed to allocate plugin record");
+		return NULL;
+	}
+	hc_python_plugin_registry_add (p);
+
+	PyObject *cap = PyCapsule_New (p, HC_PLUGIN_CAPSULE,
+	                                plugin_capsule_destructor);
+	if (cap == NULL)
+	{
+		hc_python_plugin_registry_remove (p);
+		hc_python_plugin_free (p);
+		return NULL;
+	}
+	return cap;
+}
+
+static PyObject *
+hc_py_unregister_plugin (PyObject *self, PyObject *args)
+{
+	(void) self;
+	PyObject *capsule;
+	if (!PyArg_ParseTuple (args, "O:_unregister_plugin", &capsule))
+		return NULL;
+
+	py_plugin *p = plugin_from_capsule (capsule);
+	if (p == NULL)
+		return NULL;
+
+	hc_python_plugin_registry_remove (p);
+	hc_python_plugin_free (p);
+	PyCapsule_SetContext (capsule, NULL);  /* disarm future lookups */
+	Py_RETURN_NONE;
+}
+
+static PyObject *
+hc_py_set_metadata (PyObject *self, PyObject *args)
+{
+	(void) self;
+	PyObject *capsule;
+	const char *name;
+	const char *version;
+	const char *description;
+	const char *author;
+	if (!PyArg_ParseTuple (args, "Ozzzz:_set_metadata",
+	                        &capsule, &name, &version, &description, &author))
+		return NULL;
+
+	py_plugin *p = plugin_from_capsule (capsule);
+	if (p == NULL)
+		return NULL;
+
+	hc_python_plugin_set_metadata (p, name, version, description, author);
+	Py_RETURN_NONE;
+}
+
+static PyObject *
+hc_py_push_active (PyObject *self, PyObject *args)
+{
+	(void) self;
+	PyObject *capsule;
+	if (!PyArg_ParseTuple (args, "O:_push_active_plugin", &capsule))
+		return NULL;
+
+	py_plugin *p = plugin_from_capsule (capsule);
+	if (p == NULL)
+		return NULL;
+	hc_python_plugin_push_active (p);
+	Py_RETURN_NONE;
+}
+
+static PyObject *
+hc_py_pop_active (PyObject *self, PyObject *args)
+{
+	(void) self;
+	(void) args;
+	hc_python_plugin_pop_active ();
+	Py_RETURN_NONE;
+}
+
+static PyObject *
+hc_py_release_plugin_hooks (PyObject *self, PyObject *args)
+{
+	(void) self;
+	PyObject *capsule;
+	if (!PyArg_ParseTuple (args, "O:_release_plugin_hooks", &capsule))
+		return NULL;
+
+	py_plugin *p = plugin_from_capsule (capsule);
+	if (p == NULL)
+		return NULL;
+	hc_python_hooks_release_for_plugin (p);
+	Py_RETURN_NONE;
+}
+
+static PyObject *
+hc_py_fire_unload (PyObject *self, PyObject *args)
+{
+	(void) self;
+	PyObject *capsule;
+	if (!PyArg_ParseTuple (args, "O:_fire_unload_for_plugin", &capsule))
+		return NULL;
+
+	py_plugin *p = plugin_from_capsule (capsule);
+	if (p == NULL)
+		return NULL;
+	hc_python_hooks_fire_unload_for_plugin (p);
+	Py_RETURN_NONE;
+}
+
+static PyObject *
+hc_py_registry_entries (PyObject *self, PyObject *args)
+{
+	(void) self;
+	(void) args;
+
+	GList *plugins = hc_python_plugin_registry_list ();
+	PyObject *result = PyList_New (0);
+	if (result == NULL)
+	{
+		g_list_free (plugins);
+		return NULL;
+	}
+	for (GList *it = plugins; it != NULL; it = it->next)
+	{
+		py_plugin *p = it->data;
+		const char *name = hc_python_plugin_name (p);
+		const char *version = hc_python_plugin_version (p);
+		const char *description = hc_python_plugin_description (p);
+		const char *filename = hc_python_plugin_filename (p);
+		PyObject *tup = Py_BuildValue ("(ssss)",
+		                                name ? name : "",
+		                                version ? version : "",
+		                                description ? description : "",
+		                                filename ? filename : "");
+		if (tup == NULL)
+		{
+			Py_DECREF (result);
+			g_list_free (plugins);
+			return NULL;
+		}
+		PyList_Append (result, tup);
+		Py_DECREF (tup);
+	}
+	g_list_free (plugins);
+	return result;
+}
+
 static PyObject *
 hc_py_strip (PyObject *self, PyObject *args, PyObject *kwargs)
 {
@@ -502,6 +699,19 @@ static PyMethodDef _hexchat_methods[] = {
 	                        METH_VARARGS | METH_KEYWORDS, hook_unload_doc},
 	{"unhook",             hc_py_unhook,             METH_VARARGS,
 	                        unhook_doc},
+
+	/* Loader bridge — leading underscore marks these as internal to
+	 * the hexchat._loader module. Public user scripts should not call
+	 * them directly. */
+	{"_register_plugin",      hc_py_register_plugin,      METH_VARARGS, NULL},
+	{"_unregister_plugin",    hc_py_unregister_plugin,    METH_VARARGS, NULL},
+	{"_set_metadata",         hc_py_set_metadata,         METH_VARARGS, NULL},
+	{"_push_active_plugin",   hc_py_push_active,          METH_VARARGS, NULL},
+	{"_pop_active_plugin",    hc_py_pop_active,           METH_NOARGS,  NULL},
+	{"_release_plugin_hooks", hc_py_release_plugin_hooks, METH_VARARGS, NULL},
+	{"_fire_unload_for_plugin", hc_py_fire_unload,        METH_VARARGS, NULL},
+	{"_plugin_entries",       hc_py_registry_entries,     METH_NOARGS,  NULL},
+
 	{NULL, NULL, 0, NULL}
 };
 

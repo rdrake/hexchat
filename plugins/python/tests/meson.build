@@ -77,6 +77,20 @@ test('Python plugin ownership', python_plugin_owner_test,
   timeout: 30,
 )
 
+python_loader_test = executable('python_loader_test',
+  ['test_loader.c', '../src/hc_python_interp.c', python_test_common_sources],
+  dependencies: python_test_common_deps,
+  include_directories: python_test_common_inc,
+)
+
+test('Python loader',
+  python_loader_test,
+  args: [meson.project_source_root() / 'plugins' / 'python' / 'tests' / 'fixtures' / 'sample_plugin.py'],
+  env: python_test_env,
+  protocol: 'tap',
+  timeout: 30,
+)
+
 # Integration test: dlopens the real plugin .dylib and drives the
 # registered /py command through the stubs. Catches regressions in
 # symbol resolution and init ordering that the unit tests can't see.

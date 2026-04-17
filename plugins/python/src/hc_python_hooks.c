@@ -146,12 +146,29 @@ map_return_value (PyObject *ret)
 	return truth > 0 ? HEXCHAT_EAT_ALL : HEXCHAT_EAT_NONE;
 }
 
+/* Scopes the owning plugin's attribution for anything the callback
+ * does while it's running (including registering more hooks). */
+static void
+push_owner (py_hook *h)
+{
+	if (h->owner != NULL)
+		hc_python_plugin_push_active (h->owner);
+}
+
+static void
+pop_owner (py_hook *h)
+{
+	if (h->owner != NULL)
+		hc_python_plugin_pop_active ();
+}
+
 /* Shared by hook_command and hook_server — same callback signature. */
 static int
 word_pair_trampoline (char *word[], char *word_eol[], void *user)
 {
 	py_hook *h = user;
 	PyGILState_STATE gil = PyGILState_Ensure ();
+	push_owner (h);
 
 	PyObject *w = wordlist_to_pylist (word);
 	PyObject *we = wordlist_to_pylist (word_eol);
@@ -173,6 +190,7 @@ word_pair_trampoline (char *word[], char *word_eol[], void *user)
 	Py_XDECREF (w);
 	Py_XDECREF (we);
 
+	pop_owner (h);
 	PyGILState_Release (gil);
 	return eat;
 }
@@ -184,6 +202,7 @@ print_attrs_trampoline (char *word[], hexchat_event_attrs *attrs, void *user)
 {
 	py_hook *h = user;
 	PyGILState_STATE gil = PyGILState_Ensure ();
+	push_owner (h);
 
 	PyObject *w = wordlist_to_pylist (word);
 	PyObject *we = w != NULL ? synthesize_word_eol (w) : NULL;
@@ -207,6 +226,7 @@ print_attrs_trampoline (char *word[], hexchat_event_attrs *attrs, void *user)
 	Py_XDECREF (we);
 	Py_XDECREF (a);
 
+	pop_owner (h);
 	PyGILState_Release (gil);
 	return eat;
 }
@@ -218,6 +238,7 @@ server_attrs_trampoline (char *word[], char *word_eol[],
 {
 	py_hook *h = user;
 	PyGILState_STATE gil = PyGILState_Ensure ();
+	push_owner (h);
 
 	PyObject *w = wordlist_to_pylist (word);
 	PyObject *we = wordlist_to_pylist (word_eol);
@@ -241,6 +262,7 @@ server_attrs_trampoline (char *word[], char *word_eol[],
 	Py_XDECREF (we);
 	Py_XDECREF (a);
 
+	pop_owner (h);
 	PyGILState_Release (gil);
 	return eat;
 }
@@ -252,6 +274,7 @@ print_trampoline (char *word[], void *user)
 {
 	py_hook *h = user;
 	PyGILState_STATE gil = PyGILState_Ensure ();
+	push_owner (h);
 
 	PyObject *w = wordlist_to_pylist (word);
 	PyObject *we = w != NULL ? synthesize_word_eol (w) : NULL;
@@ -273,6 +296,7 @@ print_trampoline (char *word[], void *user)
 	Py_XDECREF (w);
 	Py_XDECREF (we);
 
+	pop_owner (h);
 	PyGILState_Release (gil);
 	return eat;
 }
@@ -286,6 +310,7 @@ timer_trampoline (void *user)
 {
 	py_hook *h = user;
 	PyGILState_STATE gil = PyGILState_Ensure ();
+	push_owner (h);
 
 	PyObject *ret = PyObject_CallFunctionObjArgs (h->callable,
 	                                              h->userdata, NULL);
@@ -333,6 +358,7 @@ timer_trampoline (void *user)
 		h->released = TRUE;
 	}
 
+	pop_owner (h);
 	PyGILState_Release (gil);
 	return keep;
 }

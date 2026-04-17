@@ -38,6 +38,7 @@ install_data(['_hexchat.py', 'hexchat.py', 'xchat.py'],
 python_pkgdir = join_paths(get_option('libdir'), 'hexchat/python')
 install_data(
   'py/hexchat/__init__.py',
+  'py/hexchat/_loader.py',
   'py/hexchat/_stdio.py',
   install_dir: join_paths(python_pkgdir, 'hexchat')
 )
