@@ -21,6 +21,7 @@ python3_sources = files(
   'src/hc_python_hooks.c',
   'src/hc_python_interp.c',
   'src/hc_python_module.c',
+  'src/hc_python_plugin.c',
 )
 
 python3_inc = include_directories('src')

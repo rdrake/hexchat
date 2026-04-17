@@ -8,6 +8,7 @@ python_test_common_sources = files(
   '../src/hc_python_attrs.c',
   '../src/hc_python_hooks.c',
   '../src/hc_python_module.c',
+  '../src/hc_python_plugin.c',
 )
 
 python_empty_module_test = executable('python_empty_module_test',
@@ -59,6 +60,18 @@ python_api_hooks_test = executable('python_api_hooks_test',
 )
 
 test('Python API hooks', python_api_hooks_test,
+  env: python_test_env,
+  protocol: 'tap',
+  timeout: 30,
+)
+
+python_plugin_owner_test = executable('python_plugin_owner_test',
+  ['test_plugin_owner.c', '../src/hc_python_interp.c', python_test_common_sources],
+  dependencies: python_test_common_deps,
+  include_directories: python_test_common_inc,
+)
+
+test('Python plugin ownership', python_plugin_owner_test,
   env: python_test_env,
   protocol: 'tap',
   timeout: 30,

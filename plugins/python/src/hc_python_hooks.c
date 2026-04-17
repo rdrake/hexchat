@@ -12,6 +12,7 @@
 #include "hc_python.h"
 #include "hc_python_attrs.h"
 #include "hc_python_hooks.h"
+#include "hc_python_plugin.h"
 
 #define HC_PYTHON_CAPSULE_NAME "_hexchat.hook"
 
@@ -32,6 +33,10 @@ typedef struct py_hook
 	hexchat_hook *handle;   /* NULL for HC_PY_HOOK_UNLOAD */
 	PyObject *callable;     /* strong ref */
 	PyObject *userdata;     /* strong ref (Py_None if not given) */
+	py_plugin *owner;       /* weak ref (may be NULL); attributed at
+	                         * registration from the active-plugin
+	                         * stack — release_for_plugin matches on
+	                         * this. */
 	gboolean released;      /* set by unregister to guard capsule destructor */
 } py_hook;
 
@@ -390,6 +395,7 @@ begin_hook (py_hook_kind kind, PyObject *callable, PyObject *userdata,
 		userdata = Py_None;
 	Py_INCREF (userdata);
 	h->userdata = userdata;
+	h->owner = hc_python_plugin_active ();
 	return h;
 }
 
@@ -613,4 +619,45 @@ hc_python_hooks_release_all (void)
 		g_free (h);
 	}
 	g_ptr_array_set_size (live_hooks, 0);
+}
+
+void
+hc_python_hooks_release_for_plugin (py_plugin *owner)
+{
+	if (live_hooks == NULL)
+		return;
+
+	/* Walk from the end so in-place removal doesn't skip entries. */
+	for (guint i = live_hooks->len; i > 0; i--)
+	{
+		py_hook *h = g_ptr_array_index (live_hooks, i - 1);
+		if (h->owner != owner)
+			continue;
+		hook_release (h);
+		g_free (h);
+		g_ptr_array_remove_index (live_hooks, i - 1);
+	}
+}
+
+void
+hc_python_hooks_fire_unload_for_plugin (py_plugin *owner)
+{
+	if (live_hooks == NULL)
+		return;
+
+	for (guint i = 0; i < live_hooks->len; i++)
+	{
+		py_hook *h = g_ptr_array_index (live_hooks, i);
+		if (h->owner != owner || h->kind != HC_PY_HOOK_UNLOAD
+		    || h->released)
+			continue;
+
+		PyObject *ret = PyObject_CallFunctionObjArgs (h->callable,
+		                                              h->userdata, NULL);
+		if (ret == NULL)
+			PyErr_Print ();
+		Py_XDECREF (ret);
+
+		hook_release (h);
+	}
 }

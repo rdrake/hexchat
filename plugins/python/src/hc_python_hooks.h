@@ -96,4 +96,13 @@ PyObject *hc_python_hooks_unregister (PyObject *capsule);
  * once. */
 void hc_python_hooks_release_all (void);
 
+/* Unhooks and drops references for every hook whose owning plugin
+ * equals `owner`, leaving others in place. Used by the loader to
+ * tear down a single script on /py unload. */
+struct py_plugin;
+void hc_python_hooks_release_for_plugin (struct py_plugin *owner);
+
+/* Fires unload hooks belonging to `owner` and releases them. */
+void hc_python_hooks_fire_unload_for_plugin (struct py_plugin *owner);
+
 #endif
