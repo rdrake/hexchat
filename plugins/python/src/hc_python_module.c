@@ -56,6 +56,44 @@ hc_py_get_info (PyObject *self, PyObject *args)
 	return PyUnicode_FromString (value);
 }
 
+static PyObject *
+hc_py_nickcmp (PyObject *self, PyObject *args)
+{
+	(void) self;
+	const char *s1;
+	const char *s2;
+	if (!PyArg_ParseTuple (args, "ss:nickcmp", &s1, &s2))
+		return NULL;
+
+	int rc = ph != NULL ? hexchat_nickcmp (ph, s1, s2) : 0;
+	return PyLong_FromLong (rc);
+}
+
+static PyObject *
+hc_py_strip (PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	(void) self;
+	static char *kwlist[] = {"text", "length", "flags", NULL};
+	const char *text;
+	int length = -1;
+	int flags = 3;  /* matches the previous runtime default */
+
+	if (!PyArg_ParseTupleAndKeywords (args, kwargs, "s|ii:strip", kwlist,
+	                                   &text, &length, &flags))
+		return NULL;
+
+	if (ph == NULL)
+		return PyUnicode_FromString (text);
+
+	char *stripped = hexchat_strip (ph, text, length, flags);
+	if (stripped == NULL)
+		Py_RETURN_NONE;
+
+	PyObject *result = PyUnicode_FromString (stripped);
+	hexchat_free (ph, stripped);
+	return result;
+}
+
 PyDoc_STRVAR (print_doc,
 "print(text) -> None\n"
 "\n"
@@ -74,10 +112,26 @@ PyDoc_STRVAR (get_info_doc,
 "not available in the current context. See the plugin documentation\n"
 "for the list of defined field ids.");
 
+PyDoc_STRVAR (nickcmp_doc,
+"nickcmp(s1, s2) -> int\n"
+"\n"
+"Compare two nicks using IRC casemapping. Returns a value less than,\n"
+"equal to, or greater than zero, in the style of strcmp.");
+
+PyDoc_STRVAR (strip_doc,
+"strip(text, length=-1, flags=3) -> str\n"
+"\n"
+"Return `text` with IRC formatting removed. Flags: 1 strips colors,\n"
+"2 strips attributes, 3 (default) strips both. A negative length\n"
+"processes the whole string.");
+
 static PyMethodDef _hexchat_methods[] = {
 	{"print",    hc_py_print,    METH_VARARGS, print_doc},
 	{"command",  hc_py_command,  METH_VARARGS, command_doc},
 	{"get_info", hc_py_get_info, METH_VARARGS, get_info_doc},
+	{"nickcmp",  hc_py_nickcmp,  METH_VARARGS, nickcmp_doc},
+	{"strip",    (PyCFunction) hc_py_strip,
+	             METH_VARARGS | METH_KEYWORDS, strip_doc},
 	{NULL, NULL, 0, NULL}
 };
 

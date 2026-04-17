@@ -144,6 +144,46 @@ main (void)
 	    "get_info() error is TypeError");
 	g_free (err); err = NULL;
 
+	/* nickcmp() */
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').nickcmp('Alice', 'alice')",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE,
+	    "nickcmp returns an integer");
+	ok (repr != NULL && strcmp (repr, "0") == 0,
+	    "case-insensitive equality -> 0");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').nickcmp('alice', 'bob') != 0",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE,
+	    "distinct nicks yield non-zero");
+	ok (repr != NULL && strcmp (repr, "True") == 0,
+	    "nickcmp('alice','bob') is non-zero");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	/* strip() */
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').strip('hello')",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "strip returns a string");
+	ok (repr != NULL && strcmp (repr, "'hello'") == 0,
+	    "strip with default args round-trips 'hello'");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').strip('hello', 3, 3)",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE, "strip with length returns");
+	ok (repr != NULL && strcmp (repr, "'hel'") == 0,
+	    "strip with length=3 truncates to 'hel'");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
 	hc_python_interp_stop ();
 
 	printf ("1..%d\n", n_tests);

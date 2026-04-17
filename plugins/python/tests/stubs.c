@@ -146,3 +146,31 @@ hexchat_get_info (hexchat_plugin *plugin, const char *id)
 		return NULL;
 	return g_hash_table_lookup (info_table, id);
 }
+
+int
+hexchat_nickcmp (hexchat_plugin *plugin, const char *s1, const char *s2)
+{
+	(void) plugin;
+	/* HexChat's real nickcmp applies RFC 1459 / 2812 casemapping, but
+	 * ASCII casefold is enough to validate the binding end-to-end. */
+	return g_ascii_strcasecmp (s1, s2);
+}
+
+char *
+hexchat_strip (hexchat_plugin *plugin, const char *str, int len, int flags)
+{
+	(void) plugin;
+	(void) flags;
+	if (str == NULL)
+		return NULL;
+	if (len < 0)
+		return g_strdup (str);
+	return g_strndup (str, (gsize) len);
+}
+
+void
+hexchat_free (hexchat_plugin *plugin, void *ptr)
+{
+	(void) plugin;
+	g_free (ptr);
+}
