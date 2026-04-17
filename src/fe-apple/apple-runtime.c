@@ -9,17 +9,42 @@
 
 hc_apple_runtime_state hc_apple_runtime = {0};
 
-void
-hc_apple_runtime_emit_log_line (const char *text)
+static void
+hc_apple_runtime_emit_event (hc_apple_event_kind kind, const char *text,
+                             hc_apple_lifecycle_phase lifecycle_phase, int code)
 {
 	hc_apple_event event;
 
-	if (!hc_apple_runtime.callback || !text)
+	if (!hc_apple_runtime.callback)
 		return;
 
-	event.kind = HC_APPLE_EVENT_LOG_LINE;
+	event.kind = kind;
 	event.text = text;
+	event.lifecycle_phase = lifecycle_phase;
+	event.code = code;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
+}
+
+void
+hc_apple_runtime_emit_log_line (const char *text)
+{
+	if (!text)
+		return;
+
+	hc_apple_runtime_emit_event (HC_APPLE_EVENT_LOG_LINE, text,
+	                             HC_APPLE_LIFECYCLE_STARTING, 0);
+}
+
+void
+hc_apple_runtime_emit_lifecycle (hc_apple_lifecycle_phase phase, const char *text)
+{
+	hc_apple_runtime_emit_event (HC_APPLE_EVENT_LIFECYCLE, text, phase, 0);
+}
+
+void
+hc_apple_runtime_emit_command (const char *text, int code)
+{
+	hc_apple_runtime_emit_event (HC_APPLE_EVENT_COMMAND, text, HC_APPLE_LIFECYCLE_STARTING, code);
 }
 
 static gpointer
@@ -40,6 +65,8 @@ hc_apple_engine_thread_main (gpointer data)
 	arg_skip_plugins = hc_apple_runtime.skip_plugins;
 	arg_dont_autoconnect = hc_apple_runtime.no_auto;
 
+	hc_apple_runtime_emit_lifecycle (HC_APPLE_LIFECYCLE_STARTING, "starting");
+
 	g_mutex_lock (&hc_apple_runtime.lock);
 	hc_apple_runtime.ready = TRUE;
 	g_cond_signal (&hc_apple_runtime.ready_cond);
@@ -47,11 +74,12 @@ hc_apple_engine_thread_main (gpointer data)
 
 	hexchat_main (argc, argv);
 
+	hc_apple_runtime_emit_lifecycle (HC_APPLE_LIFECYCLE_STOPPED, "stopped");
 	g_main_context_pop_thread_default (hc_apple_runtime.context);
 	return NULL;
 }
 
-gboolean
+int
 hc_apple_runtime_start (const hc_apple_runtime_config *config,
                         hc_apple_event_cb callback,
                         void *userdata)
@@ -92,11 +120,22 @@ hc_apple_dispatch_command_cb (gpointer data)
 	return G_SOURCE_REMOVE;
 }
 
-gboolean
+int
 hc_apple_runtime_post_command (const char *command)
 {
-	if (!hc_apple_runtime.context || !command)
+	if (!command)
+	{
+		hc_apple_runtime_emit_command ("", 1);
 		return FALSE;
+	}
+
+	if (!hc_apple_runtime.context)
+	{
+		hc_apple_runtime_emit_command (command, 2);
+		return FALSE;
+	}
+
+	hc_apple_runtime_emit_command (command, 0);
 
 	g_main_context_invoke (hc_apple_runtime.context,
 	                       hc_apple_dispatch_command_cb,
@@ -108,6 +147,7 @@ static gboolean
 hc_apple_runtime_stop_cb (gpointer data)
 {
 	(void)data;
+	hc_apple_runtime_emit_lifecycle (HC_APPLE_LIFECYCLE_STOPPING, "stopping");
 	hexchat_exit ();
 	return G_SOURCE_REMOVE;
 }

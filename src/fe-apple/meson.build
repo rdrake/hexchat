@@ -43,3 +43,11 @@ test_runtime = executable('test-fe-apple-runtime',
 )
 
 test('fe-apple-runtime', test_runtime)
+
+test_runtime_events = executable('test-fe-apple-runtime-events',
+  sources: 'test-runtime-events.c',
+  link_with: hexchat_apple_core,
+  dependencies: [hexchat_common_dep, dependency('openssl')],
+)
+
+test('fe-apple-runtime-events', test_runtime_events)
