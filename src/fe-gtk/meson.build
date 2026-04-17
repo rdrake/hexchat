@@ -88,7 +88,7 @@ if host_machine.system() == 'windows'
 endif
 
 executable('hexchat',
-  sources:  resources + hexchat_gtk_sources,
+  sources: resources + ['../common/hexchat-main.c'] + hexchat_gtk_sources,
   dependencies: hexchat_gtk_deps,
   include_directories: tray_inc,
   c_args: hexchat_gtk_cflags,
