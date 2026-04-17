@@ -89,6 +89,8 @@ main (int argc, char **argv)
 	    "description round-trips");
 	ok (p != NULL && g_strcmp0 (hc_python_plugin_author (p), "tests") == 0,
 	    "author round-trips");
+	ok (p != NULL && hc_python_plugin_gui_handle (p) != NULL,
+	    "hexchat_plugingui_add was called on load");
 
 	/* Two hooks: the /sample command and the unload callback.
 	 * HexChat never sees the unload one, so the stub only captures
@@ -136,7 +138,10 @@ main (int argc, char **argv)
 	    && strcmp (hc_test_print_at (1), "sample __module_deinit__ called") == 0,
 	    "__module_deinit__ fired second");
 
-	/* Registry and hooks cleaned up. */
+	/* Registry and hooks cleaned up. gui_remove ran (p is gone so we
+	 * can't inspect its handle; the test instead relies on the stub
+	 * to not have leaked the entry string — ASAN or valgrind would
+	 * catch a mismatch). */
 	ok (hc_python_plugin_registry_find_by_name ("sample") == NULL,
 	    "sample no longer in registry");
 

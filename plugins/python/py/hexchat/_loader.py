@@ -134,6 +134,10 @@ def load(filename: str) -> str:
         sys.modules[spec.name] = module
         registered_in_sysmodules = spec.name
 
+        # Surface the script in HexChat's Plugins and Scripts menu.
+        # After _set_metadata so _gui_add sees the real name/version.
+        _hexchat._gui_add(handle)
+
         _loaded[abspath] = _Entry(
             handle=handle,
             module=module,
@@ -173,6 +177,7 @@ def _unload_entry(entry: _Entry) -> None:
         # the active-plugin stack is empty keeps attribution clean
         # for any hooks the DECREF itself might trigger.
         _hexchat._release_plugin_hooks(entry.handle)
+        _hexchat._gui_remove(entry.handle)
 
         spec_name = f"hexchat.addons.{os.path.splitext(os.path.basename(entry.filename))[0]}"
         sys.modules.pop(spec_name, None)

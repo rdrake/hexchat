@@ -450,6 +450,30 @@ hexchat_hook_timer (hexchat_plugin *plugin, int timeout,
 	return (hexchat_hook *) h;
 }
 
+/* hexchat_plugingui_add / _remove: HexChat uses these to surface
+ * scripts in the Plugins menu. For tests, return a sentinel pointer
+ * so callers can assert on it. */
+void *
+hexchat_plugingui_add (hexchat_plugin *plugin, const char *filename,
+                        const char *name, const char *desc,
+                        const char *version, char *reserved)
+{
+	(void) plugin; (void) reserved;
+	char *entry = g_strdup_printf ("GUI:%s|%s|%s|%s",
+	                                name ? name : "",
+	                                version ? version : "",
+	                                desc ? desc : "",
+	                                filename ? filename : "");
+	return entry;
+}
+
+void
+hexchat_plugingui_remove (hexchat_plugin *plugin, void *handle)
+{
+	(void) plugin;
+	g_free (handle);
+}
+
 void *
 hexchat_unhook (hexchat_plugin *plugin, hexchat_hook *hook)
 {

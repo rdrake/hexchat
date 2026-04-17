@@ -431,6 +431,61 @@ hc_py_set_metadata (PyObject *self, PyObject *args)
 }
 
 static PyObject *
+hc_py_gui_add (PyObject *self, PyObject *args)
+{
+	(void) self;
+	PyObject *capsule;
+	if (!PyArg_ParseTuple (args, "O:_gui_add", &capsule))
+		return NULL;
+
+	py_plugin *p = plugin_from_capsule (capsule);
+	if (p == NULL)
+		return NULL;
+	if (ph == NULL)
+	{
+		PyErr_SetString (PyExc_RuntimeError, "hexchat plugin handle not set");
+		return NULL;
+	}
+	if (hc_python_plugin_gui_handle (p) != NULL)
+		Py_RETURN_NONE;  /* already in the menu */
+
+	const char *name = hc_python_plugin_name (p);
+	const char *version = hc_python_plugin_version (p);
+	const char *desc = hc_python_plugin_description (p);
+	const char *filename = hc_python_plugin_filename (p);
+
+	void *gh = hexchat_plugingui_add (ph,
+	                                   filename != NULL ? filename : "",
+	                                   name != NULL ? name : "",
+	                                   desc != NULL ? desc : "",
+	                                   version != NULL ? version : "",
+	                                   NULL);
+	hc_python_plugin_set_gui_handle (p, gh);
+	Py_RETURN_NONE;
+}
+
+static PyObject *
+hc_py_gui_remove (PyObject *self, PyObject *args)
+{
+	(void) self;
+	PyObject *capsule;
+	if (!PyArg_ParseTuple (args, "O:_gui_remove", &capsule))
+		return NULL;
+
+	py_plugin *p = plugin_from_capsule (capsule);
+	if (p == NULL)
+		return NULL;
+
+	void *gh = hc_python_plugin_gui_handle (p);
+	if (gh != NULL && ph != NULL)
+	{
+		hexchat_plugingui_remove (ph, gh);
+		hc_python_plugin_set_gui_handle (p, NULL);
+	}
+	Py_RETURN_NONE;
+}
+
+static PyObject *
 hc_py_push_active (PyObject *self, PyObject *args)
 {
 	(void) self;
@@ -711,6 +766,8 @@ static PyMethodDef _hexchat_methods[] = {
 	{"_release_plugin_hooks", hc_py_release_plugin_hooks, METH_VARARGS, NULL},
 	{"_fire_unload_for_plugin", hc_py_fire_unload,        METH_VARARGS, NULL},
 	{"_plugin_entries",       hc_py_registry_entries,     METH_NOARGS,  NULL},
+	{"_gui_add",              hc_py_gui_add,              METH_VARARGS, NULL},
+	{"_gui_remove",           hc_py_gui_remove,           METH_VARARGS, NULL},
 
 	{NULL, NULL, 0, NULL}
 };

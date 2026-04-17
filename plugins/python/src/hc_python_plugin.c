@@ -19,6 +19,7 @@ struct py_plugin
 	char *version;
 	char *description;
 	char *author;
+	void *gui_handle;       /* returned by hexchat_plugingui_add; NULL until set */
 };
 
 static GSList *registry;        /* py_plugin * */
@@ -111,6 +112,19 @@ PyObject *
 hc_python_plugin_module (const py_plugin *p)
 {
 	return p != NULL ? p->module : NULL;
+}
+
+void *
+hc_python_plugin_gui_handle (const py_plugin *p)
+{
+	return p != NULL ? p->gui_handle : NULL;
+}
+
+void
+hc_python_plugin_set_gui_handle (py_plugin *p, void *handle)
+{
+	if (p != NULL)
+		p->gui_handle = handle;
 }
 
 void

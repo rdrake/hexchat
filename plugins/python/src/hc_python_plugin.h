@@ -55,6 +55,11 @@ const char *hc_python_plugin_description (const py_plugin *p);
 const char *hc_python_plugin_author (const py_plugin *p);
 PyObject *hc_python_plugin_module (const py_plugin *p);  /* borrowed */
 
+/* The handle hexchat_plugingui_add returned for this plugin, or
+ * NULL if the script has not been surfaced in the Plugins menu yet. */
+void *hc_python_plugin_gui_handle (const py_plugin *p);
+void hc_python_plugin_set_gui_handle (py_plugin *p, void *handle);
+
 /* Registry. The loader adds every newly-created plugin and removes
  * it on unload. */
 void hc_python_plugin_registry_add (py_plugin *p);
