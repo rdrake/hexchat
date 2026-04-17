@@ -53,3 +53,24 @@ test('Python API hooks', python_api_hooks_test,
   protocol: 'tap',
   timeout: 30,
 )
+
+# Integration test: dlopens the real plugin .dylib and drives the
+# registered /py command through the stubs. Catches regressions in
+# symbol resolution and init ordering that the unit tests can't see.
+python_integration_test = executable('python_integration_test',
+  ['test_integration.c', 'stubs.c'],
+  dependencies: [libgio_dep, hexchat_plugin_dep],
+  include_directories: python_test_common_inc,
+  export_dynamic: true,
+)
+
+# The plugin target is declared in plugins/python/meson.build; grab
+# its built path so the integration test can dlopen it.
+test('Python integration (dlopen)',
+  python_integration_test,
+  args: [meson.project_build_root() / 'plugins' / 'python' / 'python.dylib'],
+  depends: [python_plugin_module],
+  protocol: 'tap',
+  timeout: 30,
+)
+

@@ -29,7 +29,7 @@ install_data(['_hexchat.py', 'hexchat.py', 'xchat.py'],
   install_dir: join_paths(get_option('libdir'), 'hexchat/python')
 )
 
-shared_module('python', python3_sources,
+python_plugin_module = shared_module('python', python3_sources,
   include_directories: python3_inc,
   dependencies: [libgio_dep, hexchat_plugin_dep, python_dep],
   install: true,
