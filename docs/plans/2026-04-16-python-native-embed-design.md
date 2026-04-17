@@ -56,14 +56,21 @@ CPython-in-a-desktop-app done right. The structural choices we adopt from it:
 
 - Ship (or use system) Python deliberately. Explicit `PYTHONHOME`, never let
   the interpreter guess.
-- `PyConfig_InitIsolatedConfig` as the base. Opt back in to what we want; opt
-  out of environment-driven paths.
+- `PyConfig` + `Py_InitializeFromConfig` for interpreter startup, not the
+  deprecated `Py_SetPythonHome` / `Py_Initialize` path.
 - C extension registered via `PyImport_AppendInittab` *before*
   `Py_InitializeFromConfig`.
 - `_hexchat` is the C module; `hexchat` is a Python package that wraps it.
   Work that is easier in Python (addon discovery, stdout buffering, error
   formatting) lives in Python.
 - C sources split by subsystem, not one monolithic file.
+
+Where we depart from Blender: Blender uses `PyConfig_InitPythonConfig` as the
+base and then overrides specific fields. We use `PyConfig_InitIsolatedConfig`,
+which is strictly stricter — no environment variables, no user site-packages,
+no implicit path injection. HexChat is for running user scripts, not authoring
+a platform; reproducibility matters more than flexibility, so the tighter
+default is right for us.
 
 Blender's surface API (class-based registration, `register()`/`unregister()`
 conventions, property system) is *not* adopted. HexChat scripts have always
@@ -126,7 +133,15 @@ HexChat C API, wrap result. Largest file, ~600 lines.
 plugin_t *owner; enum py_hook_kind kind; }`. Generic C trampolines convert
 HexChat's `word[]` / `word_eol[]` / `hexchat_event_attrs` into Python tuples,
 invoke the callable, map return value to `HEXCHAT_EAT_*`. Exposes
-`py_hooks_release_for_plugin(plugin_t *)` for unload-time cleanup. ~400 lines.
+`py_hooks_release_for_plugin(plugin_t *)` for unload-time cleanup.
+
+Unload ordering matters: `py_hooks_release_for_plugin` must call
+`hexchat_unhook` + `Py_DECREF` on each owned hook's callable and userdata
+*before* the loader removes the script's module from `sys.modules`. Hook
+callables almost always close over module-level names, so the module stays
+alive via the callable until the refcount actually drops. Getting this wrong
+produces dangling hooks that fire against a half-torn-down module. ~400
+lines.
 
 **`hc_python_context.c`, `hc_python_attrs.c`** — custom `PyTypeObject`
 wrappers for `hexchat_context *` and `hexchat_event_attrs *`. Context objects
@@ -134,7 +149,10 @@ compare by pointer identity; attrs exposes field getters. ~100 lines each.
 
 **`hc_python_plugin.c`** — per-loaded-script object. Tracks filename, module
 object, and the hooks the script owns. Exposes `plugin_load`,
-`plugin_unload`, `plugin_reload`. ~200 lines.
+`plugin_unload`, `plugin_reload`. On load, calls `hexchat_plugingui_add` so
+the script appears in HexChat's Plugins and Scripts menu with its declared
+name/version/description; on unload, calls `hexchat_plugingui_remove`.
+~200 lines.
 
 **`hc_python_console.c`** — `/py load | unload | reload | exec | console |
 about` handler. Same surface as today. ~200 lines.
@@ -180,6 +198,7 @@ config.use_environment = 0;
 config.user_site_directory = 0;
 config.site_import = 1;
 config.utf8_mode = 1;
+config.install_signal_handlers = 0;   /* HexChat owns SIGINT/SIGTERM */
 config.filesystem_encoding = L"utf-8";
 config.stdio_encoding = L"utf-8";
 config.program_name = L"hexchat";
@@ -249,23 +268,30 @@ tree buildable.
    green on Linux, plugin loads, `import _hexchat` succeeds in a debug
    interpreter.
 
-2. **Interpreter lifecycle.** `hc_python_interp.c` with `PyConfig` dance,
-   Linux-only paths. `hc_python_console.c` stub with just `/py about`.
-   Verification: loading the plugin starts the interpreter, `/py about`
-   prints a version, unload/reload is clean under
-   `valgrind --leak-check=full`.
+2. **Interpreter lifecycle + exec harness.** `hc_python_interp.c` with the
+   `PyConfig` dance, Linux-only paths. `hc_python_console.c` with `/py about`
+   and a minimal `/py exec <code>` that compiles + evals code in a throwaway
+   module against the (still mostly empty) `_hexchat` module. This harness
+   is what makes step 3 commits independently verifiable without the full
+   loader. Verification: loading the plugin starts the interpreter, `/py
+   about` prints a version, `/py exec "1+1"` round-trips, unload/reload is
+   clean under `valgrind --leak-check=full`.
 
 3. **Core API surface.** Methods land in dependency order: `prnt` →
    `command` → `get_info` → `nickcmp` / `strip` → pluginpref family. Then
    `hook_command` + the `hc_python_hooks.c` trampoline (the most intricate
    piece). Then `hook_print`, `hook_server`, `hook_timer`, `hook_unload`,
-   `unhook`. Then attrs variants. Each as its own commit with a test
-   script that exercises the added method.
+   `unhook`. Then attrs variants. Each lands as its own commit. Per-commit
+   verification uses `/py exec` from step 2: e.g., after the `hook_command`
+   commit, `/py exec "hexchat.hook_command('foo', lambda w, we, ud: ...)"`
+   registers, fires, and unloads cleanly. End-to-end plugin loading is
+   deferred to step 4.
 
 4. **Plugin lifecycle + loader.** `hc_python_plugin.c` + `hexchat/_loader.py`.
-   Full `/py load | unload | reload | exec | console`. Verification: two
-   or three nontrivial third-party plugins from the HexChat addons wiki
-   load and run end-to-end.
+   Full `/py load | unload | reload | exec | console`. Plugin objects register
+   with `hexchat_plugingui_add` on load. Verification: two or three
+   nontrivial third-party plugins from the HexChat addons wiki load, appear
+   in the Plugins menu, run end-to-end, and unload without leaks.
 
 5. **Windows port.** `PyConfig.home` via `GetModuleFileNameW`, vcxproj
    updates, remove cffi from the build. Verification: build on Windows,
@@ -311,6 +337,20 @@ Each language gets the same structural treatment, not shared code:
 
 Lua and Perl rewrites are out of scope for this plan but inherit the
 structure.
+
+## Small decisions worth recording
+
+- **Script compilation uses `optimize=0`** (the default). Today's runtime
+  compiles user scripts with `optimize=2` (`python.py:114,119`), which
+  strips docstrings and elides `assert` statements. Scripts that rely on
+  side effects inside `assert` will silently not execute them. Matching the
+  old behavior perpetuates a footgun; the new runtime defaults to
+  unoptimized compilation, so `assert` works as scripts expect.
+- **Environment-independent by design.** `use_environment = 0` disables
+  `PYTHONPATH` / `PYTHONHOME` pickup. Users with conda or pyenv Pythons
+  activated will find that HexChat does not pick up their environment —
+  this is intentional (reproducibility > flexibility for a scripting host).
+  Document in the migration note.
 
 ## Open questions
 
