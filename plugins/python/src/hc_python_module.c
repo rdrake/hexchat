@@ -16,6 +16,7 @@
 #include <glib.h>
 
 #include "hc_python.h"
+#include "hc_python_hooks.h"
 #include "hc_python_module.h"
 
 static PyObject *
@@ -175,6 +176,39 @@ hc_py_pluginpref_list (PyObject *self, PyObject *args)
 }
 
 static PyObject *
+hc_py_hook_command (PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	(void) self;
+	static char *kwlist[] = {"name", "callback", "userdata",
+	                          "priority", "help", NULL};
+	const char *name;
+	PyObject *callback;
+	PyObject *userdata = Py_None;
+	int priority = HEXCHAT_PRI_NORM;
+	const char *help = NULL;
+
+	if (!PyArg_ParseTupleAndKeywords (args, kwargs, "sO|Oiz:hook_command",
+	                                   kwlist,
+	                                   &name, &callback, &userdata,
+	                                   &priority, &help))
+		return NULL;
+
+	return hc_python_hooks_register_command (name, priority,
+	                                          callback, userdata, help);
+}
+
+static PyObject *
+hc_py_unhook (PyObject *self, PyObject *args)
+{
+	(void) self;
+	PyObject *hook;
+	if (!PyArg_ParseTuple (args, "O:unhook", &hook))
+		return NULL;
+
+	return hc_python_hooks_unregister (hook);
+}
+
+static PyObject *
 hc_py_strip (PyObject *self, PyObject *args, PyObject *kwargs)
 {
 	(void) self;
@@ -261,6 +295,21 @@ PyDoc_STRVAR (pluginpref_list_doc,
 "\n"
 "Return the list of currently-set plugin preference names.");
 
+PyDoc_STRVAR (hook_command_doc,
+"hook_command(name, callback, userdata=None, priority=PRI_NORM,\n"
+"             help=None) -> hook\n"
+"\n"
+"Register `callback` to fire when the user issues /NAME. The callback\n"
+"receives (word, word_eol, userdata) and should return one of the\n"
+"EAT_* constants. The returned hook object is passed to unhook() to\n"
+"remove the binding.");
+
+PyDoc_STRVAR (unhook_doc,
+"unhook(hook) -> bool\n"
+"\n"
+"Remove a hook previously registered by one of the hook_* functions.\n"
+"Returns True if the hook was removed, False if it was already gone.");
+
 static PyMethodDef _hexchat_methods[] = {
 	{"print",    hc_py_print,    METH_VARARGS, print_doc},
 	{"command",  hc_py_command,  METH_VARARGS, command_doc},
@@ -280,8 +329,47 @@ static PyMethodDef _hexchat_methods[] = {
 	                        pluginpref_delete_doc},
 	{"pluginpref_list",    hc_py_pluginpref_list,    METH_NOARGS,
 	                        pluginpref_list_doc},
+	{"hook_command",       (PyCFunction) hc_py_hook_command,
+	                        METH_VARARGS | METH_KEYWORDS, hook_command_doc},
+	{"unhook",             hc_py_unhook,             METH_VARARGS,
+	                        unhook_doc},
 	{NULL, NULL, 0, NULL}
 };
+
+static int
+add_int_const (PyObject *m, const char *name, long value)
+{
+	PyObject *v = PyLong_FromLong (value);
+	if (v == NULL)
+		return -1;
+	int rc = PyModule_AddObjectRef (m, name, v);
+	Py_DECREF (v);
+	return rc;
+}
+
+static int
+populate_module (PyObject *m)
+{
+	struct
+	{
+		const char *name;
+		long value;
+	} constants[] = {
+		{"EAT_NONE",     HEXCHAT_EAT_NONE},
+		{"EAT_HEXCHAT",  HEXCHAT_EAT_HEXCHAT},
+		{"EAT_PLUGIN",   HEXCHAT_EAT_PLUGIN},
+		{"EAT_ALL",      HEXCHAT_EAT_ALL},
+		{"PRI_HIGHEST",  HEXCHAT_PRI_HIGHEST},
+		{"PRI_HIGH",     HEXCHAT_PRI_HIGH},
+		{"PRI_NORM",     HEXCHAT_PRI_NORM},
+		{"PRI_LOW",      HEXCHAT_PRI_LOW},
+		{"PRI_LOWEST",   HEXCHAT_PRI_LOWEST},
+	};
+	for (size_t i = 0; i < G_N_ELEMENTS (constants); i++)
+		if (add_int_const (m, constants[i].name, constants[i].value) < 0)
+			return -1;
+	return 0;
+}
 
 PyDoc_STRVAR (_hexchat_doc,
 "_hexchat -- HexChat scripting interface (C extension).\n"
@@ -301,5 +389,13 @@ static struct PyModuleDef _hexchat_moduledef = {
 PyMODINIT_FUNC
 PyInit__hexchat (void)
 {
-	return PyModule_Create (&_hexchat_moduledef);
+	PyObject *m = PyModule_Create (&_hexchat_moduledef);
+	if (m == NULL)
+		return NULL;
+	if (populate_module (m) < 0)
+	{
+		Py_DECREF (m);
+		return NULL;
+	}
+	return m;
 }

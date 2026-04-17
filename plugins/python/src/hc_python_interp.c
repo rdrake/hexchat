@@ -16,6 +16,7 @@
  * own SIGINT handler — HexChat owns signal delivery.
  */
 
+#include "hc_python_hooks.h"
 #include "hc_python_interp.h"
 #include "hc_python_module.h"
 
@@ -84,6 +85,12 @@ hc_python_interp_stop (void)
 {
 	if (!interp_running)
 		return;
+
+	/* Unhook everything and drop Python references while the GIL and
+	 * the C runtime state are both still valid. After this, Py_Finalize
+	 * destroys the remaining capsules; their destructors are no-ops and
+	 * never dereference the now-dangling py_hook pointers. */
+	hc_python_hooks_release_all ();
 
 	Py_Finalize ();
 	interp_running = FALSE;

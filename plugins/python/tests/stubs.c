@@ -8,6 +8,7 @@
  */
 
 #include <stdarg.h>
+#include <stdio.h>
 
 #include <glib.h>
 
@@ -23,8 +24,9 @@ hexchat_plugin *ph = &fake_plugin;
 
 static GPtrArray *captured_prints;
 static GPtrArray *captured_commands;
-static GHashTable *info_table;      /* id -> value (borrowed) */
+static GHashTable *info_table;       /* id -> value (borrowed) */
 static GHashTable *pluginpref_table; /* char* -> char* (owned) */
+static GPtrArray *hook_entries;      /* hc_test_hook_entry* (owned) */
 
 static GPtrArray *
 ensure_array (GPtrArray **p)
@@ -34,9 +36,24 @@ ensure_array (GPtrArray **p)
 	return *p;
 }
 
+static void
+free_hook_entry (gpointer data)
+{
+	hc_test_hook_entry *h = data;
+	g_free (h->name);
+	g_free (h->help);
+	g_free (h);
+}
+
 void
 hc_test_stubs_reset (void)
 {
+	/* Intentionally does NOT clear hook_entries: tests register hooks
+	 * with the Python layer, which still holds strong references to
+	 * the returned hexchat_hook* pointers. Freeing the entries here
+	 * would turn Python-owned capsules into use-after-free hazards.
+	 * Hooks are torn down explicitly via _hexchat.unhook or at
+	 * hc_python_hooks_release_all time. */
 	if (captured_prints != NULL)
 		g_ptr_array_set_size (captured_prints, 0);
 	if (captured_commands != NULL)
@@ -45,6 +62,29 @@ hc_test_stubs_reset (void)
 		g_hash_table_remove_all (info_table);
 	if (pluginpref_table != NULL)
 		g_hash_table_remove_all (pluginpref_table);
+}
+
+guint
+hc_test_n_hooks (void)
+{
+	return hook_entries != NULL ? hook_entries->len : 0;
+}
+
+hc_test_hook_entry *
+hc_test_hook_at (guint index)
+{
+	if (hook_entries == NULL || index >= hook_entries->len)
+		return NULL;
+	return g_ptr_array_index (hook_entries, index);
+}
+
+int
+hc_test_hook_fire (guint index, char *word[], char *word_eol[])
+{
+	hc_test_hook_entry *h = hc_test_hook_at (index);
+	if (h == NULL || !h->alive || h->callback == NULL)
+		return 0;
+	return h->callback (word, word_eol, h->userdata);
 }
 
 static GHashTable *
@@ -239,6 +279,46 @@ hexchat_pluginpref_delete (hexchat_plugin *plugin, const char *var)
 	if (pluginpref_table == NULL)
 		return 0;
 	return g_hash_table_remove (pluginpref_table, var) ? 1 : 0;
+}
+
+static GPtrArray *
+hooks_array (void)
+{
+	if (hook_entries == NULL)
+		hook_entries = g_ptr_array_new_with_free_func (free_hook_entry);
+	return hook_entries;
+}
+
+hexchat_hook *
+hexchat_hook_command (hexchat_plugin *plugin, const char *name, int pri,
+                       hc_test_hook_cmd_cb callback,
+                       const char *help, void *userdata)
+{
+	(void) plugin;
+	hc_test_hook_entry *h = g_new0 (hc_test_hook_entry, 1);
+	h->name = g_strdup (name);
+	h->pri = pri;
+	h->callback = callback;
+	h->userdata = userdata;
+	h->help = g_strdup (help);
+	h->alive = TRUE;
+	g_ptr_array_add (hooks_array (), h);
+	return (hexchat_hook *) h;
+}
+
+void *
+hexchat_unhook (hexchat_plugin *plugin, hexchat_hook *hook)
+{
+	(void) plugin;
+	hc_test_hook_entry *h = (hc_test_hook_entry *) hook;
+	if (h == NULL)
+		return NULL;
+	void *ud = h->userdata;
+	h->alive = FALSE;
+	h->callback = NULL;
+	/* Leave the entry in the array (marked !alive) so tests can still
+	 * index it for post-unhook assertions. */
+	return ud;
 }
 
 int

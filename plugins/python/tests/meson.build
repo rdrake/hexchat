@@ -5,6 +5,7 @@ python_test_common_deps = [libgio_dep, hexchat_plugin_dep, python_dep]
 python_test_common_inc = [python3_inc, include_directories('.')]
 python_test_common_sources = files(
   'stubs.c',
+  '../src/hc_python_hooks.c',
   '../src/hc_python_module.c',
 )
 
@@ -37,6 +38,17 @@ python_api_core_test = executable('python_api_core_test',
 )
 
 test('Python API core', python_api_core_test,
+  protocol: 'tap',
+  timeout: 30,
+)
+
+python_api_hooks_test = executable('python_api_hooks_test',
+  ['test_api_hooks.c', '../src/hc_python_interp.c', python_test_common_sources],
+  dependencies: python_test_common_deps,
+  include_directories: python_test_common_inc,
+)
+
+test('Python API hooks', python_api_hooks_test,
   protocol: 'tap',
   timeout: 30,
 )

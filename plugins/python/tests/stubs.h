@@ -20,6 +20,24 @@ void hc_test_stubs_reset (void);
  * pass literals or otherwise keep them alive for the test's lifetime. */
 void hc_test_set_info (const char *id, const char *value);
 
+/* Access registered hooks (in registration order). Tests invoke a
+ * stored trampoline by calling hc_test_hook_fire(). */
+typedef int (*hc_test_hook_cmd_cb) (char *word[], char *word_eol[], void *userdata);
+
+typedef struct
+{
+	char *name;
+	int pri;
+	hc_test_hook_cmd_cb callback;
+	void *userdata;
+	char *help;
+	gboolean alive;
+} hc_test_hook_entry;
+
+guint hc_test_n_hooks (void);
+hc_test_hook_entry *hc_test_hook_at (guint index);
+int hc_test_hook_fire (guint index, char *word[], char *word_eol[]);
+
 /* Accessors over recorded hexchat_print / hexchat_printf calls. */
 guint hc_test_n_prints (void);
 const char *hc_test_print_at (guint index);
