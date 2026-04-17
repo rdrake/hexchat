@@ -1,0 +1,4 @@
+module AppleAdapterBridge [system] {
+    header "include/bridge.h"
+    export *
+}
