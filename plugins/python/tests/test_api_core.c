@@ -108,6 +108,42 @@ main (void)
 	    && strcmp (hc_test_last_command (), "join #test") == 0,
 	    "captured command is 'join #test'");
 
+	/* get_info(). Uses __import__ so the whole snippet is a single
+	 * expression and hc_python_interp_exec returns the value for us. */
+	char *repr = NULL;
+	hc_test_stubs_reset ();
+	hc_test_set_info ("nick", "testnick");
+	hc_test_set_info ("channel", "#test");
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').get_info('nick')",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE,
+	    "_hexchat.get_info('nick') returns a value");
+	ok (err == NULL, "get_info raises nothing on known id");
+	ok (repr != NULL && strcmp (repr, "'testnick'") == 0,
+	    "get_info('nick') repr is 'testnick'");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	st = hc_python_interp_exec (
+	    "__import__('_hexchat').get_info('does_not_exist') is None",
+	    &repr, &err);
+	ok (st == HC_PY_EXEC_OK_WITH_VALUE,
+	    "unknown info id returns None (None is identity-checked)");
+	ok (repr != NULL && strcmp (repr, "True") == 0,
+	    "unknown id yields None");
+	g_free (err); err = NULL;
+	g_free (repr); repr = NULL;
+
+	st = run (
+	    "import _hexchat\n"
+	    "_hexchat.get_info()\n",
+	    &err);
+	ok (st == HC_PY_EXEC_ERROR, "get_info() with no args errors");
+	ok (err != NULL && strstr (err, "TypeError") != NULL,
+	    "get_info() error is TypeError");
+	g_free (err); err = NULL;
+
 	hc_python_interp_stop ();
 
 	printf ("1..%d\n", n_tests);

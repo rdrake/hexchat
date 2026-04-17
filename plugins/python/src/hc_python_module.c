@@ -42,6 +42,20 @@ hc_py_command (PyObject *self, PyObject *args)
 	Py_RETURN_NONE;
 }
 
+static PyObject *
+hc_py_get_info (PyObject *self, PyObject *args)
+{
+	(void) self;
+	const char *id;
+	if (!PyArg_ParseTuple (args, "s:get_info", &id))
+		return NULL;
+
+	const char *value = ph != NULL ? hexchat_get_info (ph, id) : NULL;
+	if (value == NULL)
+		Py_RETURN_NONE;
+	return PyUnicode_FromString (value);
+}
+
 PyDoc_STRVAR (print_doc,
 "print(text) -> None\n"
 "\n"
@@ -53,9 +67,17 @@ PyDoc_STRVAR (command_doc,
 "Run `command` as if the user had typed it at the input line.\n"
 "A leading slash is optional.");
 
+PyDoc_STRVAR (get_info_doc,
+"get_info(id) -> str | None\n"
+"\n"
+"Return the value of a HexChat info field, or None if the field is\n"
+"not available in the current context. See the plugin documentation\n"
+"for the list of defined field ids.");
+
 static PyMethodDef _hexchat_methods[] = {
-	{"print",   hc_py_print,   METH_VARARGS, print_doc},
-	{"command", hc_py_command, METH_VARARGS, command_doc},
+	{"print",    hc_py_print,    METH_VARARGS, print_doc},
+	{"command",  hc_py_command,  METH_VARARGS, command_doc},
+	{"get_info", hc_py_get_info, METH_VARARGS, get_info_doc},
 	{NULL, NULL, 0, NULL}
 };
 

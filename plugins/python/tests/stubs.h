@@ -15,6 +15,11 @@
 /* Resets captured state between cases. */
 void hc_test_stubs_reset (void);
 
+/* Overrides the value hexchat_get_info returns for `id`. Passing NULL
+ * for `value` unsets it. The stub owns neither string — callers must
+ * pass literals or otherwise keep them alive for the test's lifetime. */
+void hc_test_set_info (const char *id, const char *value);
+
 /* Accessors over recorded hexchat_print / hexchat_printf calls. */
 guint hc_test_n_prints (void);
 const char *hc_test_print_at (guint index);

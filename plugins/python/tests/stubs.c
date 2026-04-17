@@ -23,6 +23,7 @@ hexchat_plugin *ph = &fake_plugin;
 
 static GPtrArray *captured_prints;
 static GPtrArray *captured_commands;
+static GHashTable *info_table;  /* id -> value (borrowed) */
 
 static GPtrArray *
 ensure_array (GPtrArray **p)
@@ -39,6 +40,20 @@ hc_test_stubs_reset (void)
 		g_ptr_array_set_size (captured_prints, 0);
 	if (captured_commands != NULL)
 		g_ptr_array_set_size (captured_commands, 0);
+	if (info_table != NULL)
+		g_hash_table_remove_all (info_table);
+}
+
+void
+hc_test_set_info (const char *id, const char *value)
+{
+	if (info_table == NULL)
+		info_table = g_hash_table_new (g_str_hash, g_str_equal);
+
+	if (value == NULL)
+		g_hash_table_remove (info_table, id);
+	else
+		g_hash_table_insert (info_table, (gpointer) id, (gpointer) value);
 }
 
 guint
@@ -121,4 +136,13 @@ hexchat_commandf (hexchat_plugin *plugin, const char *format, ...)
 	char *msg = g_strdup_vprintf (format, ap);
 	va_end (ap);
 	g_ptr_array_add (ensure_array (&captured_commands), msg);
+}
+
+const char *
+hexchat_get_info (hexchat_plugin *plugin, const char *id)
+{
+	(void) plugin;
+	if (info_table == NULL || id == NULL)
+		return NULL;
+	return g_hash_table_lookup (info_table, id);
 }
