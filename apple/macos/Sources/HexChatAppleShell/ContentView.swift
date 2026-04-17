@@ -16,6 +16,11 @@ struct ContentView: View {
                 }
                 .disabled(!controller.isRunning)
 
+                Button("Quit") {
+                    controller.send("quit")
+                }
+                .disabled(!controller.isRunning)
+
                 Button("Send") {
                     controller.send(controller.input)
                     controller.input = ""
