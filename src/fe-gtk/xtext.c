@@ -23,6 +23,15 @@
 
 #define GDK_MULTIHEAD_SAFE
 #define MARGIN 2						/* dont touch. */
+/* When the widget is resized narrower than the current auto-indent can
+ * comfortably accommodate, the indent is clamped so the right column
+ * always retains at least XTEXT_MIN_TEXT_COL pixels for message text.
+ * XTEXT_MIN_INDENT is the floor below which we refuse to shrink the
+ * indent; together with XTEXT_MIN_TEXT_COL + MARGIN + scrollbar width,
+ * this also drives the widget's reported horizontal minimum so the
+ * surrounding pane cannot shrink us into the render-bail condition. */
+#define XTEXT_MIN_TEXT_COL 48			/* reserve for message column */
+#define XTEXT_MIN_INDENT    40			/* floor on auto-indent width */
 #define REFRESH_TIMEOUT 20
 #define VIRT_PAGE_SIZE 100				/* entries to keep beyond viewport as eviction buffer */
 /* VIRT_MAT_WINDOW is defined in xtext.h */
@@ -292,6 +301,9 @@ static int gtk_xtext_render_ents (GtkXText * xtext, textentry *, textentry *);
 static textentry *xtext_resolve_marker (xtext_buffer *buf);
 static void gtk_xtext_recalc_widths (xtext_buffer *buf, int);
 static void gtk_xtext_fix_indent (xtext_buffer *buf);
+static int gtk_xtext_width_indent_cap (xtext_buffer *buf);
+static int gtk_xtext_auto_indent_cap (xtext_buffer *buf);
+static gboolean gtk_xtext_clamp_indent_to_width (xtext_buffer *buf);
 static int gtk_xtext_find_subline (GtkXText *xtext, textentry *ent, int line);
 static void gtk_xtext_draw_status_strip (GtkXText *xtext, int width, int height);
 static void gtk_xtext_draw_toasts (GtkXText *xtext, int width, int height);
@@ -1469,8 +1481,11 @@ gtk_xtext_measure (GtkWidget *widget,
 
 	if (orientation == GTK_ORIENTATION_HORIZONTAL)
 	{
-		/* Use small minimum to allow paned to shrink the text area */
-		*minimum = 100 + sb_min;
+		/* Floor the widget width at the smallest size at which the indent
+		 * clamp in size_allocate can still leave a renderable text column.
+		 * Below this the render early-return at gtk_xtext_render_page()
+		 * kicks in and the view goes blank. */
+		*minimum = XTEXT_MIN_INDENT + XTEXT_MIN_TEXT_COL + MARGIN + sb_min;
 		*natural = 200 + sb_nat;
 	}
 	else
@@ -1527,6 +1542,13 @@ gtk_xtext_size_allocate (GtkWidget * widget, int width, int height, int baseline
 
 	xtext->buffer->window_width = text_width;
 	xtext->buffer->window_height = height;
+
+	/* If the widget narrowed, shrink the auto-indent so the right column
+	 * keeps at least XTEXT_MIN_TEXT_COL pixels. This runs before the
+	 * sublines recompute below so the new indent is reflected in the
+	 * wrap layout on the same frame. */
+	if (!height_only)
+		gtk_xtext_clamp_indent_to_width (xtext->buffer);
 
 	{
 		gboolean was_down = xtext->buffer->scroll_anchor.anchor_to_bottom;
@@ -5942,6 +5964,63 @@ gtk_xtext_fix_indent (xtext_buffer *buf)
 	dontscroll (buf);	/* force scrolling off */
 }
 
+/* Width-based indent cap: the largest buf->indent the current window
+ * can afford while still leaving XTEXT_MIN_TEXT_COL pixels for message
+ * text. Never returns below XTEXT_MIN_INDENT — at that floor the measure
+ * vfunc keeps the widget from shrinking further. Used by the resize
+ * clamp so a manually dragged separator is preserved up to the width
+ * limit, independent of max_auto_indent. */
+static int
+gtk_xtext_width_indent_cap (xtext_buffer *buf)
+{
+	int width_cap;
+
+	if (buf->window_width <= 0)
+		return G_MAXINT;
+
+	width_cap = buf->window_width - MARGIN - XTEXT_MIN_TEXT_COL;
+	if (width_cap < XTEXT_MIN_INDENT)
+		width_cap = XTEXT_MIN_INDENT;
+	return width_cap;
+}
+
+/* Cap on automatic indent growth: the lesser of the user-configured
+ * max_auto_indent and the current width cap. Used by the grow paths
+ * and by the indent-toggle/timestamp rebuilds so auto-grown indent
+ * respects both the user pref ceiling and the width floor. Manual
+ * separator drags are NOT bounded by this — see the width cap. */
+static int
+gtk_xtext_auto_indent_cap (xtext_buffer *buf)
+{
+	int cap = buf->xtext->max_auto_indent;
+	int width_cap = gtk_xtext_width_indent_cap (buf);
+	if (width_cap < cap)
+		cap = width_cap;
+	return cap;
+}
+
+/* If the current indent exceeds the width-based cap, clamp it and
+ * recompute per-entry indents so the grown nick column is realigned
+ * against the shifted separator. Returns TRUE if anything changed. */
+static gboolean
+gtk_xtext_clamp_indent_to_width (xtext_buffer *buf)
+{
+	int cap;
+
+	if (!buf->xtext->auto_indent)
+		return FALSE;
+
+	cap = gtk_xtext_width_indent_cap (buf);
+	if (buf->indent <= cap)
+		return FALSE;
+
+	buf->indent = cap;
+	gtk_xtext_fix_indent (buf);
+	gtk_xtext_recalc_widths (buf, FALSE);
+	buf->xtext->force_render = TRUE;
+	return TRUE;
+}
+
 static void
 gtk_xtext_recalc_widths (xtext_buffer *buf, int do_str_width)
 {
@@ -9075,6 +9154,8 @@ gtk_xtext_append_indent (xtext_buffer *buf,
 
 	if (buf->xtext->auto_indent)
 	{
+		int cap = gtk_xtext_auto_indent_cap (buf);
+
 		ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
 
 		if (buf->time_stamp)
@@ -9083,16 +9164,15 @@ gtk_xtext_append_indent (xtext_buffer *buf,
 			space = 0;
 
 		/* do we need to auto adjust the separator position? */
-		if (buf->indent < buf->xtext->max_auto_indent &&
-			 ent->indent < MARGIN + space)
+		if (buf->indent < cap && ent->indent < MARGIN + space)
 		{
 			tempindent = MARGIN + space + buf->xtext->space_width + left_width;
 
 			if (tempindent > buf->indent)
 				buf->indent = tempindent;
 
-			if (buf->indent > buf->xtext->max_auto_indent)
-				buf->indent = buf->xtext->max_auto_indent;
+			if (buf->indent > cap)
+				buf->indent = cap;
 
 			gtk_xtext_fix_indent (buf);
 			gtk_xtext_recalc_widths (buf, FALSE);
@@ -9197,6 +9277,8 @@ gtk_xtext_prepend_indent (xtext_buffer *buf,
 
 	if (buf->xtext->auto_indent)
 	{
+		int cap = gtk_xtext_auto_indent_cap (buf);
+
 		ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
 
 		if (buf->time_stamp)
@@ -9204,16 +9286,15 @@ gtk_xtext_prepend_indent (xtext_buffer *buf,
 		else
 			space = 0;
 
-		if (buf->indent < buf->xtext->max_auto_indent &&
-			 ent->indent < MARGIN + space)
+		if (buf->indent < cap && ent->indent < MARGIN + space)
 		{
 			tempindent = MARGIN + space + buf->xtext->space_width + left_width;
 
 			if (tempindent > buf->indent)
 				buf->indent = tempindent;
 
-			if (buf->indent > buf->xtext->max_auto_indent)
-				buf->indent = buf->xtext->max_auto_indent;
+			if (buf->indent > cap)
+				buf->indent = cap;
 
 			gtk_xtext_fix_indent (buf);
 			gtk_xtext_recalc_widths (buf, FALSE);
@@ -9317,6 +9398,8 @@ gtk_xtext_insert_sorted_indent (xtext_buffer *buf,
 
 	if (buf->xtext->auto_indent)
 	{
+		int cap = gtk_xtext_auto_indent_cap (buf);
+
 		ent->indent = (buf->indent - left_width) - buf->xtext->space_width;
 
 		if (buf->time_stamp)
@@ -9324,16 +9407,15 @@ gtk_xtext_insert_sorted_indent (xtext_buffer *buf,
 		else
 			space = 0;
 
-		if (buf->indent < buf->xtext->max_auto_indent &&
-			 ent->indent < MARGIN + space)
+		if (buf->indent < cap && ent->indent < MARGIN + space)
 		{
 			tempindent = MARGIN + space + buf->xtext->space_width + left_width;
 
 			if (tempindent > buf->indent)
 				buf->indent = tempindent;
 
-			if (buf->indent > buf->xtext->max_auto_indent)
-				buf->indent = buf->xtext->max_auto_indent;
+			if (buf->indent > cap)
+				buf->indent = cap;
 
 			gtk_xtext_fix_indent (buf);
 			gtk_xtext_recalc_widths (buf, FALSE);
@@ -9596,8 +9678,11 @@ gtk_xtext_set_indent (GtkXText *xtext, gboolean indent)
 				buf->indent = tempindent;
 		}
 
-		if (buf->indent > xtext->max_auto_indent)
-			buf->indent = xtext->max_auto_indent;
+		{
+			int cap = gtk_xtext_auto_indent_cap (buf);
+			if (buf->indent > cap)
+				buf->indent = cap;
+		}
 
 		gtk_xtext_fix_indent (buf);
 	}
@@ -9702,8 +9787,11 @@ gtk_xtext_set_time_stamp (xtext_buffer *buf, gboolean time_stamp)
 				buf->indent = tempindent;
 		}
 
-		if (buf->indent > buf->xtext->max_auto_indent)
-			buf->indent = buf->xtext->max_auto_indent;
+		{
+			int cap = gtk_xtext_auto_indent_cap (buf);
+			if (buf->indent > cap)
+				buf->indent = cap;
+		}
 
 		gtk_xtext_fix_indent (buf);
 	}
