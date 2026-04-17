@@ -38,7 +38,8 @@ gtk_dep = dependency('gtk4', version: '>= 4.14.0')
 hexchat_gtk_deps = [
   hexchat_common_dep,
   libgmodule_dep, # used by libsexy
-  gtk_dep
+  gtk_dep,
+  dependency('openssl')
 ]
 
 # GTK4: Need explicit X11 dependency for direct Xlib calls (XFlush, XGrabServer, etc.)
