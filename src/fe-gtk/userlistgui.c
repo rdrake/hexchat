@@ -601,7 +601,23 @@ userlist_ops_cmp_gtk4_rev (gconstpointer a, gconstpointer b, gpointer userdata)
 	int r = userlist_friend_cmp (sess, item_a, item_b);
 	if (r != 0) return r;
 
+	/* "Z-A, ops last": inverts both access ordering (ops go to the
+	 * bottom) and alphabetical (Z-A). Negating nick_cmp_az_ops gives
+	 * exactly that — the friend-first axis above stays un-negated so
+	 * friends still pin to the top regardless of sort direction. */
 	return -nick_cmp_az_ops (sess->server, item_a->user, item_b->user);
+}
+
+/* Unsorted mode: no alpha or ops ordering, but friends still group at
+ * the top. Non-friends preserve insertion order via GtkSortListModel's
+ * stable sort on 0-return ties. */
+static int
+userlist_unsorted_cmp_gtk4 (gconstpointer a, gconstpointer b, gpointer userdata)
+{
+	HcUserItem *item_a = HC_USER_ITEM ((gpointer)a);
+	HcUserItem *item_b = HC_USER_ITEM ((gpointer)b);
+	session *sess = userdata;
+	return userlist_friend_cmp (sess, item_a, item_b);
 }
 
 GListStore *
@@ -1320,6 +1336,7 @@ userlist_show (session *sess)
 	case 1: cmp_func = userlist_alpha_cmp_gtk4; break;
 	case 2: cmp_func = userlist_ops_cmp_gtk4_rev; break;
 	case 3: cmp_func = userlist_alpha_cmp_gtk4_rev; break;
+	case 4: cmp_func = userlist_unsorted_cmp_gtk4; break;
 	}
 
 	if (cmp_func)
@@ -1506,6 +1523,7 @@ userlist_apply_prefs (session *sess)
 			case 1: cmp_func = userlist_alpha_cmp_gtk4; break;
 			case 2: cmp_func = userlist_ops_cmp_gtk4_rev; break;
 			case 3: cmp_func = userlist_alpha_cmp_gtk4_rev; break;
+			case 4: cmp_func = userlist_unsorted_cmp_gtk4; break;
 			}
 
 			if (cmp_func)
