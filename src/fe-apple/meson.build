@@ -22,3 +22,10 @@ test_cfgdir = executable('test-fe-apple-cfgdir',
 )
 
 test('fe-apple-cfgdir', test_cfgdir)
+
+test_callback_log = executable('test-fe-apple-callback-log',
+  sources: ['test-callback-log.c', 'apple-callback-log.c'],
+  dependencies: hexchat_common_dep,
+)
+
+test('fe-apple-callback-log', test_callback_log)
