@@ -9,8 +9,9 @@ hexchat_apple_core = static_library('hexchatapplecore',
 )
 
 hexchat_apple_adapter = shared_library('hexchatappleadapter',
-  link_with: hexchat_apple_core,
-  dependencies: [hexchat_common_dep, dependency('openssl')],
+  link_whole: hexchat_apple_core,
+  link_with: hexchat_common,
+  dependencies: [dependency('openssl')],
   install: false,
 )
 

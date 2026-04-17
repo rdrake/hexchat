@@ -42,7 +42,7 @@ final class EngineController {
         }
     }
 
-    func handleRuntimeEvent(_ event: RuntimeEvent) {
+    fileprivate func handleRuntimeEvent(_ event: RuntimeEvent) {
         switch event.kind {
         case HC_APPLE_EVENT_LOG_LINE:
             if let text = event.text {
@@ -68,7 +68,7 @@ final class EngineController {
     }
 }
 
-private struct RuntimeEvent {
+fileprivate struct RuntimeEvent {
     let kind: hc_apple_event_kind
     let text: String?
     let phase: hc_apple_lifecycle_phase
