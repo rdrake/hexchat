@@ -58,6 +58,7 @@ void session_free (session *killsess);
 void lag_check (void);
 void hexchat_exit (void);
 void hexchat_exec (const char *cmd);
+int hexchat_main (int argc, char *argv[]);
 void xchat_init (void);
 
 #endif

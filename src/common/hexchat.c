@@ -1063,7 +1063,7 @@ set_locale (void)
 }
 
 int
-main (int argc, char *argv[])
+hexchat_main (int argc, char *argv[])
 {
 	int i;
 	int ret;
