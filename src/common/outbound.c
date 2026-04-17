@@ -3666,7 +3666,7 @@ cmd_notify (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 				fe_notify_ask (word[i], NULL);
 			else
 			{
-				notify_adduser (word[i], net);
+				notify_adduser (word[i], NULL, net);
 				EMIT_SIGNAL (XP_TE_ADDNOTIFY, sess, word[i], NULL, NULL, NULL, 0);
 			}
 		}

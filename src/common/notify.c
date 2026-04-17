@@ -135,11 +135,37 @@ notify_save (void)
 		while (list)
 		{
 			notify = (struct notify *) list->data;
-			HC_IGNORE_RESULT (write (fh, notify->name, strlen (notify->name)));
+			/* Line format:
+			 *   nick                          (legacy, nick-only)
+			 *   nick networks                 (legacy, with networks filter)
+			 *   nick account=X [networks=Y]   (nick + account, new)
+			 *   account=X [networks=Y]        (account-only, new)
+			 * Legacy nick-only / nick+networks lines remain untouched to
+			 * preserve forward-compat with older hexchat reading the file. */
+			if (notify->name)
+				HC_IGNORE_RESULT (write (fh, notify->name, strlen (notify->name)));
+
+			if (notify->account)
+			{
+				if (notify->name)
+					HC_IGNORE_RESULT (write (fh, " ", 1));
+				HC_IGNORE_RESULT (write (fh, "account=", 8));
+				HC_IGNORE_RESULT (write (fh, notify->account, strlen (notify->account)));
+			}
+
 			if (notify->networks)
 			{
 				HC_IGNORE_RESULT (write (fh, " ", 1));
-				HC_IGNORE_RESULT (write (fh, notify->networks, strlen (notify->networks)));
+				if (notify->account)
+				{
+					HC_IGNORE_RESULT (write (fh, "networks=", 9));
+					HC_IGNORE_RESULT (write (fh, notify->networks, strlen (notify->networks)));
+				}
+				else
+				{
+					/* Legacy-compatible: bare networks, no key= */
+					HC_IGNORE_RESULT (write (fh, notify->networks, strlen (notify->networks)));
+				}
 			}
 			HC_IGNORE_RESULT (write (fh, "\n", 1));
 			list = list->next;
@@ -149,32 +175,139 @@ notify_save (void)
         g_slist_free(list);
 }
 
+/* Strip one trailing \r if present (in case the conf has CRLF line endings
+ * and waitline only stripped the \n). */
+static void
+rstrip_cr (char *s)
+{
+	size_t len = strlen (s);
+	if (len > 0 && s[len - 1] == '\r')
+		s[len - 1] = 0;
+}
+
+/* Parse one line of notify.conf. Layout:
+ *   name                              (legacy: nick-only)
+ *   name networks_list                (legacy: nick + bare networks)
+ *   name account=X [networks=Y]       (new: nick + account)
+ *   account=X [networks=Y]            (new: account-only)
+ *
+ * Backward compat note: old hexchat writes bare `name` or `name net_list`,
+ * so we only split on key=value when we see `account=` or `networks=` as
+ * a token; otherwise we treat the line as the legacy two-token form. */
+static void
+notify_load_line (char *line)
+{
+	char *sep;
+	char *name = NULL;
+	char *account = NULL;
+	char *networks = NULL;
+
+	rstrip_cr (line);
+
+	/* Account-only form: "account=X [networks=Y]" */
+	if (g_str_has_prefix (line, "account="))
+	{
+		account = line + 8;
+		sep = strpbrk (account, " \t");
+		if (sep)
+		{
+			*sep++ = 0;
+			while (*sep == ' ' || *sep == '\t')
+				sep++;
+			if (g_str_has_prefix (sep, "networks="))
+				networks = sep + 9;
+		}
+	}
+	else
+	{
+		/* Name [space tail]. Tail is either "account=X [networks=Y]" or a
+		 * legacy bare networks list. */
+		name = line;
+		sep = strpbrk (line, " \t");
+		if (sep)
+		{
+			*sep++ = 0;
+			while (*sep == ' ' || *sep == '\t')
+				sep++;
+			if (g_str_has_prefix (sep, "account="))
+			{
+				char *acct = sep + 8;
+				char *sep2 = strpbrk (acct, " \t");
+				account = acct;
+				if (sep2)
+				{
+					*sep2++ = 0;
+					while (*sep2 == ' ' || *sep2 == '\t')
+						sep2++;
+					if (g_str_has_prefix (sep2, "networks="))
+						networks = sep2 + 9;
+				}
+			}
+			else if (*sep)
+			{
+				/* Legacy bare networks list */
+				networks = sep;
+			}
+		}
+	}
+
+	if ((name && *name) || (account && *account))
+		notify_adduser (name, account, networks);
+}
+
 void
 notify_load (void)
 {
 	int fh;
 	char buf[256];
-	char *sep;
+	int len;
 
 	fh = hexchat_open_file ("notify.conf", O_RDONLY, 0, 0);
-	if (fh != -1)
+	if (fh == -1)
+		return;
+
+	/* Hand-rolled line reader: waitline() loses buffered content when the
+	 * file ends without a trailing newline, which is easy to produce when
+	 * hand-editing notify.conf. Instead, accumulate bytes into buf until
+	 * we see '\n' OR EOF — either way, emit whatever we've got as a line. */
+	len = 0;
+	for (;;)
 	{
-		while (waitline (fh, buf, sizeof buf, FALSE) != -1)
+		char c;
+		int n = read (fh, &c, 1);
+
+		if (n <= 0)
 		{
-			if (buf[0] != '#' && buf[0] != 0)
+			/* EOF: flush any accumulated partial line. */
+			if (len > 0)
 			{
-				sep = strchr (buf, ' ');
-				if (sep)
-				{
-					sep[0] = 0;
-					notify_adduser (buf, sep + 1);					
-				}
-				else
-					notify_adduser (buf, NULL);
+				buf[len] = 0;
+				if (buf[0] != '#' && buf[0] != 0)
+					notify_load_line (buf);
 			}
+			break;
 		}
-		close (fh);
+
+		if (c == '\n' || len + 1 >= (int) sizeof (buf))
+		{
+			buf[len] = 0;
+			if (buf[0] != '#' && buf[0] != 0)
+				notify_load_line (buf);
+			len = 0;
+			/* If the break was the buffer filling rather than a newline,
+			 * drop the rest of this overly long line silently. */
+			if (c != '\n')
+			{
+				while (read (fh, &c, 1) == 1 && c != '\n')
+					; /* discard */
+			}
+			continue;
+		}
+
+		buf[len++] = c;
 	}
+
+	close (fh);
 }
 
 static struct notify_per_server *
@@ -187,6 +320,15 @@ notify_find (server *serv, char *nick)
 	while (list)
 	{
 		notify = (struct notify *) list->data;
+
+		/* notify_find backs the MONITOR/WATCH online/offline numerics which
+		 * are always nick-keyed, so account-only entries (no name) don't
+		 * participate here. */
+		if (!notify->name)
+		{
+			list = list->next;
+			continue;
+		}
 
 		servnot = notify_find_server_entry (notify, serv);
 		if (!servnot)
@@ -360,6 +502,12 @@ notify_watch_all (struct notify *notify, int add)
 {
 	server *serv;
 	GSList *list = serv_list;
+
+	/* WATCH/MONITOR are nick-keyed; nothing to register for
+	 * account-only entries. They rely on passive observation. */
+	if (!notify->name)
+		return;
+
 	while (list)
 	{
 		serv = list->data;
@@ -404,13 +552,14 @@ notify_send_watches (server * serv)
 	GSList *send_list = NULL;
 	int len = 0;
 
-	/* Only get the list for this network */
+	/* Only get the list for this network. Skip entries without a nick —
+	 * those are account-only friends and WATCH/MONITOR can't track them. */
 	list = notify_list;
 	while (list)
 	{
 		notify = list->data;
 
-		if (notify_do_network (notify, serv))
+		if (notify->name && notify_do_network (notify, serv))
 		{
 			send_list = g_slist_append (send_list, notify);
 		}
@@ -457,6 +606,12 @@ notify_markonline (server *serv, char *word[], const message_tags_data *tags_dat
 	while (list)
 	{
 		notify = (struct notify *) list->data;
+		if (!notify->name)
+		{
+			/* ISON is nick-only; account-only entries are tracked passively. */
+			list = list->next;
+			continue;
+		}
 		servnot = notify_find_server_entry (notify, serv);
 		if (!servnot)
 		{
@@ -505,7 +660,7 @@ notify_checklist_for_server (server *serv)
 	while (list)
 	{
 		notify = list->data;
-		if (notify_do_network (notify, serv))
+		if (notify->name && notify_do_network (notify, serv))
 		{
 			i++;
 			strcat (outbuf, notify->name);
@@ -557,13 +712,21 @@ notify_showlist (struct session *sess, const message_tags_data *tags_data)
 								  tags_data->timestamp);
 	while (list)
 	{
+		const char *display;
+
 		i++;
 		notify = (struct notify *) list->data;
+		display = notify->name ? notify->name : notify->account;
+		if (!display)
+		{
+			list = list->next;
+			continue;
+		}
 		servnot = notify_find_server_entry (notify, sess->server);
 		if (servnot && servnot->ison)
-			g_snprintf (outbuf, sizeof (outbuf), _("  %-20s online\n"), notify->name);
+			g_snprintf (outbuf, sizeof (outbuf), _("  %-20s online\n"), display);
 		else
-			g_snprintf (outbuf, sizeof (outbuf), _("  %-20s offline\n"), notify->name);
+			g_snprintf (outbuf, sizeof (outbuf), _("  %-20s offline\n"), display);
 		PrintTextTimeStamp (sess, outbuf, tags_data->timestamp);
 		list = list->next;
 	}
@@ -584,10 +747,20 @@ notify_deluser (char *name)
 	struct notify_per_server *servnot;
 	GSList *list = notify_list;
 
+	/* Match on nick OR account so the UI can remove either flavor of
+	 * entry using a single identifier string. rfc_casecmp for nick
+	 * (case-insensitive IRC collation), strcmp for account (case-
+	 * sensitive per IRCv3). */
 	while (list)
 	{
 		notify = (struct notify *) list->data;
-		if (!rfc_casecmp (notify->name, name))
+		gboolean match = FALSE;
+		if (notify->name && !rfc_casecmp (notify->name, name))
+			match = TRUE;
+		else if (notify->account && !strcmp (notify->account, name))
+			match = TRUE;
+
+		if (match)
 		{
 			fe_notify_update (notify->name);
 			/* Remove the records for each server */
@@ -601,6 +774,7 @@ notify_deluser (char *name)
 			notify_list = g_slist_remove (notify_list, notify);
 			notify_watch_all (notify, FALSE);
 			g_free (notify->networks);
+			g_free (notify->account);
 			g_free (notify->name);
 			g_free (notify);
 			fe_notify_update (0);
@@ -612,11 +786,14 @@ notify_deluser (char *name)
 }
 
 void
-notify_adduser (char *name, char *networks)
+notify_adduser (char *name, char *account, char *networks)
 {
 	struct notify *notify = g_new0 (struct notify, 1);
 
-	notify->name = g_strndup (name, NICKLEN - 1);
+	if (name && *name)
+		notify->name = g_strndup (name, NICKLEN - 1);
+	if (account && *account)
+		notify->account = g_strdup (account);
 
 	if (networks != NULL)
 		notify->networks = despacify_dup (networks);
@@ -625,11 +802,47 @@ notify_adduser (char *name, char *networks)
 	notify_checklist ();
 	fe_notify_update (notify->name);
 	fe_notify_update (0);
-	notify_watch_all (notify, TRUE);
+	/* Only register with the server's WATCH/MONITOR for nick-bearing
+	 * entries. Pure account entries are observed passively through
+	 * account-notify / account-tag / extended-join. */
+	if (notify->name)
+		notify_watch_all (notify, TRUE);
+}
+
+void
+notify_account_observed (server *serv, const char *nick,
+                         const char *account,
+                         const message_tags_data *tags_data)
+{
+	struct notify *notify;
+	struct notify_per_server *servnot;
+	GSList *list;
+
+	/* "*" and "0" are the conventional "no account" values from ACCOUNT /
+	 * extended-join. Treat NULL/empty the same. */
+	if (!account || !*account
+	    || !strcmp (account, "*") || !strcmp (account, "0"))
+		return;
+
+	for (list = notify_list; list; list = list->next)
+	{
+		notify = list->data;
+		if (!notify->account)
+			continue;
+		if (strcmp (notify->account, account) != 0)
+			continue;
+
+		servnot = notify_find_server_entry (notify, serv);
+		if (!servnot)
+			continue;
+
+		notify_announce_online (serv, servnot,
+			(nick && *nick) ? (char *) nick : notify->account, tags_data);
+	}
 }
 
 gboolean
-notify_is_in_list (server *serv, const char *name)
+notify_is_in_list (server *serv, const char *name, const char *account)
 {
 	struct notify *notify;
 	GSList *list = notify_list;
@@ -637,7 +850,9 @@ notify_is_in_list (server *serv, const char *name)
 	while (list)
 	{
 		notify = (struct notify *) list->data;
-		if (!serv->p_cmp (notify->name, name))
+		if (name && notify->name && !serv->p_cmp (notify->name, name))
+			return TRUE;
+		if (account && notify->account && !strcmp (notify->account, account))
 			return TRUE;
 		list = list->next;
 	}
@@ -655,7 +870,7 @@ notify_isnotify (struct session *sess, char *name)
 	while (list)
 	{
 		notify = (struct notify *) list->data;
-		if (!sess->server->p_cmp (notify->name, name))
+		if (notify->name && !sess->server->p_cmp (notify->name, name))
 		{
 			servnot = notify_find_server_entry (notify, sess->server);
 			if (servnot && servnot->ison)

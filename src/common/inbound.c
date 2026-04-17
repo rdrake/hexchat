@@ -921,6 +921,7 @@ inbound_join (server *serv, char *chan, char *user, char *ip, char *account,
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_JOIN, sess, user, chan, ip, account, 0,
 									  tags_data->timestamp);
 		userlist_add (sess, user, ip, account, realname, tags_data);
+		notify_account_observed (serv, user, account, tags_data);
 	}
 }
 
@@ -1019,6 +1020,8 @@ inbound_account (server *serv, char *nick, char *account,
 			userlist_set_account (sess, nick, account);
 		list = list->next;
 	}
+
+	notify_account_observed (serv, nick, account, tags_data);
 }
 
 void
@@ -1257,14 +1260,19 @@ inbound_away_notify (server *serv, char *nick, char *reason,
 		if (sess->server == serv)
 		{
 			userlist_set_away (sess, nick, reason ? TRUE : FALSE);
-			if (sess == serv->front_session && notify_is_in_list (serv, nick))
+			if (sess == serv->front_session)
 			{
-				if (reason)
-					EMIT_SIGNAL_TIMESTAMP (XP_TE_NOTIFYAWAY, sess, nick, reason, NULL,
-												  NULL, 0, tags_data->timestamp);
-				else
-					EMIT_SIGNAL_TIMESTAMP (XP_TE_NOTIFYBACK, sess, nick, NULL, NULL, 
-												  NULL, 0, tags_data->timestamp);
+				struct User *user = userlist_find (sess, nick);
+				const char *account = user ? user->account : NULL;
+				if (notify_is_in_list (serv, nick, account))
+				{
+					if (reason)
+						EMIT_SIGNAL_TIMESTAMP (XP_TE_NOTIFYAWAY, sess, nick, reason, NULL,
+													  NULL, 0, tags_data->timestamp);
+					else
+						EMIT_SIGNAL_TIMESTAMP (XP_TE_NOTIFYBACK, sess, nick, NULL, NULL,
+													  NULL, 0, tags_data->timestamp);
+				}
 			}
 		}
 		list = list->next;
@@ -1696,10 +1704,15 @@ inbound_user_info (session *sess, char *chan, char *user, char *host,
 	}
 
 	g_free (uhost);
+
+	/* Single observation call at the end covers both the channel-specific
+	 * and WHOIS-broadcast paths without duplicating the match walk. */
+	if (account && *account)
+		notify_account_observed (serv, nick, account, tags_data);
 }
 
 int
-inbound_banlist (session *sess, time_t stamp, char *chan, char *mask, 
+inbound_banlist (session *sess, time_t stamp, char *chan, char *mask,
 					  char *banner, int rplcode, const message_tags_data *tags_data)
 {
 	char *time_str = ctime (&stamp);

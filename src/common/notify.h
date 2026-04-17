@@ -24,7 +24,8 @@
 
 struct notify
 {
-	char *name;
+	char *name;		/* IRC nick, NULL for account-only entries */
+	char *account;	/* IRCv3 account name, NULL for nick-only entries */
 	char *networks;	/* network names, comma sep */
 	GSList *server_list;
 };
@@ -54,14 +55,26 @@ void notify_set_offline_list (server * serv, char *users, int quiet,
 								 const message_tags_data *tags_data);
 void notify_send_watches (server * serv);
 
+/* Observation hook: call when we see a user with an IRCv3 account on a
+ * server (via account-notify, account-tag, extended-join, or WHO). If any
+ * friend entry has a matching account, that entry is marked online and
+ * the usual NOTIFYONLINE signal fires. `account` may be NULL / "" / "*" /
+ * "0" — in which case this is a no-op. */
+void notify_account_observed (server *serv, const char *nick,
+                              const char *account,
+                              const message_tags_data *tags_data);
+
 /* the general stuff */
-void notify_adduser (char *name, char *networks);
+void notify_adduser (char *name, char *account, char *networks);
 int notify_deluser (char *name);
 void notify_cleanup (void);
 void notify_load (void);
 void notify_save (void);
 void notify_showlist (session *sess, const message_tags_data *tags_data);
-gboolean notify_is_in_list (server *serv, const char *name);
+/* Returns TRUE if either `name` matches an entry's nick (via server collation)
+ * or `account` (may be NULL) matches an entry's account. Account match is
+ * case-sensitive per IRCv3. */
+gboolean notify_is_in_list (server *serv, const char *name, const char *account);
 int notify_isnotify (session *sess, char *name);
 struct notify_per_server *notify_find_server_entry (struct notify *notify, struct server *serv);
 

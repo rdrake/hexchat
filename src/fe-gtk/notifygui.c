@@ -48,10 +48,10 @@ G_DECLARE_FINAL_TYPE (HcNotifyItem, hc_notify_item, HC, NOTIFY_ITEM, GObject)
 struct _HcNotifyItem {
 	GObject parent;
 	char *user;
+	char *account;
 	char *status;
 	char *server;
 	char *seen;
-	GdkRGBA *colour;
 	struct notify_per_server *nps;
 };
 
@@ -62,10 +62,10 @@ hc_notify_item_finalize (GObject *obj)
 {
 	HcNotifyItem *item = HC_NOTIFY_ITEM (obj);
 	g_free (item->user);
+	g_free (item->account);
 	g_free (item->status);
 	g_free (item->server);
 	g_free (item->seen);
-	/* colour is a pointer to static colors[] array, don't free */
 	G_OBJECT_CLASS (hc_notify_item_parent_class)->finalize (obj);
 }
 
@@ -79,23 +79,24 @@ static void
 hc_notify_item_init (HcNotifyItem *item)
 {
 	item->user = NULL;
+	item->account = NULL;
 	item->status = NULL;
 	item->server = NULL;
 	item->seen = NULL;
-	item->colour = NULL;
 	item->nps = NULL;
 }
 
 static HcNotifyItem *
-hc_notify_item_new (const char *user, const char *status, const char *server,
-                    const char *seen, GdkRGBA *colour, struct notify_per_server *nps)
+hc_notify_item_new (const char *user, const char *account, const char *status,
+                    const char *server, const char *seen,
+                    struct notify_per_server *nps)
 {
 	HcNotifyItem *item = g_object_new (HC_TYPE_NOTIFY_ITEM, NULL);
 	item->user = g_strdup (user ? user : "");
+	item->account = g_strdup (account ? account : "");
 	item->status = g_strdup (status ? status : "");
 	item->server = g_strdup (server ? server : "");
 	item->seen = g_strdup (seen ? seen : "");
-	item->colour = colour;
 	item->nps = nps;
 	return item;
 }
@@ -147,32 +148,20 @@ notify_setup_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer user_d
 	gtk_list_item_set_child (item, label);
 }
 
-/* Helper to apply color to label via Pango attributes */
-static void
-notify_apply_colour (GtkWidget *label, GdkRGBA *colour)
-{
-	if (colour)
-	{
-		PangoAttrList *attrs = pango_attr_list_new ();
-		pango_attr_list_insert (attrs, pango_attr_foreground_new (
-			(guint16)(colour->red * 65535),
-			(guint16)(colour->green * 65535),
-			(guint16)(colour->blue * 65535)));
-		if (colour->alpha < 1.0)
-			pango_attr_list_insert (attrs, pango_attr_foreground_alpha_new (
-				(guint16)(colour->alpha * 65535)));
-		gtk_label_set_attributes (GTK_LABEL (label), attrs);
-		pango_attr_list_unref (attrs);
-	}
-}
-
 static void
 notify_bind_user_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer user_data)
 {
 	GtkWidget *label = gtk_list_item_get_child (item);
 	HcNotifyItem *notify = gtk_list_item_get_item (item);
 	gtk_label_set_text (GTK_LABEL (label), notify->user ? notify->user : "");
-	notify_apply_colour (label, notify->colour);
+}
+
+static void
+notify_bind_account_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer user_data)
+{
+	GtkWidget *label = gtk_list_item_get_child (item);
+	HcNotifyItem *notify = gtk_list_item_get_item (item);
+	gtk_label_set_text (GTK_LABEL (label), notify->account ? notify->account : "");
 }
 
 static void
@@ -181,7 +170,6 @@ notify_bind_status_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer 
 	GtkWidget *label = gtk_list_item_get_child (item);
 	HcNotifyItem *notify = gtk_list_item_get_item (item);
 	gtk_label_set_text (GTK_LABEL (label), notify->status ? notify->status : "");
-	notify_apply_colour (label, notify->colour);
 }
 
 static void
@@ -190,7 +178,6 @@ notify_bind_server_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer 
 	GtkWidget *label = gtk_list_item_get_child (item);
 	HcNotifyItem *notify = gtk_list_item_get_item (item);
 	gtk_label_set_text (GTK_LABEL (label), notify->server ? notify->server : "");
-	notify_apply_colour (label, notify->colour);
 }
 
 static void
@@ -199,7 +186,6 @@ notify_bind_seen_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer us
 	GtkWidget *label = gtk_list_item_get_child (item);
 	HcNotifyItem *notify = gtk_list_item_get_item (item);
 	gtk_label_set_text (GTK_LABEL (label), notify->seen ? notify->seen : "");
-	notify_apply_colour (label, notify->colour);
 }
 
 static GtkWidget *
@@ -234,6 +220,12 @@ notify_columnview_new (GtkWidget *box)
 	                                  G_CALLBACK (notify_bind_user_cb), NULL, NULL);
 	gtk_column_view_column_set_resizable (col, TRUE);
 	gtk_column_view_column_set_expand (col, TRUE);
+
+	/* Add Account column */
+	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Account"),
+	                                  G_CALLBACK (notify_setup_cb),
+	                                  G_CALLBACK (notify_bind_account_cb), NULL, NULL);
+	gtk_column_view_column_set_resizable (col, TRUE);
 
 	/* Add Status column */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), _("Status"),
@@ -285,8 +277,16 @@ notify_gui_update (void)
 
 	while (list)
 	{
+		const char *acct;
+
 		notify = (struct notify *) list->data;
-		name = notify->name;
+		name = notify->name ? notify->name : "";
+		acct = notify->account ? notify->account : "";
+		if (!*name && !*acct)
+		{
+			list = list->next;
+			continue;
+		}
 		status = _("Offline");
 		server = "";
 
@@ -319,13 +319,15 @@ notify_gui_update (void)
 					g_snprintf (agobuf, sizeof (agobuf), _("%d hours ago"), lastseenminutes / 60);
 				seen = agobuf;
 			}
-			item = hc_notify_item_new (name, status, server, seen, &colors[4], NULL);
+			item = hc_notify_item_new (name, acct, status, server, seen, NULL);
 			g_list_store_append (notify_store, item);
 			g_object_unref (item);
 
 		} else
 		{
-			/* Online - add one line per server */
+			/* Online - add one line per server. Name and account shown on
+			 * the first row only; subsequent server rows leave them blank
+			 * so the repeated entry reads as a continuation. */
 			servcount = 0;
 			slist = notify->server_list;
 			status = _("Online");
@@ -334,14 +336,14 @@ notify_gui_update (void)
 				servnot = (struct notify_per_server *) slist->data;
 				if (servnot->ison)
 				{
-					if (servcount > 0)
-						name = "";
+					const char *row_name = servcount > 0 ? "" : name;
+					const char *row_acct = servcount > 0 ? "" : acct;
 					server = server_get_network (servnot->server, TRUE);
 
 					g_snprintf (agobuf, sizeof (agobuf), _("%d minutes ago"), (int)(time (0) - lastseen) / 60);
 					seen = agobuf;
 
-					item = hc_notify_item_new (name, status, server, seen, &colors[3], servnot);
+					item = hc_notify_item_new (row_name, row_acct, status, server, seen, servnot);
 					g_list_store_append (notify_store, item);
 					g_object_unref (item);
 
@@ -395,15 +397,23 @@ notify_remove_clicked (GtkWidget * igad)
 	item = g_list_model_get_item (G_LIST_MODEL (notify_store), pos);
 	if (item)
 	{
-		/* Check if this has the real name, or if we need to search backwards */
+		/* Prefer nick; fall back to account for account-only entries.
+		 * notify_deluser matches on either, so the same identifier works. */
 		if (item->user && item->user[0] != 0)
 		{
 			name = g_strdup (item->user);
 			found = TRUE;
 		}
+		else if (item->account && item->account[0] != 0)
+		{
+			name = g_strdup (item->account);
+			found = TRUE;
+		}
 		g_object_unref (item);
 
-		/* Search backwards for the real nick */
+		/* Search backwards for a row that has the primary identifier
+		 * (continuation rows for multi-server online entries have empty
+		 * name/account columns). */
 		while (!found && pos > 0)
 		{
 			pos--;
@@ -413,6 +423,11 @@ notify_remove_clicked (GtkWidget * igad)
 				if (item->user && item->user[0] != 0)
 				{
 					name = g_strdup (item->user);
+					found = TRUE;
+				}
+				else if (item->account && item->account[0] != 0)
+				{
+					name = g_strdup (item->account);
 					found = TRUE;
 				}
 				g_object_unref (item);
@@ -431,18 +446,26 @@ static void
 notifygui_add_ok (GtkWidget *button, GtkWidget *dialog)
 {
 	GtkWidget *entry = g_object_get_data (G_OBJECT (dialog), "nick_entry");
-	char *networks;
-	char *text;
+	GtkWidget *acct_entry = g_object_get_data (G_OBJECT (dialog), "acct_entry");
+	GtkWidget *net_entry = g_object_get_data (G_OBJECT (dialog), "net_entry");
+	const char *nick, *account, *networks;
+	char *nick_arg = NULL;
+	char *acct_arg = NULL;
+	char *net_arg = NULL;
 
-	text = (char *)hc_entry_get_text (entry);
-	if (text[0])
-	{
-		networks = (char*)hc_entry_get_text (g_object_get_data (G_OBJECT (entry), "net"));
-		if (g_ascii_strcasecmp (networks, "ALL") == 0 || networks[0] == 0)
-			notify_adduser (text, NULL);
-		else
-			notify_adduser (text, networks);
-	}
+	nick = hc_entry_get_text (entry);
+	account = acct_entry ? hc_entry_get_text (acct_entry) : "";
+	networks = net_entry ? hc_entry_get_text (net_entry) : "";
+
+	if (nick && *nick)
+		nick_arg = (char *) nick;
+	if (account && *account)
+		acct_arg = (char *) account;
+	if (networks && *networks && g_ascii_strcasecmp (networks, "ALL") != 0)
+		net_arg = (char *) networks;
+
+	if (nick_arg || acct_arg)
+		notify_adduser (nick_arg, acct_arg, net_arg);
 
 	hc_window_destroy_fn (GTK_WINDOW (dialog));
 }
@@ -484,7 +507,9 @@ fe_notify_ask (char *nick, char *networks)
 	gtk_grid_set_column_spacing (GTK_GRID (table), 8);
 	gtk_box_append (GTK_BOX (vbox), table);
 
+	/* Row 0: Nickname */
 	label = gtk_label_new (msg);
+	gtk_widget_set_halign (label, GTK_ALIGN_START);
 	gtk_grid_attach (GTK_GRID (table), label, 0, 0, 1, 1);
 
 	entry = gtk_entry_new ();
@@ -493,24 +518,48 @@ fe_notify_ask (char *nick, char *networks)
 						 	G_CALLBACK (notifygui_add_enter), dialog);
 	gtk_widget_set_hexpand (entry, TRUE);
 	gtk_grid_attach (GTK_GRID (table), entry, 1, 0, 1, 1);
-
 	g_object_set_data (G_OBJECT (dialog), "nick_entry", entry);
 
-	label = gtk_label_new (_("Notify on these networks:"));
-	gtk_grid_attach (GTK_GRID (table), label, 0, 2, 1, 1);
+	/* Row 1: Account (IRCv3 services account name) */
+	label = gtk_label_new (_("Account (optional):"));
+	gtk_widget_set_halign (label, GTK_ALIGN_START);
+	gtk_grid_attach (GTK_GRID (table), label, 0, 1, 1, 1);
 
 	wid = gtk_entry_new ();
-	g_object_set_data (G_OBJECT (entry), "net", wid);
+	g_signal_connect (G_OBJECT (wid), "activate",
+						 	G_CALLBACK (notifygui_add_enter), dialog);
+	gtk_widget_set_hexpand (wid, TRUE);
+	gtk_grid_attach (GTK_GRID (table), wid, 1, 1, 1, 1);
+	g_object_set_data (G_OBJECT (dialog), "acct_entry", wid);
+
+	label = gtk_label_new (NULL);
+	g_snprintf (buf, sizeof (buf),
+		"<i><span size=\"smaller\">%s</span></i>",
+		_("Match by IRCv3 account in addition to, or instead of, the nick. "
+		  "Leave nick empty for account-only friends."));
+	gtk_label_set_markup (GTK_LABEL (label), buf);
+	gtk_label_set_wrap (GTK_LABEL (label), TRUE);
+	gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+	gtk_grid_attach (GTK_GRID (table), label, 1, 2, 1, 1);
+
+	/* Row 3: Networks filter */
+	label = gtk_label_new (_("Notify on these networks:"));
+	gtk_widget_set_halign (label, GTK_ALIGN_START);
+	gtk_grid_attach (GTK_GRID (table), label, 0, 3, 1, 1);
+
+	wid = gtk_entry_new ();
 	g_signal_connect (G_OBJECT (wid), "activate",
 						 	G_CALLBACK (notifygui_add_enter), dialog);
 	hc_entry_set_text (wid, networks ? networks : "ALL");
 	gtk_widget_set_hexpand (wid, TRUE);
-	gtk_grid_attach (GTK_GRID (table), wid, 1, 2, 1, 1);
+	gtk_grid_attach (GTK_GRID (table), wid, 1, 3, 1, 1);
+	g_object_set_data (G_OBJECT (dialog), "net_entry", wid);
 
 	label = gtk_label_new (NULL);
 	g_snprintf (buf, sizeof (buf), "<i><span size=\"smaller\">%s</span></i>", _("Comma separated list of networks is accepted."));
 	gtk_label_set_markup (GTK_LABEL (label), buf);
-	gtk_grid_attach (GTK_GRID (table), label, 1, 3, 1, 1);
+	gtk_widget_set_halign (label, GTK_ALIGN_START);
+	gtk_grid_attach (GTK_GRID (table), label, 1, 4, 1, 1);
 
 	/* Button row */
 	button_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);

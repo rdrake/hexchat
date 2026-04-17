@@ -382,7 +382,9 @@ menu_create (GtkWidget *menu, GSList *list, char *target, int check_path)
 			if (pop->cmd[0] == 'n' && !strcmp (pop->cmd, "notify -n ASK %s"))
 			{
 				/* don't create this item if already in notify list */
-				if (!target || notify_is_in_list (current_sess->server, target))
+				struct User *u = target ? userlist_find (current_sess, target) : NULL;
+				const char *acct = u ? u->account : NULL;
+				if (!target || notify_is_in_list (current_sess->server, target, acct))
 				{
 					list = list->next;
 					continue;
@@ -845,7 +847,9 @@ nick_menu_build_popup (GMenu *menu, GSList *list, const char *target,
 			/* Check notify condition: skip if already in notify list */
 			if (pop->cmd[0] == 'n' && strcmp (pop->cmd, "notify -n ASK %s") == 0)
 			{
-				if (!target || notify_is_in_list (nick_menu_sess->server, target))
+				struct User *u = target ? userlist_find (nick_menu_sess, target) : NULL;
+				const char *acct = u ? u->account : NULL;
+				if (!target || notify_is_in_list (nick_menu_sess->server, target, acct))
 				{
 					list = list->next;
 					continue;
