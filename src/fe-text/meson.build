@@ -3,6 +3,6 @@ executable('hexchat-text',
     '../common/hexchat-main.c',
     'fe-text.c',
   ],
-  dependencies: hexchat_common_dep,
+  dependencies: [hexchat_common_dep, dependency('openssl')],
   install: true,
 )
