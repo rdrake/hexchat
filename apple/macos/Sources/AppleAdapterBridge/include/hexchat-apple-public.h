@@ -1,0 +1,1 @@
+../../../../../src/fe-apple/hexchat-apple-public.h
