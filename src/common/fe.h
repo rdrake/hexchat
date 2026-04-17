@@ -90,6 +90,9 @@ void fe_chan_list_end (struct server *serv);
 gboolean fe_add_ban_list (struct session *sess, char *mask, char *who, char *when, int rplcode);
 gboolean fe_ban_list_end (struct session *sess, int rplcode);
 void fe_notify_update (char *name);
+/* Friend list membership changed; userlist sort should re-evaluate so
+ * newly-added friends bubble to the top (and removed ones fall back). */
+void fe_notify_friends_changed (void);
 void fe_notify_ask (char *name, char *networks);
 void fe_text_clear (struct session *sess, int lines);
 void fe_close_window (struct session *sess);

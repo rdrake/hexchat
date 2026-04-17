@@ -775,6 +775,15 @@ fe_init (void)
 				"stack { padding: 0; margin: 0; } "
 				/* Mode buttons in topic bar - compact padding */
 				".hexchat-modebutton { min-height: 0; padding: 0 0; padding-top: 0; padding-bottom: 0; } "
+				/* Horizontal rule between friends and non-friends in the
+				 * userlist. Every row is tagged .hexchat-friend or
+				 * .hexchat-nonfriend in the bind callback; the CSS
+				 * adjacent-sibling selector below draws the rule at every
+				 * friend→non-friend transition without needing C to
+				 * compute neighbor state per bind. */
+				"row.hexchat-friend + row.hexchat-nonfriend { "
+				"  border-top: 1px solid alpha(currentColor, 0.4); "
+				"} "
 				/* Channel tabs - reduce horizontal padding for compact appearance */
 				"#hexchat-tab { "
 				"  padding: 2px 4px; "
@@ -1098,6 +1107,44 @@ fe_notify_update (char *name)
 {
 	if (!name)
 		notify_gui_update ();
+}
+
+void
+fe_notify_friends_changed (void)
+{
+	GSList *list;
+
+	/* Tell every live userlist view's sorter that comparison results may
+	 * have changed so the sort re-runs. Also force a full rebind by
+	 * null-then-restoring the selection model — GtkListView optimizes away
+	 * bind cb calls when the same item just moves positions, which leaves
+	 * the .hexchat-friend / .hexchat-nonfriend classes stale on moved
+	 * rows (e.g. a user flipping from non-friend to friend keeps the old
+	 * class and the boundary line ends up in the wrong place). */
+	for (list = sess_list; list; list = list->next)
+	{
+		session *sess = list->data;
+		GtkWidget *view;
+		GtkSorter *sorter;
+		GtkSelectionModel *sel_model;
+
+		if (!sess->gui || !sess->gui->user_tree)
+			continue;
+		view = sess->gui->user_tree;
+
+		sorter = g_object_get_data (G_OBJECT (view), "hc-userlist-sorter");
+		if (sorter)
+			gtk_sorter_changed (sorter, GTK_SORTER_CHANGE_DIFFERENT);
+
+		sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (view));
+		if (sel_model)
+		{
+			g_object_ref (sel_model);
+			gtk_column_view_set_model (GTK_COLUMN_VIEW (view), NULL);
+			gtk_column_view_set_model (GTK_COLUMN_VIEW (view), sel_model);
+			g_object_unref (sel_model);
+		}
+	}
 }
 
 void

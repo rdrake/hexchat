@@ -780,6 +780,7 @@ notify_deluser (char *name)
 			g_free (notify->name);
 			g_free (notify);
 			fe_notify_update (0);
+			fe_notify_friends_changed ();
 			return 1;
 		}
 		list = list->next;
@@ -804,6 +805,7 @@ notify_adduser (char *name, char *account, char *networks)
 	notify_checklist ();
 	fe_notify_update (notify->name);
 	fe_notify_update (0);
+	fe_notify_friends_changed ();
 	/* Only register with the server's WATCH/MONITOR for nick-bearing
 	 * entries. Pure account entries are observed passively through
 	 * account-notify / account-tag / extended-join. */
@@ -862,6 +864,7 @@ notify_account_cleared (server *serv, const char *was_account,
 	struct notify *notify;
 	struct notify_per_server *servnot;
 	GSList *list;
+	gboolean had_match = FALSE;
 
 	if (!was_account || !*was_account
 	    || !strcmp (was_account, "*") || !strcmp (was_account, "0"))
@@ -878,12 +881,19 @@ notify_account_cleared (server *serv, const char *was_account,
 		if (strcmp (notify->account, was_account) != 0)
 			continue;
 
+		had_match = TRUE;
 		servnot = notify_find_server_entry (notify, serv);
 		if (servnot && servnot->ison)
 			notify_announce_offline (serv, servnot,
 				notify->name ? notify->name : notify->account,
 				FALSE, tags_data);
 	}
+
+	/* A user's friend-ness just flipped off on this server — tell open
+	 * userlists to re-sort so the former friend drops back out of the
+	 * top group. */
+	if (had_match)
+		fe_notify_friends_changed ();
 }
 
 void
@@ -894,6 +904,7 @@ notify_account_observed (server *serv, const char *nick,
 	struct notify *notify;
 	struct notify_per_server *servnot;
 	GSList *list;
+	gboolean had_match = FALSE;
 
 	/* "*" and "0" are the conventional "no account" values from ACCOUNT /
 	 * extended-join. Treat NULL/empty the same. */
@@ -909,6 +920,7 @@ notify_account_observed (server *serv, const char *nick,
 		if (strcmp (notify->account, account) != 0)
 			continue;
 
+		had_match = TRUE;
 		servnot = notify_find_server_entry (notify, serv);
 		if (!servnot)
 			continue;
@@ -916,6 +928,11 @@ notify_account_observed (server *serv, const char *nick,
 		notify_announce_online (serv, servnot,
 			(nick && *nick) ? (char *) nick : notify->account, tags_data);
 	}
+
+	/* The observed user's friend-ness just flipped on — re-sort so they
+	 * bubble to the top of any open userlist showing this server. */
+	if (had_match)
+		fe_notify_friends_changed ();
 }
 
 gboolean

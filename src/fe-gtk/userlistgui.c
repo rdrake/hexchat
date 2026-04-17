@@ -485,6 +485,73 @@ userlist_drop_leave_cb (GtkDropTarget *target, gpointer user_data)
 	/* Nothing needed for GtkColumnView - selection is handled differently */
 }
 
+/* Deferred-from-userlist_show: kick the sorter so bind callbacks get a
+ * second, fully-settled pass after set_model completes. Needed because
+ * the initial set_model can rebind some rows with INVALID position which
+ * makes the friend-boundary helper bail before applying its CSS class. */
+static gboolean
+userlist_kick_sorter_idle (gpointer data)
+{
+	GtkSorter *sorter = data;
+	gtk_sorter_changed (sorter, GTK_SORTER_CHANGE_DIFFERENT);
+	g_object_unref (sorter);
+	return G_SOURCE_REMOVE;
+}
+
+/* Walk a widget subtree and clear friend-boundary / friend / nonfriend
+ * classes from every widget whose CSS node is named "row". Called from
+ * userlist_show before swapping the model so stale classes from the
+ * previous session don't carry over on row-widget reuse. */
+static void
+userlist_clear_row_classes (GtkWidget *w)
+{
+	GtkWidget *child;
+	const char *name;
+
+	if (!w)
+		return;
+
+	name = gtk_widget_get_css_name (w);
+	if (name && !strcmp (name, "row"))
+	{
+		gtk_widget_remove_css_class (w, "hexchat-friend");
+		gtk_widget_remove_css_class (w, "hexchat-nonfriend");
+	}
+
+	for (child = gtk_widget_get_first_child (w);
+	     child != NULL;
+	     child = gtk_widget_get_next_sibling (child))
+		userlist_clear_row_classes (child);
+}
+
+/* Is `hu` a friend on `sess->server`? Dual-keyed against the notify list:
+ * nick (case-insensitive, via server collation) OR account
+ * (case-sensitive, per IRCv3). */
+static inline gboolean
+userlist_item_is_friend (session *sess, HcUserItem *hu)
+{
+	if (!sess || !sess->server || !hu || !hu->user)
+		return FALSE;
+	return notify_is_in_list (sess->server, hu->user->nick, hu->user->account)
+	       ? TRUE : FALSE;
+}
+
+/* Primary sort axis: friends first. Returns -1/0/1 where 0 means the
+ * friend status is equal and the caller should fall through to the
+ * configured nick/ops comparator for tiebreak. Reverse-sort variants
+ * still want friends at the top, so they invoke the full composed
+ * comparator and negate — but the friend axis itself is NOT reversed
+ * below, it's always friends-first. */
+static inline int
+userlist_friend_cmp (session *sess, HcUserItem *a, HcUserItem *b)
+{
+	gboolean af = userlist_item_is_friend (sess, a);
+	gboolean bf = userlist_item_is_friend (sess, b);
+	if (af && !bf) return -1;
+	if (!af && bf) return 1;
+	return 0;
+}
+
 /*
  * GTK4 sorting comparison functions for GtkCustomSorter
  */
@@ -493,14 +560,24 @@ userlist_alpha_cmp_gtk4 (gconstpointer a, gconstpointer b, gpointer userdata)
 {
 	HcUserItem *item_a = HC_USER_ITEM ((gpointer)a);
 	HcUserItem *item_b = HC_USER_ITEM ((gpointer)b);
+	session *sess = userdata;
+	int r = userlist_friend_cmp (sess, item_a, item_b);
+	if (r != 0) return r;
 
-	return nick_cmp_alpha (item_a->user, item_b->user, ((session*)userdata)->server);
+	return nick_cmp_alpha (item_a->user, item_b->user, sess->server);
 }
 
 static int
 userlist_alpha_cmp_gtk4_rev (gconstpointer a, gconstpointer b, gpointer userdata)
 {
-	return -userlist_alpha_cmp_gtk4 (a, b, userdata);
+	HcUserItem *item_a = HC_USER_ITEM ((gpointer)a);
+	HcUserItem *item_b = HC_USER_ITEM ((gpointer)b);
+	session *sess = userdata;
+	int r = userlist_friend_cmp (sess, item_a, item_b);
+	if (r != 0) return r;
+
+	/* Reverse only the tiebreak axis; friends stay on top. */
+	return -nick_cmp_alpha (item_a->user, item_b->user, sess->server);
 }
 
 static int
@@ -508,14 +585,23 @@ userlist_ops_cmp_gtk4 (gconstpointer a, gconstpointer b, gpointer userdata)
 {
 	HcUserItem *item_a = HC_USER_ITEM ((gpointer)a);
 	HcUserItem *item_b = HC_USER_ITEM ((gpointer)b);
+	session *sess = userdata;
+	int r = userlist_friend_cmp (sess, item_a, item_b);
+	if (r != 0) return r;
 
-	return nick_cmp_az_ops (((session*)userdata)->server, item_a->user, item_b->user);
+	return nick_cmp_az_ops (sess->server, item_a->user, item_b->user);
 }
 
 static int
 userlist_ops_cmp_gtk4_rev (gconstpointer a, gconstpointer b, gpointer userdata)
 {
-	return -userlist_ops_cmp_gtk4 (a, b, userdata);
+	HcUserItem *item_a = HC_USER_ITEM ((gpointer)a);
+	HcUserItem *item_b = HC_USER_ITEM ((gpointer)b);
+	session *sess = userdata;
+	int r = userlist_friend_cmp (sess, item_a, item_b);
+	if (r != 0) return r;
+
+	return -nick_cmp_az_ops (sess->server, item_a->user, item_b->user);
 }
 
 GListStore *
@@ -583,6 +669,61 @@ userlist_nick_selection_changed_cb (GtkListItem *item, GParamSpec *pspec, gpoint
 		userlist_update_nick_color (GTK_LABEL (nick_label), user_item, selected);
 }
 
+/* Walk up from a cell widget to the GtkColumnView's internal row widget
+ * (CSS name "row"). GtkColumnView doesn't expose row widgets publicly,
+ * but every list-view row's CSS node is named "row"; matching by css-name
+ * is stable across GTK versions. Returns NULL if the row widget isn't
+ * found (e.g. during setup before the row is parented). */
+static GtkWidget *
+userlist_row_from_cell (GtkWidget *cell)
+{
+	GtkWidget *w = cell;
+	while (w)
+	{
+		const char *name = gtk_widget_get_css_name (w);
+		if (name && !strcmp (name, "row"))
+			return w;
+		w = gtk_widget_get_parent (w);
+	}
+	return NULL;
+}
+
+/* Classify the row as friend or non-friend. Instead of detecting the
+ * friend/non-friend boundary in C (which needed the previous row's item
+ * and was fragile during session transitions), every row is just tagged
+ * with one of `.hexchat-friend` or `.hexchat-nonfriend` based solely on
+ * its own item. A CSS adjacent-sibling rule
+ *     row.hexchat-friend + row.hexchat-nonfriend { border-top: ... }
+ * then draws the rule at every friend→non-friend transition. GTK's CSS
+ * engine handles the adjacency detection, so bind-time state races over
+ * neighbor positions can't miss the boundary. */
+static void
+userlist_mark_friend_boundary (GtkWidget *view, GtkWidget *cell,
+                               HcUserItem *hu)
+{
+	GtkWidget *row;
+	session *sess;
+	gboolean is_friend;
+
+	row = userlist_row_from_cell (cell);
+	if (!row)
+		return;
+
+	gtk_widget_remove_css_class (row, "hexchat-friend");
+	gtk_widget_remove_css_class (row, "hexchat-nonfriend");
+
+	if (!hu || !view)
+		return;
+
+	sess = g_object_get_data (G_OBJECT (view), "hc-userlist-sess");
+	if (!sess)
+		return;
+
+	is_friend = userlist_item_is_friend (sess, hu);
+	gtk_widget_add_css_class (row,
+		is_friend ? "hexchat-friend" : "hexchat-nonfriend");
+}
+
 /*
  * Icon column setup: create a GtkPicture, 16px wide, scale-down
  */
@@ -613,6 +754,8 @@ userlist_icon_bind_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer 
 		gtk_picture_set_paintable (GTK_PICTURE (picture), GDK_PAINTABLE (user_item->icon));
 	else
 		gtk_picture_set_paintable (GTK_PICTURE (picture), NULL);
+
+	userlist_mark_friend_boundary (user_data, picture, user_item);
 }
 
 /*
@@ -687,6 +830,8 @@ userlist_nick_bind_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer 
 
 	/* Set nick color (respects selection state) */
 	userlist_update_nick_color (GTK_LABEL (nick_label), user_item, gtk_list_item_get_selected (item));
+
+	userlist_mark_friend_boundary (view, nick_label, user_item);
 }
 
 /*
@@ -717,6 +862,8 @@ userlist_host_bind_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer 
 		return;
 
 	gtk_label_set_text (GTK_LABEL (host_label), user_item->hostname ? user_item->hostname : "");
+
+	userlist_mark_friend_boundary (user_data, host_label, user_item);
 }
 
 /*
@@ -1009,10 +1156,17 @@ userlist_create (GtkWidget *box)
 	gtk_column_view_set_reorderable (GTK_COLUMN_VIEW (view), FALSE);
 	gtk_widget_set_can_focus (view, FALSE);
 
+	/* All bind callbacks receive the view as user_data so they don't need
+	 * to gtk_widget_get_ancestor() on the cell — during set_model's
+	 * widget recycling the cell isn't always parented into the view tree
+	 * yet when bind fires, so the ancestor walk returns NULL and the
+	 * friend-boundary helper bails. Passing the view directly works
+	 * regardless of the cell's current parent state. */
+
 	/* Icon column — always created, visibility toggled by pref */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), NULL,
 		G_CALLBACK (userlist_icon_setup_cb),
-		G_CALLBACK (userlist_icon_bind_cb), NULL, NULL);
+		G_CALLBACK (userlist_icon_bind_cb), NULL, view);
 	gtk_column_view_column_set_fixed_width (col, 20);
 	gtk_column_view_column_set_visible (col, prefs.hex_gui_ulist_icons);
 	g_object_set_data (G_OBJECT (view), "icon-column", col);
@@ -1026,7 +1180,7 @@ userlist_create (GtkWidget *box)
 	/* Host column - visibility managed by pane resize callback */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), NULL,
 		G_CALLBACK (userlist_host_setup_cb),
-		G_CALLBACK (userlist_host_bind_cb), NULL, NULL);
+		G_CALLBACK (userlist_host_bind_cb), NULL, view);
 	gtk_column_view_column_set_visible (col, prefs.hex_gui_ulist_show_hosts);
 	g_object_set_data (G_OBJECT (view), "host-column", col);
 
@@ -1155,6 +1309,10 @@ userlist_show (session *sess)
 	GtkCustomSorter *sorter = NULL;
 	GCompareDataFunc cmp_func = NULL;
 
+	/* Proactively drop stale friend-boundary classes on any row widgets
+	 * we'll be reusing with this session's items. */
+	userlist_clear_row_classes (GTK_WIDGET (view));
+
 	/* Determine sort function based on prefs */
 	switch (prefs.hex_gui_ulist_sort)
 	{
@@ -1174,8 +1332,35 @@ userlist_show (session *sess)
 	/* Create multi-selection model for the column view */
 	sel_model = gtk_multi_selection_new (G_LIST_MODEL (sort_model));
 
-	/* Set the model on the column view */
+	/* Stash the session and sorter on the view BEFORE setting the model.
+	 *   - gtk_column_view_set_model triggers synchronous bind callbacks,
+	 *     which read "hc-userlist-sess" to check friend status against
+	 *     the current server. Setting the model first would make those
+	 *     binds read the previous session's data (stale friend check,
+	 *     boundary line computed against the wrong userlist).
+	 *   - fe_notify_friends_changed() reads "hc-userlist-sorter" to
+	 *     signal the sorter that comparison results may have changed. */
+	g_object_set_data (G_OBJECT (view), "hc-userlist-sess", sess);
+	g_object_set_data (G_OBJECT (view), "hc-userlist-sorter", sorter);
+
+	/* Clear the model first, THEN set the new one. Without this, direct
+	 * channel-to-channel transitions (A → B where both have friends) let
+	 * GtkColumnView reuse row widgets with mid-transition state, and the
+	 * friend-boundary bind helper bails out of some rows before applying
+	 * its CSS class. A null-first swap forces GTK to fully unbind every
+	 * row before rebinding against the new model, so binds see settled
+	 * positions and the boundary lands consistently. */
+	gtk_column_view_set_model (view, NULL);
 	gtk_column_view_set_model (view, GTK_SELECTION_MODEL (sel_model));
+
+	/* Belt-and-braces second pass: kick the sorter from a fresh main-loop
+	 * iteration. Handles the rare case where even the null-first swap
+	 * leaves one or two rows with transient state. */
+	if (sorter)
+	{
+		g_object_ref (sorter);
+		g_idle_add (userlist_kick_sorter_idle, sorter);
+	}
 
 	/* We don't unref sel_model/sort_model - the column view takes ownership */
 }

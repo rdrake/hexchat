@@ -700,6 +700,10 @@ fe_notify_update (char *name)
 {
 }
 void
+fe_notify_friends_changed (void)
+{
+}
+void
 fe_notify_ask (char *name, char *networks)
 {
 }
