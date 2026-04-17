@@ -2549,8 +2549,8 @@ mg_create_chanmodebuttons (session_gui *gui, GtkWidget *box)
 	if (input_style && input_style->font_desc)
 		hex_input_edit_set_font (HEX_INPUT_EDIT (gui->key_entry), input_style->font_desc);
 	hex_input_edit_set_max_chars (HEX_INPUT_EDIT (gui->key_entry), 23);
-	hex_input_edit_set_width_chars (HEX_INPUT_EDIT (gui->key_entry), 8);
-	hex_input_edit_set_max_width_chars (HEX_INPUT_EDIT (gui->key_entry), 12);
+	hex_input_edit_set_width_chars (HEX_INPUT_EDIT (gui->key_entry), 4);
+	hex_input_edit_set_max_width_chars (HEX_INPUT_EDIT (gui->key_entry), 8);
 	gtk_widget_set_name (gui->key_entry, "hexchat-inputbox");
 	gtk_widget_set_hexpand (gui->key_entry, FALSE);
 	gtk_box_append (GTK_BOX (box), gui->key_entry);
@@ -2571,8 +2571,8 @@ mg_create_chanmodebuttons (session_gui *gui, GtkWidget *box)
 	if (input_style && input_style->font_desc)
 		hex_input_edit_set_font (HEX_INPUT_EDIT (gui->limit_entry), input_style->font_desc);
 	hex_input_edit_set_max_chars (HEX_INPUT_EDIT (gui->limit_entry), 10);
-	hex_input_edit_set_width_chars (HEX_INPUT_EDIT (gui->limit_entry), 4);
-	hex_input_edit_set_max_width_chars (HEX_INPUT_EDIT (gui->limit_entry), 5);
+	hex_input_edit_set_width_chars (HEX_INPUT_EDIT (gui->limit_entry), 2);
+	hex_input_edit_set_max_width_chars (HEX_INPUT_EDIT (gui->limit_entry), 3);
 	gtk_widget_set_name (gui->limit_entry, "hexchat-inputbox");
 	gtk_widget_set_hexpand (gui->limit_entry, FALSE);
 	gtk_box_append (GTK_BOX (box), gui->limit_entry);
@@ -2675,11 +2675,13 @@ mg_create_topicbar (session *sess, GtkWidget *box)
 		gtk_widget_add_controller (topic, key_controller);
 	}
 
-	gui->topicbutton_box = bbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	gui->topicbutton_box = bbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, GUI_PANE_MARGIN);
+	gtk_widget_set_margin_start (bbox, GUI_PANE_MARGIN);
 	gtk_box_append (GTK_BOX (hbox), bbox);
 	mg_create_chanmodebuttons (gui, bbox);
 
-	gui->dialogbutton_box = bbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	gui->dialogbutton_box = bbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, GUI_PANE_MARGIN);
+	gtk_widget_set_margin_start (bbox, GUI_PANE_MARGIN);
 	gtk_box_append (GTK_BOX (hbox), bbox);
 	mg_create_dialogbuttons (bbox);
 }
@@ -4388,7 +4390,7 @@ mg_create_entry (session *sess, GtkWidget *box)
 		gtk_box_append (GTK_BOX (box), reply_hbox);
 	}
 
-	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, GUI_PANE_MARGIN);
 	gtk_widget_set_margin_bottom (hbox, GUI_PANE_MARGIN);
 	gtk_box_append (GTK_BOX (box), hbox);
 
@@ -4948,7 +4950,8 @@ fe_dlgbuttons_update (session *sess)
 
 	hc_widget_destroy_impl (gui->dialogbutton_box);
 
-	gui->dialogbutton_box = box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	gui->dialogbutton_box = box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, GUI_PANE_MARGIN);
+	gtk_widget_set_margin_start (box, GUI_PANE_MARGIN);
 	gtk_box_append (GTK_BOX (gui->topic_bar), box);
 	hc_box_reorder_child (GTK_BOX (gui->topic_bar), box, 3);
 	mg_create_dialogbuttons (box);

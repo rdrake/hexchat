@@ -769,7 +769,7 @@ fe_init (void)
 				"paned.collapsed.vertical > separator { margin: 3px 0; } "
 				/* Nick button — let input box drive the row height */
 				"#hexchat-nickbutton { min-height: 0; padding-top: 0; padding-bottom: 0; } "
-				"#hexchat-emojibtn { min-height: 0; padding-top: 0; padding-bottom: 0; margin-left: 4px; } "
+				"#hexchat-emojibtn { min-height: 0; padding-top: 0; padding-bottom: 0; } "
 				"#hexchat-emojibtn > button { min-height: 0; padding-top: 0; padding-bottom: 0; } "
 				/* GtkStack (used as page container) styling */
 				"stack { padding: 0; margin: 0; } "

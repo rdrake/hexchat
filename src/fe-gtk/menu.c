@@ -1124,19 +1124,15 @@ menu_ulbuttons_showhide_cb (session *sess)
 static void
 menu_cmbuttons_showhide_cb (session *sess)
 {
-	switch (sess->type)
-	{
-	case SESS_CHANNEL:
-		if (prefs.hex_gui_mode_buttons)
-		{
-			gtk_widget_set_visible (sess->gui->topicbutton_box, TRUE);
-		}
-		else
-			gtk_widget_set_visible (sess->gui->topicbutton_box, FALSE);
-		break;
-	default:
-		gtk_widget_set_visible (sess->gui->topicbutton_box, FALSE);
-	}
+	/* topicbutton_box is per-window (shared across all tabs in a tabbed
+	 * window), so visibility must reflect the session currently shown in
+	 * that window, not the arbitrary sess that menu_setting_foreach picked
+	 * from sess_list. Otherwise the server/dialog branch of the switch
+	 * would hide the box even when the user is viewing a channel tab. */
+	session *target = sess->gui->is_tab ? current_tab : sess;
+	gboolean show = (target && target->type == SESS_CHANNEL
+	                 && prefs.hex_gui_mode_buttons);
+	gtk_widget_set_visible (sess->gui->topicbutton_box, show);
 }
 
 static void
