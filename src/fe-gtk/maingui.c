@@ -3500,21 +3500,36 @@ mg_userlist_pane_size (session_gui *gui)
 
 /* Safety-net idle after mg_populate_userlist's synchronous column update:
  * verifies that after the ColumnView binds its first batch of row labels
- * the collapse thresholds still hold. Normally a no-op. */
+ * the collapse thresholds still hold. Normally a no-op.
+ *
+ * The scheduling session is ignored: column visibility is a property of
+ * the shared ColumnView, driven by the currently-displayed channel's
+ * user_model. A background-channel WHO burst queuing us would otherwise
+ * measure that channel's widest nick and apply the result to the
+ * foreground view — exactly the host-column flash observed during
+ * remote channel WHO responses. */
 static gboolean
 mg_userlist_update_columns_idle (gpointer user_data)
 {
-	session *sess = (session *)user_data;
+	session *queued_sess = (session *)user_data;
+	session *sess;
 	int pane_size;
 
-	if (!is_session (sess) || !sess->gui)
+	if (!is_session (queued_sess) || !queued_sess->gui)
 		return G_SOURCE_REMOVE;
 
-	/* Clear the pending flag first so a further update queued during
-	 * mg_update_userlist_columns (unlikely, but) gets a fresh idle. */
-	if (sess->gui->user_tree)
-		g_object_set_data (G_OBJECT (sess->gui->user_tree),
-			"hc-userlist-update-id", GUINT_TO_POINTER (0));
+	sess = current_sess;
+	if (!sess || !sess->gui || !sess->gui->user_tree)
+		return G_SOURCE_REMOVE;
+
+	/* Clear the pending flag on both widgets — in tabbed mode they're
+	 * the same widget so this is idempotent, but a background channel
+	 * with its own toplevel would otherwise have its flag stuck set
+	 * and never queue another update. */
+	g_object_set_data (G_OBJECT (queued_sess->gui->user_tree),
+		"hc-userlist-update-id", GUINT_TO_POINTER (0));
+	g_object_set_data (G_OBJECT (sess->gui->user_tree),
+		"hc-userlist-update-id", GUINT_TO_POINTER (0));
 
 	pane_size = mg_userlist_pane_size (sess->gui);
 	if (pane_size > 0)
