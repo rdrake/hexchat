@@ -1269,10 +1269,16 @@ userlist_create (GtkWidget *box)
 	gtk_column_view_column_set_visible (col, prefs.hex_gui_ulist_icons);
 	g_object_set_data (G_OBJECT (view), "icon-column", col);
 
-	/* Nick column — natural width; host is rightmost so host collapses first */
+	/* Nick column — natural width; host is rightmost so host collapses first.
+	 * Mark expandable so when the host column is hidden (progressive
+	 * collapse on narrow panes), nick grows to fill the remaining
+	 * ColumnView width. Otherwise rows only span icon + nick + host
+	 * natural widths, leaving empty space at the right edge and
+	 * causing the friend/non-friend separator line to end early. */
 	col = hc_column_view_add_column (GTK_COLUMN_VIEW (view), NULL,
 		G_CALLBACK (userlist_nick_setup_cb),
 		G_CALLBACK (userlist_nick_bind_cb), NULL, view);
+	gtk_column_view_column_set_expand (col, TRUE);
 	g_object_set_data (G_OBJECT (view), "nick-column", col);
 
 	/* Host column - visibility managed by pane resize callback */
