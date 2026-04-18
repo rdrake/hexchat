@@ -751,6 +751,15 @@ mg_hide_empty_boxes (session_gui *gui)
 	/* hide empty vpanes - so the handle is not shown */
 	mg_hide_empty_pane ((GtkPaned*)gui->vpane_right);
 	mg_hide_empty_pane ((GtkPaned*)gui->vpane_left);
+
+	/* The wraps (GtkOverlay around the vpane) follow the vpane's
+	 * visibility so the hpane doesn't reserve space for a hidden pane. */
+	if (gui->vpane_left_wrap)
+		gtk_widget_set_visible (gui->vpane_left_wrap,
+			gtk_widget_get_visible (gui->vpane_left));
+	if (gui->vpane_right_wrap)
+		gtk_widget_set_visible (gui->vpane_right_wrap,
+			gtk_widget_get_visible (gui->vpane_right));
 }
 
 /* Deferred right pane position restoration - called after window is mapped */
@@ -3019,6 +3028,39 @@ mg_create_textarea (session *sess, GtkWidget *box)
 	gtk_widget_set_halign (gui->xtext, GTK_ALIGN_FILL);
 	gtk_widget_set_valign (gui->xtext, GTK_ALIGN_FILL);
 	xtext = GTK_XTEXT (gui->xtext);
+
+	/* Wrap xtext in a GtkOverlay so layout-swap drops on xtext can show
+	 * the same hover-indicator UI the vpanes have. When both sides have
+	 * a pane, the drop handler rejects xtext drops entirely and the
+	 * indicators stay hidden — they only light up on the paneless side
+	 * during a drag. Indicator widgets are stashed on the xtext for the
+	 * motion handler to find. */
+	{
+		GtkWidget *overlay = gtk_overlay_new ();
+		GtkWidget *top_ind = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+		GtkWidget *bot_ind = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+
+		gtk_overlay_set_child (GTK_OVERLAY (overlay), GTK_WIDGET (xtext));
+
+		gtk_widget_add_css_class (top_ind, "hexchat-drop-indicator");
+		gtk_widget_set_can_target (top_ind, FALSE);
+		gtk_widget_set_valign (top_ind, GTK_ALIGN_START);
+		gtk_widget_set_halign (top_ind, GTK_ALIGN_START);
+		gtk_widget_set_visible (top_ind, FALSE);
+		gtk_overlay_add_overlay (GTK_OVERLAY (overlay), top_ind);
+
+		gtk_widget_add_css_class (bot_ind, "hexchat-drop-indicator");
+		gtk_widget_set_can_target (bot_ind, FALSE);
+		gtk_widget_set_valign (bot_ind, GTK_ALIGN_END);
+		gtk_widget_set_halign (bot_ind, GTK_ALIGN_START);
+		gtk_widget_set_visible (bot_ind, FALSE);
+		gtk_overlay_add_overlay (GTK_OVERLAY (overlay), bot_ind);
+
+		g_object_set_data (G_OBJECT (gui->xtext), "hc-drop-top", top_ind);
+		g_object_set_data (G_OBJECT (gui->xtext), "hc-drop-bottom", bot_ind);
+
+		gtk_frame_set_child (GTK_FRAME (frame), overlay);
+	}
 	gtk_xtext_set_max_indent (xtext, prefs.hex_text_max_indent);
 	gtk_xtext_set_thin_separator (xtext, prefs.hex_text_thin_sep);
 	gtk_xtext_set_urlcheck_function (xtext, mg_word_check);
@@ -3029,15 +3071,17 @@ mg_create_textarea (session *sess, GtkWidget *box)
 	gtk_xtext_set_react_emoji_button_callback (xtext, mg_react_emoji_button_cb, NULL);
 	gtk_xtext_set_redact_button_callback (xtext, mg_redact_button_cb, NULL);
 	gtk_xtext_set_reaction_click_callback (xtext, mg_reaction_click_cb, NULL);
-	gtk_frame_set_child (GTK_FRAME (frame), GTK_WIDGET (xtext));
+	/* xtext is parented into the drop-indicator overlay above; the frame's
+	 * child was set to that overlay already. */
 
 	mg_update_xtext (GTK_WIDGET (xtext));
 
 	g_signal_connect (G_OBJECT (xtext), "word_click",
 							G_CALLBACK (mg_word_clicked), NULL);
 
-	/* GTK4: DND for scrollbar (layout swapping) and xtext (file drops for DCC) */
-	mg_setup_scrollbar_dnd (gtk_xtext_get_scrollbar (xtext));
+	/* Layout-swap drops land on the two vpanes (handled where they're
+	 * created) or on xtext for the paneless-side case. File drops for
+	 * DCC also live on xtext. */
 	mg_setup_xtext_dnd (gui->xtext);
 }
 
@@ -3746,10 +3790,12 @@ mg_create_center (session *sess, session_gui *gui, GtkWidget *box)
 	 * size computation. They will be shown by mg_hide_empty_pane when
 	 * children are added by mg_place_userlist_and_chanview. */
 	gtk_widget_set_visible (gui->vpane_left, FALSE);
+	gui->vpane_left_wrap = mg_setup_pane_layout_dnd (gui->vpane_left, TRUE);
 
 	/* sep between top and bottom of right side */
 	gui->vpane_right = gtk_paned_new (GTK_ORIENTATION_VERTICAL);
 	gtk_widget_set_visible (gui->vpane_right, FALSE);
+	gui->vpane_right_wrap = mg_setup_pane_layout_dnd (gui->vpane_right, FALSE);
 
 	/* sep between left and xtext */
 	gui->hpane_left = gtk_paned_new (GTK_ORIENTATION_HORIZONTAL);
@@ -3768,34 +3814,34 @@ mg_create_center (session *sess, session_gui *gui, GtkWidget *box)
 
 	if (prefs.hex_gui_win_swap)
 	{
-		gtk_paned_set_end_child (GTK_PANED (gui->hpane_left), gui->vpane_left);
+		gtk_paned_set_end_child (GTK_PANED (gui->hpane_left), gui->vpane_left_wrap);
 		gtk_paned_set_resize_end_child (GTK_PANED (gui->hpane_left), FALSE);
 		gtk_paned_set_shrink_end_child (GTK_PANED (gui->hpane_left), TRUE);
 		gtk_paned_set_start_child (GTK_PANED (gui->hpane_left), gui->hpane_right);
 		gtk_paned_set_resize_start_child (GTK_PANED (gui->hpane_left), TRUE);
 		gtk_paned_set_shrink_start_child (GTK_PANED (gui->hpane_left), TRUE);
-		/* Window-edge margin on vpane_left. Handle-adjacent side is 0 —
-		 * hpane_left's separator margin supplies the 12px junction gap. */
-		gtk_widget_set_margin_start (gui->vpane_left, GUI_PANE_MARGIN);
+		/* Window-edge margin on the wrap so the drop-indicator strips
+		 * are offset with the vpane. */
+		gtk_widget_set_margin_start (gui->vpane_left_wrap, GUI_PANE_MARGIN);
 	}
 	else
 	{
-		gtk_paned_set_start_child (GTK_PANED (gui->hpane_left), gui->vpane_left);
+		gtk_paned_set_start_child (GTK_PANED (gui->hpane_left), gui->vpane_left_wrap);
 		gtk_paned_set_resize_start_child (GTK_PANED (gui->hpane_left), FALSE);
 		gtk_paned_set_shrink_start_child (GTK_PANED (gui->hpane_left), TRUE);
 		gtk_paned_set_end_child (GTK_PANED (gui->hpane_left), gui->hpane_right);
 		gtk_paned_set_resize_end_child (GTK_PANED (gui->hpane_left), TRUE);
 		gtk_paned_set_shrink_end_child (GTK_PANED (gui->hpane_left), TRUE);
-		gtk_widget_set_margin_start (gui->vpane_left, GUI_PANE_MARGIN);
+		gtk_widget_set_margin_start (gui->vpane_left_wrap, GUI_PANE_MARGIN);
 	}
 	/* shrink=TRUE allows userlist panel to shrink below its natural minimum */
-	gtk_paned_set_end_child (GTK_PANED (gui->hpane_right), gui->vpane_right);
+	gtk_paned_set_end_child (GTK_PANED (gui->hpane_right), gui->vpane_right_wrap);
 	gtk_paned_set_resize_end_child (GTK_PANED (gui->hpane_right), FALSE);
 	gtk_paned_set_shrink_end_child (GTK_PANED (gui->hpane_right), TRUE);
 
-	/* Window-edge margin on vpane_right. Handle-adjacent side is 0 —
-	 * hpane_right's separator margin supplies the 12px junction gap. */
-	gtk_widget_set_margin_end (gui->vpane_right, GUI_PANE_MARGIN);
+	/* Window-edge margin on the wrap so the drop-indicator strips
+	 * are offset with the vpane. */
+	gtk_widget_set_margin_end (gui->vpane_right_wrap, GUI_PANE_MARGIN);
 
 	/* GTK3: Ensure main paned fills its container for proper anchoring */
 	gtk_widget_set_halign (gui->hpane_left, GTK_ALIGN_FILL);
@@ -5266,86 +5312,233 @@ mg_xtext_file_drop_cb (GtkDropTarget *target, const GValue *value,
 #define DND_TARGET_CHANVIEW "HEXCHAT_CHANVIEW"
 #define DND_TARGET_USERLIST "HEXCHAT_USERLIST"
 
-/* Helper to determine drop position based on y coordinate */
+/* Apply a layout drop: put the dragged panel (chanview or userlist) in
+ * slot `target_pos` (1 = TL, 2 = BL, 3 = TR, 4 = BR) and bump the other
+ * panel to a different slot on the same side if they'd collide. Called
+ * from both the pane and xtext drop handlers with the pos resolved
+ * beforehand — see mg_pane_layout_drop_cb / mg_xtext_layout_drop_cb. */
 static void
-mg_handle_drop_gtk4 (GtkWidget *widget, double y, int *pos, int *other_pos)
+mg_apply_layout_drop (const char *drop_type, int target_pos)
 {
-	int height;
-	session_gui *gui = current_sess->gui;
+	int *this_pos;
+	int *other_pos;
+	session_gui *gui;
 
-	height = gtk_widget_get_height (widget);
+	if (!current_sess || !current_sess->gui)
+		return;
+	gui = current_sess->gui;
 
-	if (y < height / 2)
+	if (g_strcmp0 (drop_type, DND_TARGET_USERLIST) == 0)
 	{
-		if (gtk_widget_is_ancestor (widget, gui->vpane_left))
-			*pos = 1;	/* top left */
-		else
-			*pos = 3;	/* top right */
+		this_pos = &prefs.hex_gui_ulist_pos;
+		other_pos = &prefs.hex_gui_tab_pos;
+	}
+	else if (g_strcmp0 (drop_type, DND_TARGET_CHANVIEW) == 0)
+	{
+		this_pos = &prefs.hex_gui_tab_pos;
+		other_pos = &prefs.hex_gui_ulist_pos;
 	}
 	else
 	{
-		if (gtk_widget_is_ancestor (widget, gui->vpane_left))
-			*pos = 2;	/* bottom left */
-		else
-			*pos = 4;	/* bottom right */
+		return;
 	}
 
-	/* both in the same pos? must move one */
-	if (*pos == *other_pos)
+	*this_pos = target_pos;
+
+	/* Collision: bump the other panel to the opposite vertical slot on
+	 * whichever side it was on. */
+	if (*this_pos == *other_pos)
 	{
 		switch (*other_pos)
 		{
-		case 1:
-			*other_pos = 2;
-			break;
-		case 2:
-			*other_pos = 1;
-			break;
-		case 3:
-			*other_pos = 4;
-			break;
-		case 4:
-			*other_pos = 3;
-			break;
+		case 1: *other_pos = 2; break;
+		case 2: *other_pos = 1; break;
+		case 3: *other_pos = 4; break;
+		case 4: *other_pos = 3; break;
 		}
 	}
 
 	mg_place_userlist_and_chanview (gui);
 }
 
-/* Drop handler for scrollbar (receives chanview/userlist layout drops) */
+/* Drop handler for vpane_left / vpane_right. user_data is TRUE for the
+ * left pane (slots 1/2) and FALSE for the right (slots 3/4); y within
+ * the pane picks top vs bottom. */
 static gboolean
-mg_scrollbar_drop_cb (GtkDropTarget *target, const GValue *value,
-                      double x, double y, gpointer user_data)
+mg_pane_layout_drop_cb (GtkDropTarget *target, const GValue *value,
+                        double x, double y, gpointer user_data)
 {
+	GtkWidget *widget;
 	const char *drop_type;
+	gboolean is_left = GPOINTER_TO_INT (user_data);
+	int height;
+	int pos;
 
-	(void)target; (void)x; (void)user_data;
+	(void) x;
 
 	if (!G_VALUE_HOLDS (value, G_TYPE_STRING))
 		return FALSE;
-
 	drop_type = g_value_get_string (value);
 	if (!drop_type)
 		return FALSE;
 
-	if (g_strcmp0 (drop_type, DND_TARGET_USERLIST) == 0)
+	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
+	height = gtk_widget_get_height (widget);
+
+	if (y < height / 2)
+		pos = is_left ? 1 : 3;
+	else
+		pos = is_left ? 2 : 4;
+
+	mg_apply_layout_drop (drop_type, pos);
+	return TRUE;
+}
+
+/* Helpers for xtext drop indicators: two strips overlaid on the xtext,
+ * dynamically sized and positioned to cover the top and bottom halves
+ * of the paneless side (the half of xtext where the drop would land).
+ * When both sides already have panels, the drop handler rejects and the
+ * indicators stay hidden. */
+
+/* Returns TRUE iff a drop on xtext would be applied; also fills
+ * paneless_left with the side on which the drop would land. */
+static gboolean
+mg_xtext_drop_is_active (gboolean *paneless_left_out)
+{
+	gboolean left_paneless = prefs.hex_gui_tab_pos >= 3 && prefs.hex_gui_ulist_pos >= 3;
+	gboolean right_paneless = prefs.hex_gui_tab_pos <= 2 && prefs.hex_gui_ulist_pos <= 2;
+
+	if (!left_paneless && !right_paneless)
+		return FALSE;
+
+	if (paneless_left_out)
+		*paneless_left_out = left_paneless;
+	return TRUE;
+}
+
+static GdkDragAction
+mg_xtext_layout_motion_cb (GtkDropTarget *target, double x, double y,
+                           gpointer user_data)
+{
+	GtkWidget *widget;
+	GtkWidget *top_ind;
+	GtkWidget *bot_ind;
+	int width, height;
+	gboolean paneless_left;
+
+	(void) x; (void) user_data;
+
+	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
+	top_ind = g_object_get_data (G_OBJECT (widget), "hc-drop-top");
+	bot_ind = g_object_get_data (G_OBJECT (widget), "hc-drop-bottom");
+	width = gtk_widget_get_width (widget);
+	height = gtk_widget_get_height (widget);
+
+	if (top_ind) gtk_widget_remove_css_class (top_ind, "hexchat-drop-hover");
+	if (bot_ind) gtk_widget_remove_css_class (bot_ind, "hexchat-drop-hover");
+
+	if (!mg_xtext_drop_is_active (&paneless_left))
 	{
-		/* from userlist */
-		mg_handle_drop_gtk4 (gtk_xtext_get_scrollbar (GTK_XTEXT (current_sess->gui->xtext)), y,
-		                     &prefs.hex_gui_ulist_pos, &prefs.hex_gui_tab_pos);
+		if (top_ind) gtk_widget_set_visible (top_ind, FALSE);
+		if (bot_ind) gtk_widget_set_visible (bot_ind, FALSE);
+		return 0;
 	}
-	else if (g_strcmp0 (drop_type, DND_TARGET_CHANVIEW) == 0)
+
+	/* Size the strips to cover a quarter of xtext (one half vertically,
+	 * one half horizontally on the paneless side). Positioned via halign
+	 * = START or END. */
+	if (top_ind)
 	{
-		/* from chanview/tree */
-		mg_handle_drop_gtk4 (gtk_xtext_get_scrollbar (GTK_XTEXT (current_sess->gui->xtext)), y,
-		                     &prefs.hex_gui_tab_pos, &prefs.hex_gui_ulist_pos);
+		gtk_widget_set_halign (top_ind,
+			paneless_left ? GTK_ALIGN_START : GTK_ALIGN_END);
+		gtk_widget_set_size_request (top_ind, width / 2, height / 2);
+		gtk_widget_set_visible (top_ind, TRUE);
+	}
+	if (bot_ind)
+	{
+		gtk_widget_set_halign (bot_ind,
+			paneless_left ? GTK_ALIGN_START : GTK_ALIGN_END);
+		gtk_widget_set_size_request (bot_ind, width / 2, height / 2);
+		gtk_widget_set_visible (bot_ind, TRUE);
+	}
+
+	if (y < height / 2)
+	{
+		if (top_ind) gtk_widget_add_css_class (top_ind, "hexchat-drop-hover");
 	}
 	else
 	{
-		return FALSE;
+		if (bot_ind) gtk_widget_add_css_class (bot_ind, "hexchat-drop-hover");
 	}
 
+	return GDK_ACTION_MOVE;
+}
+
+static void
+mg_xtext_layout_leave_cb (GtkDropTarget *target, gpointer user_data)
+{
+	GtkWidget *widget;
+	GtkWidget *top_ind;
+	GtkWidget *bot_ind;
+
+	(void) user_data;
+
+	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
+	top_ind = g_object_get_data (G_OBJECT (widget), "hc-drop-top");
+	bot_ind = g_object_get_data (G_OBJECT (widget), "hc-drop-bottom");
+	if (top_ind)
+	{
+		gtk_widget_remove_css_class (top_ind, "hexchat-drop-hover");
+		gtk_widget_set_visible (top_ind, FALSE);
+	}
+	if (bot_ind)
+	{
+		gtk_widget_remove_css_class (bot_ind, "hexchat-drop-hover");
+		gtk_widget_set_visible (bot_ind, FALSE);
+	}
+}
+
+/* Drop handler for the xtext widget (layout-swap strings only — file
+ * drops go through mg_xtext_file_drop_cb). Only active when exactly one
+ * side is paneless: the drop then means "put this panel on the empty
+ * side", with y picking top vs bottom within that side. When both
+ * sides already have a panel the drop is ignored — the vpane drop
+ * targets handle that case unambiguously. */
+static gboolean
+mg_xtext_layout_drop_cb (GtkDropTarget *target, const GValue *value,
+                         double x, double y, gpointer user_data)
+{
+	GtkWidget *widget;
+	const char *drop_type;
+	int height;
+	int pos;
+	gboolean left_paneless, right_paneless;
+
+	(void) x; (void) user_data;
+
+	if (!G_VALUE_HOLDS (value, G_TYPE_STRING))
+		return FALSE;
+	drop_type = g_value_get_string (value);
+	if (!drop_type)
+		return FALSE;
+
+	/* A side is "paneless" when BOTH configured panels are on the
+	 * opposite side — slots 1/2 = left, 3/4 = right. */
+	left_paneless = prefs.hex_gui_tab_pos >= 3 && prefs.hex_gui_ulist_pos >= 3;
+	right_paneless = prefs.hex_gui_tab_pos <= 2 && prefs.hex_gui_ulist_pos <= 2;
+
+	if (!left_paneless && !right_paneless)
+		return FALSE;
+
+	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
+	height = gtk_widget_get_height (widget);
+
+	if (left_paneless)
+		pos = (y < height / 2) ? 1 : 2;
+	else
+		pos = (y < height / 2) ? 3 : 4;
+
+	mg_apply_layout_drop (drop_type, pos);
 	return TRUE;
 }
 
@@ -5422,7 +5615,10 @@ mg_chanview_drag_prepare_cb (GtkDragSource *source, double x, double y, gpointer
 	return gdk_content_provider_new_typed (G_TYPE_STRING, DND_TARGET_CHANVIEW);
 }
 
-/* Set up file drop target for xtext widget */
+/* Set up drop targets on the xtext widget: G_TYPE_FILE for DCC file
+ * drops and G_TYPE_STRING for layout-swap drops when one side is
+ * paneless. Two separate GtkDropTarget controllers because a single
+ * target can't accept multiple unrelated types. */
 void
 mg_setup_xtext_dnd (GtkWidget *xtext)
 {
@@ -5431,17 +5627,118 @@ mg_setup_xtext_dnd (GtkWidget *xtext)
 	target = gtk_drop_target_new (G_TYPE_FILE, GDK_ACTION_COPY | GDK_ACTION_MOVE);
 	g_signal_connect (target, "drop", G_CALLBACK (mg_xtext_file_drop_cb), NULL);
 	gtk_widget_add_controller (xtext, GTK_EVENT_CONTROLLER (target));
-}
-
-/* Set up scrollbar as drop target for layout swapping */
-void
-mg_setup_scrollbar_dnd (GtkWidget *scrollbar)
-{
-	GtkDropTarget *target;
 
 	target = gtk_drop_target_new (G_TYPE_STRING, GDK_ACTION_MOVE);
-	g_signal_connect (target, "drop", G_CALLBACK (mg_scrollbar_drop_cb), NULL);
-	gtk_widget_add_controller (scrollbar, GTK_EVENT_CONTROLLER (target));
+	g_signal_connect (target, "drop", G_CALLBACK (mg_xtext_layout_drop_cb), NULL);
+	g_signal_connect (target, "motion", G_CALLBACK (mg_xtext_layout_motion_cb), NULL);
+	g_signal_connect (target, "leave", G_CALLBACK (mg_xtext_layout_leave_cb), NULL);
+	gtk_widget_add_controller (xtext, GTK_EVENT_CONTROLLER (target));
+}
+
+/* Motion handler: toggle hover CSS classes on the stashed top/bottom
+ * indicator widgets based on y-position within the vpane. */
+static GdkDragAction
+mg_pane_layout_motion_cb (GtkDropTarget *target, double x, double y,
+                          gpointer user_data)
+{
+	GtkWidget *widget;
+	GtkWidget *top_ind;
+	GtkWidget *bot_ind;
+	int height;
+
+	(void) x; (void) user_data;
+
+	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
+	top_ind = g_object_get_data (G_OBJECT (widget), "hc-drop-top");
+	bot_ind = g_object_get_data (G_OBJECT (widget), "hc-drop-bottom");
+	height = gtk_widget_get_height (widget);
+
+	if (top_ind)
+		gtk_widget_remove_css_class (top_ind, "hexchat-drop-hover");
+	if (bot_ind)
+		gtk_widget_remove_css_class (bot_ind, "hexchat-drop-hover");
+
+	if (y < height / 2)
+	{
+		if (top_ind)
+			gtk_widget_add_css_class (top_ind, "hexchat-drop-hover");
+	}
+	else
+	{
+		if (bot_ind)
+			gtk_widget_add_css_class (bot_ind, "hexchat-drop-hover");
+	}
+
+	return GDK_ACTION_MOVE;
+}
+
+static void
+mg_pane_layout_leave_cb (GtkDropTarget *target, gpointer user_data)
+{
+	GtkWidget *widget;
+	GtkWidget *top_ind;
+	GtkWidget *bot_ind;
+
+	(void) user_data;
+
+	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
+	top_ind = g_object_get_data (G_OBJECT (widget), "hc-drop-top");
+	bot_ind = g_object_get_data (G_OBJECT (widget), "hc-drop-bottom");
+	if (top_ind)
+		gtk_widget_remove_css_class (top_ind, "hexchat-drop-hover");
+	if (bot_ind)
+		gtk_widget_remove_css_class (bot_ind, "hexchat-drop-hover");
+}
+
+/* Install a layout-swap drop target on a vpane. `is_left` distinguishes
+ * vpane_left (slots 1/2) from vpane_right (slots 3/4); y within the
+ * pane picks top vs bottom. Returns a GtkOverlay that wraps the vpane
+ * with two transparent hover-indicator strips (top half, bottom half)
+ * so the user can see which slot their drop will land in. */
+GtkWidget *
+mg_setup_pane_layout_dnd (GtkWidget *vpane, gboolean is_left)
+{
+	GtkWidget *overlay;
+	GtkWidget *top_ind;
+	GtkWidget *bot_ind;
+	GtkDropTarget *target;
+
+	overlay = gtk_overlay_new ();
+	gtk_overlay_set_child (GTK_OVERLAY (overlay), vpane);
+
+	/* Two transparent strips, one for each half. They don't consume
+	 * input (can-target = FALSE) so drop events reach the vpane. CSS
+	 * makes them invisible by default; a .hexchat-drop-hover class on
+	 * the one under the cursor lights it up during a drag. */
+	top_ind = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_add_css_class (top_ind, "hexchat-drop-indicator");
+	gtk_widget_add_css_class (top_ind, "hexchat-drop-indicator-top");
+	gtk_widget_set_can_target (top_ind, FALSE);
+	gtk_widget_set_halign (top_ind, GTK_ALIGN_FILL);
+	gtk_widget_set_valign (top_ind, GTK_ALIGN_START);
+	gtk_widget_set_hexpand (top_ind, TRUE);
+	gtk_overlay_add_overlay (GTK_OVERLAY (overlay), top_ind);
+
+	bot_ind = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_add_css_class (bot_ind, "hexchat-drop-indicator");
+	gtk_widget_add_css_class (bot_ind, "hexchat-drop-indicator-bottom");
+	gtk_widget_set_can_target (bot_ind, FALSE);
+	gtk_widget_set_halign (bot_ind, GTK_ALIGN_FILL);
+	gtk_widget_set_valign (bot_ind, GTK_ALIGN_END);
+	gtk_widget_set_hexpand (bot_ind, TRUE);
+	gtk_overlay_add_overlay (GTK_OVERLAY (overlay), bot_ind);
+
+	g_object_set_data (G_OBJECT (vpane), "hc-drop-top", top_ind);
+	g_object_set_data (G_OBJECT (vpane), "hc-drop-bottom", bot_ind);
+
+	target = gtk_drop_target_new (G_TYPE_STRING, GDK_ACTION_MOVE);
+	g_signal_connect (target, "drop", G_CALLBACK (mg_pane_layout_drop_cb),
+	                  GINT_TO_POINTER (is_left));
+	g_signal_connect (target, "motion", G_CALLBACK (mg_pane_layout_motion_cb), NULL);
+	g_signal_connect (target, "leave", G_CALLBACK (mg_pane_layout_leave_cb), NULL);
+	gtk_widget_add_controller (vpane, GTK_EVENT_CONTROLLER (target));
+
+	return overlay;
 }
 
 /* Set up userlist as drag source for layout swapping */

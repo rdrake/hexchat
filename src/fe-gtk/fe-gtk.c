@@ -784,6 +784,17 @@ fe_init (void)
 				"row.hexchat-friend + row.hexchat-nonfriend { "
 				"  border-top: 1px solid alpha(currentColor, 0.4); "
 				"} "
+				/* Layout-swap drop indicators: two transparent strips
+				 * overlaid on each vpane, highlighted when the drop
+				 * cursor is hovering over their half. */
+				".hexchat-drop-indicator { "
+				"  min-height: 48px; "
+				"  background-color: transparent; "
+				"  transition: background-color 120ms ease; "
+				"} "
+				".hexchat-drop-indicator.hexchat-drop-hover { "
+				"  background-color: alpha(@theme_selected_bg_color, 0.35); "
+				"} "
 				/* Channel tabs - reduce horizontal padding for compact appearance */
 				"#hexchat-tab { "
 				"  padding: 2px 4px; "

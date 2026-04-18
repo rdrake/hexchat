@@ -55,7 +55,7 @@ void mg_update_meters (session_gui *);
 void mg_inputbox_cb (GtkWidget *igad, session_gui *gui);
 /* DND - GTK4 uses GtkDropTarget/GtkDragSource */
 void mg_setup_xtext_dnd (GtkWidget *xtext);
-void mg_setup_scrollbar_dnd (GtkWidget *scrollbar);
+GtkWidget *mg_setup_pane_layout_dnd (GtkWidget *vpane, gboolean is_left);
 void mg_setup_userlist_drag_source (GtkWidget *treeview);
 void mg_setup_chanview_drag_source (GtkWidget *widget);
 /* search */

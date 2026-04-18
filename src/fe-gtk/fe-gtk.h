@@ -151,7 +151,9 @@ typedef struct session_gui
 		*hpane_left,
 		*hpane_right,
 		*vpane_left,
+		*vpane_left_wrap,		/* GtkOverlay wrapping vpane_left with drop indicators */
 		*vpane_right,
+		*vpane_right_wrap,
 		*menu,
 		*bar,				/* connecting progress bar */
 		*nick_box,		/* contains label to the left of input_box */
