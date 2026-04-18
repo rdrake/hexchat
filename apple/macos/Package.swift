@@ -11,6 +11,7 @@ let package = Package(
     products: [
         .executable(name: "HexChatAppleShell", targets: ["HexChatAppleShell"]),
         .executable(name: "HexChatAppleSmoke", targets: ["HexChatAppleSmoke"]),
+        .executable(name: "HexChatAppleNetworkE2E", targets: ["HexChatAppleNetworkE2E"]),
     ],
     targets: [
         .target(
@@ -38,6 +39,19 @@ let package = Package(
             name: "HexChatAppleSmoke",
             dependencies: ["AppleAdapterBridge"],
             path: "Sources/HexChatAppleSmoke",
+            linkerSettings: [
+                .unsafeFlags([
+                    "-L\(adapterLibDir)",
+                    "-lhexchatappleadapter",
+                    "-Xlinker", "-rpath",
+                    "-Xlinker", adapterLibDir,
+                ]),
+            ]
+        ),
+        .executableTarget(
+            name: "HexChatAppleNetworkE2E",
+            dependencies: ["AppleAdapterBridge"],
+            path: "Sources/HexChatAppleNetworkE2E",
             linkerSettings: [
                 .unsafeFlags([
                     "-L\(adapterLibDir)",

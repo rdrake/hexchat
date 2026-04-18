@@ -2,6 +2,8 @@
 #include <string.h>
 
 #include "hexchat-apple.h"
+#include "apple-runtime.h"
+#include "../common/fe.h"
 
 typedef struct
 {
@@ -14,6 +16,7 @@ typedef struct
 	gboolean saw_session_event;
 	gboolean saw_session_activate;
 	gboolean saw_scoped_log_event;
+	gboolean saw_echo_slash_log;
 } runtime_events_state;
 
 static void
@@ -71,6 +74,11 @@ runtime_event_cb (const hc_apple_event *event, void *userdata)
 
 	if (event->kind == HC_APPLE_EVENT_LOG_LINE)
 	{
+		if (event->text && strcmp (event->text, "runtime-events-slash") == 0)
+		{
+			state->saw_echo_slash_log = TRUE;
+		}
+
 		if (event->text && event->network && event->channel &&
 		    event->session_id == 42 &&
 		    strcmp (event->text, "scoped-log") == 0 &&
@@ -80,6 +88,26 @@ runtime_event_cb (const hc_apple_event *event, void *userdata)
 			state->saw_scoped_log_event = TRUE;
 		}
 	}
+}
+
+static gboolean
+wait_for_flag (gboolean *flag, gint64 timeout_ms)
+{
+	const gint64 deadline = g_get_monotonic_time () + timeout_ms * 1000;
+	while (g_get_monotonic_time () < deadline)
+	{
+		if (*flag)
+			return TRUE;
+		g_usleep (10 * 1000);
+	}
+	return *flag;
+}
+
+static gboolean
+noop_timeout_cb (gpointer data)
+{
+	(void)data;
+	return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -93,9 +121,21 @@ test_runtime_events_lifecycle_and_command_path (void)
 		.no_auto = 1,
 		.skip_plugins = 1,
 	};
+	int timer_tag;
+	GSource *source;
 
 	g_assert_true (hc_apple_runtime_start (&config, runtime_event_cb, &state));
+	timer_tag = fe_timeout_add (60 * 1000, noop_timeout_cb, NULL);
+	g_assert_cmpint (timer_tag, >, 0);
+	source = g_main_context_find_source_by_id (hc_apple_runtime.context, (guint)timer_tag);
+	g_assert_nonnull (source);
+	fe_timeout_remove (timer_tag);
+	source = g_main_context_find_source_by_id (hc_apple_runtime.context, (guint)timer_tag);
+	g_assert_null (source);
+
 	g_assert_true (hc_apple_runtime_post_command ("echo runtime-events"));
+	g_assert_true (hc_apple_runtime_post_command ("/echo runtime-events-slash"));
+	g_assert_true (wait_for_flag (&state.saw_echo_slash_log, 3000));
 	hc_apple_runtime_emit_log_line_for_session ("scoped-log", "runtime-net", "#runtime", 42);
 	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_INSERT, "runtime-net", "#runtime", "runtime-user", 42);
 	hc_apple_runtime_emit_session (HC_APPLE_SESSION_ACTIVATE, "runtime-net", "#runtime", 42);
@@ -118,6 +158,7 @@ test_runtime_events_lifecycle_and_command_path (void)
 	g_assert_true (state.saw_session_event);
 	g_assert_true (state.saw_session_activate);
 	g_assert_true (state.saw_scoped_log_event);
+	g_assert_true (state.saw_echo_slash_log);
 }
 
 int

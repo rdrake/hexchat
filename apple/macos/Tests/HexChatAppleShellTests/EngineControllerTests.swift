@@ -87,6 +87,47 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertTrue(controller.messages.contains(where: { $0.sessionID == EngineController.runtimeSessionID(202) && $0.raw == "message for 202" }))
         XCTAssertFalse(controller.messages.contains(where: { $0.sessionID == EngineController.runtimeSessionID(101) && $0.raw == "message for 202" }))
     }
+
+    func testServerAndChannelSessionsAreDistinctForUILists() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "server", sessionID: 1)
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#cybercafe", sessionID: 2)
+
+        XCTAssertTrue(controller.sessions.contains(where: { $0.id == EngineController.runtimeSessionID(1) && $0.channel == "server" }))
+        XCTAssertTrue(controller.sessions.contains(where: { $0.id == EngineController.runtimeSessionID(2) && $0.channel == "#cybercafe" }))
+        XCTAssertEqual(controller.networkSections.first(where: { $0.name == "AfterNET" })?.sessions.count, 2)
+    }
+
+    func testChannelUserlistDoesNotPopulateServerSessionUsers() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "server", sessionID: 1)
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#cybercafe", sessionID: 2)
+
+        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#cybercafe", nick: "alice", sessionID: 2)
+        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#cybercafe", nick: "@bob", sessionID: 2)
+
+        controller.selectedSessionID = EngineController.runtimeSessionID(1)
+        XCTAssertTrue(controller.visibleUsers.isEmpty)
+
+        controller.selectedSessionID = EngineController.runtimeSessionID(2)
+        XCTAssertEqual(controller.visibleUsers, ["@bob", "alice"])
+    }
+
+    func testServerAndChannelMessagesRemainRoutedToOwnSessions() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "server", sessionID: 1)
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#cybercafe", sessionID: 2)
+
+        controller.applyLogLineForTest(network: "AfterNET", channel: "server", text: "-server notice-", sessionID: 1)
+        controller.applyLogLineForTest(network: "AfterNET", channel: "#cybercafe", text: "<alice> hi", sessionID: 2)
+
+        let serverSession = EngineController.runtimeSessionID(1)
+        let channelSession = EngineController.runtimeSessionID(2)
+        XCTAssertTrue(controller.messages.contains(where: { $0.sessionID == serverSession && $0.raw == "-server notice-" }))
+        XCTAssertTrue(controller.messages.contains(where: { $0.sessionID == channelSession && $0.raw == "<alice> hi" }))
+        XCTAssertFalse(controller.messages.contains(where: { $0.sessionID == serverSession && $0.raw == "<alice> hi" }))
+        XCTAssertFalse(controller.messages.contains(where: { $0.sessionID == channelSession && $0.raw == "-server notice-" }))
+    }
 }
 #else
 @testable import HexChatAppleShell

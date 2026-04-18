@@ -542,7 +542,14 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 void
 fe_timeout_remove (int tag)
 {
-	g_source_remove (tag);
+	GSource *source;
+
+	if (tag <= 0)
+		return;
+
+	source = g_main_context_find_source_by_id (hc_apple_runtime.context, (guint)tag);
+	if (source)
+		g_source_destroy (source);
 }
 
 int
@@ -574,7 +581,14 @@ fe_timeout_add_seconds (int interval, void *callback, void *userdata)
 void
 fe_input_remove (int tag)
 {
-	g_source_remove (tag);
+	GSource *source;
+
+	if (tag <= 0)
+		return;
+
+	source = g_main_context_find_source_by_id (hc_apple_runtime.context, (guint)tag);
+	if (source)
+		g_source_destroy (source);
 }
 
 int

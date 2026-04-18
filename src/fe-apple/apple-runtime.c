@@ -216,9 +216,17 @@ hc_apple_dispatch_command_cb (gpointer data)
 
 	if (!target)
 		target = current_tab ? current_tab : current_sess;
+	if (!target && sess_list)
+		target = (session *)sess_list->data;
+	if (!target)
+		target = new_ircwindow (NULL, NULL, SESS_SERVER, 1);
 
 	if (target)
-		handle_command (target, dispatch->command, FALSE);
+	{
+		current_tab = target;
+		/* Match frontend input path semantics (supports /commands and plain text). */
+		handle_multiline (target, dispatch->command, TRUE, FALSE);
+	}
 
 	g_free (dispatch->command);
 	g_free (dispatch);

@@ -28,6 +28,8 @@ resource.h
 # OSX
 osx/HexChat.app
 osx/.HexChat.app
+.DS_Store
+apple/macos/.build/
 *.zip
 *.dmg
 *.VC.db
