@@ -1132,10 +1132,15 @@ fe_notify_update (char *name)
 		notify_gui_update ();
 }
 
-void
-fe_notify_friends_changed (void)
+static guint fe_notify_friends_idle_id = 0;
+
+static gboolean
+fe_notify_friends_changed_idle (gpointer user_data)
 {
 	GSList *list;
+
+	(void) user_data;
+	fe_notify_friends_idle_id = 0;
 
 	/* Tell every live userlist view's sorter that comparison results may
 	 * have changed so the sort re-runs. Also force a full rebind by
@@ -1168,6 +1173,24 @@ fe_notify_friends_changed (void)
 			g_object_unref (sel_model);
 		}
 	}
+
+	return G_SOURCE_REMOVE;
+}
+
+void
+fe_notify_friends_changed (void)
+{
+	/* Coalesce bursts. During a WHO response, notify_account_observed
+	 * fires once per friend in the channel. The full sorter-kick +
+	 * model null-restore is expensive — each round rebinds every row
+	 * and triggers mg_update_userlist_columns, which shows up to the
+	 * user as the host column flashing hide/show through the burst.
+	 * Collapse all calls within one mainloop iteration into a single
+	 * refresh that runs after the burst settles. */
+	if (fe_notify_friends_idle_id != 0)
+		return;
+	fe_notify_friends_idle_id =
+		g_idle_add (fe_notify_friends_changed_idle, NULL);
 }
 
 void
