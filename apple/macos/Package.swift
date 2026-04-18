@@ -2,6 +2,7 @@
 import PackageDescription
 
 let adapterLibDir = "../../builddir/src/fe-apple"
+let bundledLibRPath = "@executable_path/../Frameworks"
 
 let package = Package(
     name: "HexChatApple",
@@ -31,6 +32,8 @@ let package = Package(
                     "-lhexchatappleadapter",
                     "-Xlinker", "-rpath",
                     "-Xlinker", adapterLibDir,
+                    "-Xlinker", "-rpath",
+                    "-Xlinker", bundledLibRPath,
                 ]),
             ]
         ),
@@ -44,6 +47,8 @@ let package = Package(
                     "-lhexchatappleadapter",
                     "-Xlinker", "-rpath",
                     "-Xlinker", adapterLibDir,
+                    "-Xlinker", "-rpath",
+                    "-Xlinker", bundledLibRPath,
                 ]),
             ]
         ),

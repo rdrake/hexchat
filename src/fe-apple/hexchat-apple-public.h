@@ -46,6 +46,8 @@ typedef enum
 typedef struct
 {
 	hc_apple_event_kind kind;
+	/* Event payload pointers are borrowed and valid only during callback execution. */
+	/* Consumers must copy any needed string data before the callback returns. */
 	const char *text;
 	hc_apple_lifecycle_phase lifecycle_phase;
 	int code;

@@ -88,6 +88,11 @@ final class EngineController {
 
     private var callbackUserdata: UnsafeMutableRawPointer?
 
+    deinit {
+        hc_apple_runtime_stop()
+        callbackUserdata = nil
+    }
+
     static func sessionID(network: String, channel: String) -> String {
         "\(network.lowercased())::\(channel.lowercased())"
     }
@@ -138,17 +143,21 @@ final class EngineController {
             return
         }
         let config = hc_apple_runtime_config(config_dir: nil, no_auto: 1, skip_plugins: 1)
-        callbackUserdata = Unmanaged.passUnretained(self).toOpaque()
+        let userdata = Unmanaged.passUnretained(self).toOpaque()
         withUnsafePointer(to: config) { configPtr in
-            let started = hc_apple_runtime_start(configPtr, engineEventCallback, callbackUserdata)
+            let started = hc_apple_runtime_start(configPtr, engineEventCallback, userdata)
             if started == 0 {
                 appendMessage(raw: "! runtime start failed", kind: .error)
+                callbackUserdata = nil
+            } else {
+                callbackUserdata = userdata
             }
         }
     }
 
     func stop() {
         hc_apple_runtime_stop()
+        callbackUserdata = nil
     }
 
     func send(_ command: String, trackHistory: Bool = true) {
