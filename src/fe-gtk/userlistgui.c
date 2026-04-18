@@ -385,20 +385,14 @@ fe_userlist_rehash (session *sess, struct User *user)
 
 	g_object_unref (item);
 
-	/* Rehash can be triggered by an access-level change (ops/voice
-	 * promotion or demotion) that should reorder the sort. Invalidate
-	 * the current sorter — if the sort result is unchanged (the common
-	 * case, for hostname or away updates), GtkSortListModel emits
-	 * nothing and no rebind flicker occurs. If the access order did
-	 * change, only the affected rows rebind. */
-	if (sess == current_sess && sess->gui && sess->gui->user_tree)
-	{
-		GtkSorter *sorter = g_object_get_data (G_OBJECT (sess->gui->user_tree),
-		                                        "hc-userlist-sorter");
-		if (sorter)
-			gtk_sorter_changed (sorter, GTK_SORTER_CHANGE_DIFFERENT);
-	}
-
+	/* Do NOT kick the sorter here. fe_userlist_rehash is only called by
+	 * hostname / account / away / realname updates (see userlist.c) —
+	 * none of which the sort comparators examine. Access-level changes
+	 * (ops/voice promotion) go through fe_userlist_remove +
+	 * fe_userlist_insert instead, so the sort model handles those on
+	 * insert. Calling gtk_sorter_changed here on every WHO-burst row
+	 * caused GtkSortListModel to emit items-changed cascades that
+	 * rebound cell widgets — the very flicker we're trying to avoid. */
 	mg_queue_userlist_update (sess);
 }
 
