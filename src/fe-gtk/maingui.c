@@ -4826,6 +4826,21 @@ mg_create_tabwindow (session *sess)
 	win = gtkutil_window_new ("HexChat", NULL, prefs.hex_gui_win_width,
 									  prefs.hex_gui_win_height, 0);
 	sess->gui->window = win;
+
+#ifdef HAVE_GTK_MAC
+	/* macOS: GtkHeaderBar with use-native-controls draws the native
+	 * traffic-light close/minimize/maximize buttons integrated with
+	 * GTK's custom titlebar, so the window chrome looks Mac-native
+	 * while still letting us put custom content in the titlebar.
+	 * Windows GTK doesn't implement this yet, so skip there. */
+	{
+		GtkWidget *header = gtk_header_bar_new ();
+		g_object_set (header, "use-native-controls", TRUE, NULL);
+		gtk_header_bar_set_show_title_buttons (GTK_HEADER_BAR (header), TRUE);
+		gtk_window_set_titlebar (GTK_WINDOW (win), header);
+	}
+#endif
+
 	if (prefs.hex_gui_win_state)
 		gtk_window_maximize (GTK_WINDOW (win));
 	if (prefs.hex_gui_win_fullscreen)
