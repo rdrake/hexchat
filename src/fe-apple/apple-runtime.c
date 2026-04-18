@@ -189,6 +189,17 @@ hc_apple_runtime_start (const hc_apple_runtime_config *config,
 	hc_apple_runtime.running = TRUE;
 	hc_apple_runtime.thread = g_thread_new ("hc-apple-engine",
 	                                        hc_apple_engine_thread_main, NULL);
+	if (!hc_apple_runtime.thread)
+	{
+		hc_apple_runtime.running = FALSE;
+		g_free (hc_apple_runtime.config_dir);
+		hc_apple_runtime.config_dir = NULL;
+		hc_apple_runtime.callback = NULL;
+		hc_apple_runtime.callback_userdata = NULL;
+		g_mutex_clear (&hc_apple_runtime.lock);
+		g_cond_clear (&hc_apple_runtime.ready_cond);
+		return FALSE;
+	}
 
 	g_mutex_lock (&hc_apple_runtime.lock);
 	while (!hc_apple_runtime.ready)

@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ContentView: View {
+    private let nickModePrefixes: Set<Character> = ["~", "&", "!", "@", "%", "+"]
+
     @Bindable var controller: EngineController
 
     var body: some View {
@@ -103,7 +105,7 @@ struct ContentView: View {
                         .background(messageColor(message.kind))
                         .clipShape(Capsule())
 
-                    Text(message.raw)
+                    Text(stripIRCFormatting(message.raw))
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
                 }
@@ -199,16 +201,49 @@ struct ContentView: View {
     }
 
     private func modeBadge(_ nick: String) -> String {
-        guard let first = nick.first, ["~", "&", "@", "%", "+"].contains(first) else {
+        guard let first = nick.first, nickModePrefixes.contains(first) else {
             return ""
         }
         return String(first)
     }
 
     private func bareNick(_ nick: String) -> String {
-        guard let first = nick.first, ["~", "&", "@", "%", "+"].contains(first) else {
+        guard let first = nick.first, nickModePrefixes.contains(first) else {
             return nick
         }
         return String(nick.dropFirst())
+    }
+
+    private func stripIRCFormatting(_ value: String) -> String {
+        var result = ""
+        var index = value.startIndex
+
+        while index < value.endIndex {
+            let ch = value[index]
+            switch ch {
+            case "\u{0002}", "\u{000F}", "\u{0016}", "\u{001D}", "\u{001E}", "\u{001F}":
+                index = value.index(after: index)
+            case "\u{0003}":
+                index = value.index(after: index)
+                var digitsConsumed = 0
+                while index < value.endIndex && digitsConsumed < 2 && value[index].isNumber {
+                    digitsConsumed += 1
+                    index = value.index(after: index)
+                }
+                if index < value.endIndex && value[index] == "," {
+                    index = value.index(after: index)
+                    var bgDigitsConsumed = 0
+                    while index < value.endIndex && bgDigitsConsumed < 2 && value[index].isNumber {
+                        bgDigitsConsumed += 1
+                        index = value.index(after: index)
+                    }
+                }
+            default:
+                result.append(ch)
+                index = value.index(after: index)
+            }
+        }
+
+        return result
     }
 }

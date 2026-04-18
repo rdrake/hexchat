@@ -759,7 +759,6 @@ fe_close_window (struct session *sess)
 	hc_apple_emit_session_remove (sess);
 	hc_apple_session_forget_runtime_id (sess);
 	session_free (sess);
-	done = TRUE;
 }
 
 void

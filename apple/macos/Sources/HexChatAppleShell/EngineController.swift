@@ -69,6 +69,10 @@ enum ChatMessageClassifier {
 
 @Observable
 final class EngineController {
+    private static let nickModePrefixes: Set<Character> = ["~", "&", "!", "@", "%", "+"]
+    private let maxStoredMessages = 5_000
+    private let messageTrimTarget = 4_500
+
     var isRunning = false
     var messages: [ChatMessage] = []
     var sessions: [ChatSession] = []
@@ -278,6 +282,9 @@ final class EngineController {
     private func appendMessage(raw: String, kind: ChatMessageKind, event: RuntimeEvent? = nil) {
         let targetSessionID = resolveMessageSessionID(event: event)
         messages.append(ChatMessage(sessionID: targetSessionID, raw: raw, kind: kind))
+        if messages.count > maxStoredMessages {
+            messages.removeFirst(messages.count - messageTrimTarget)
+        }
     }
 
     private func resolveMessageSessionID(event: RuntimeEvent?) -> String {
@@ -286,7 +293,7 @@ final class EngineController {
                 return resolved
             }
         }
-        return activeSessionID ?? selectedSessionID ?? visibleSessionID
+        return selectedSessionID ?? activeSessionID ?? visibleSessionID
     }
 
     private func resolveEventSessionID(_ event: RuntimeEvent) -> String? {
@@ -374,15 +381,16 @@ final class EngineController {
         default:
             break
         }
-
-        usersBySession[sessionID, default: []].sort(by: userSort)
     }
 
     private func upsertNick(_ nick: String, in sessionID: String) {
         let normalized = stripModePrefix(nick)
         var nicks = usersBySession[sessionID, default: []]
         if let idx = nicks.firstIndex(where: { stripModePrefix($0).caseInsensitiveCompare(normalized) == .orderedSame }) {
-            nicks[idx] = nick
+            nicks.remove(at: idx)
+        }
+        if let insertIndex = nicks.firstIndex(where: { userSort(nick, $0) }) {
+            nicks.insert(nick, at: insertIndex)
         } else {
             nicks.append(nick)
         }
@@ -415,9 +423,10 @@ final class EngineController {
         switch prefix {
         case "~": return 0
         case "&": return 1
-        case "@": return 2
-        case "%": return 3
-        case "+": return 4
+        case "!": return 2
+        case "@": return 3
+        case "%": return 4
+        case "+": return 5
         default: return 99
         }
     }
@@ -426,7 +435,7 @@ final class EngineController {
         guard let first = nick.first else {
             return nick
         }
-        if ["~", "&", "@", "%", "+"].contains(first) {
+        if Self.nickModePrefixes.contains(first) {
             return String(nick.dropFirst())
         }
         return nick
@@ -477,6 +486,10 @@ private extension hc_apple_lifecycle_phase {
     }
 }
 
+private let runtimeEventQueue = DispatchQueue(label: "HexChatAppleShell.RuntimeEventQueue")
+private var pendingRuntimeEvents: [RuntimeEvent] = []
+private var runtimeEventDrainScheduled = false
+
 private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> RuntimeEvent {
     let raw = pointer.pointee
 
@@ -504,7 +517,31 @@ private let engineEventCallback: hc_apple_event_cb = { eventPtr, userData in
 
     let event = makeRuntimeEvent(from: eventPtr)
     let controller = Unmanaged<EngineController>.fromOpaque(userData).takeUnretainedValue()
+    let shouldScheduleDrain = runtimeEventQueue.sync { () -> Bool in
+        pendingRuntimeEvents.append(event)
+        if runtimeEventDrainScheduled {
+            return false
+        }
+        runtimeEventDrainScheduled = true
+        return true
+    }
+    guard shouldScheduleDrain else { return }
+
     Task { @MainActor in
-        controller.handleRuntimeEvent(event)
+        while true {
+            let batch = runtimeEventQueue.sync { () -> [RuntimeEvent] in
+                let batch = pendingRuntimeEvents
+                pendingRuntimeEvents.removeAll(keepingCapacity: true)
+                if batch.isEmpty {
+                    runtimeEventDrainScheduled = false
+                }
+                return batch
+            }
+            if batch.isEmpty { break }
+
+            for queuedEvent in batch {
+                controller.handleRuntimeEvent(queuedEvent)
+            }
+        }
     }
 }

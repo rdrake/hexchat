@@ -87,6 +87,44 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertTrue(controller.messages.contains(where: { $0.sessionID == EngineController.runtimeSessionID(202) && $0.raw == "message for 202" }))
         XCTAssertFalse(controller.messages.contains(where: { $0.sessionID == EngineController.runtimeSessionID(101) && $0.raw == "message for 202" }))
     }
+
+    func testCommandEchoFollowsSelectedSessionNotActive() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+
+        let a = EngineController.sessionID(network: "Libera", channel: "#a")
+        let b = EngineController.sessionID(network: "Libera", channel: "#b")
+
+        controller.selectedSessionID = b
+        controller.send("/ping", trackHistory: false)
+
+        XCTAssertFalse(controller.messages.contains { $0.sessionID == a && $0.raw == "> /ping" })
+        XCTAssertTrue(controller.messages.contains { $0.sessionID == b && $0.raw == "> /ping" })
+    }
+
+    func testUserlistSupportsBangPrefixAndDeduplicatesCaseInsensitive() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#ops")
+
+        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#ops", nick: "!Alice")
+        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#ops", nick: "alice")
+
+        XCTAssertEqual(controller.visibleUsers.count, 1)
+        XCTAssertEqual(controller.visibleUsers.first, "alice")
+    }
+
+    func testMessageBufferIsBounded() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#hexchat")
+
+        for idx in 0..<7000 {
+            controller.applyLogLineForTest(network: "Libera", channel: "#hexchat", text: "line \(idx)")
+        }
+
+        XCTAssertLessThanOrEqual(controller.messages.count, 5000)
+        XCTAssertEqual(controller.messages.last?.raw, "line 6999")
+    }
 }
 #else
 @testable import HexChatAppleShell
