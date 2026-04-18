@@ -105,6 +105,9 @@ hc_user_item_new (const char *nick, const char *hostname, struct User *user,
 
 /* Forward declaration for GTK4 selection list function */
 static char **userlist_selection_list_gtk4 (GtkColumnView *view, int *num_ret);
+static void userlist_update_nick_color (GtkLabel *nick_label,
+                                        HcUserItem *user_item,
+                                        gboolean selected);
 
 GdkPixbuf *
 get_user_icon (server *serv, struct User *user)
@@ -346,21 +349,70 @@ fe_userlist_rehash (session *sess, struct User *user)
 	else if (prefs.hex_gui_ulist_color)
 		nick_color = text_color_of(user->nick);
 
-	/* Get the item and update its fields */
+	/* Mutate the item fields in place — no items-changed event emitted.
+	 * Any currently-bound cell labels are updated directly via their
+	 * stashed back-pointers (set in the column bind callbacks). This
+	 * avoids the visible flicker of unbind+rebind that happens when we
+	 * remove+insert or splice. Stale labels (from rows that have since
+	 * been rebound to a different item) are filtered out by comparing
+	 * their "hc-bound-item" data against the item being updated. */
 	item = g_list_model_get_item (G_LIST_MODEL (store), position);
-	if (item)
-	{
-		g_free (item->hostname);
-		item->hostname = g_strdup (user->hostname);
-		item->color_index = nick_color;
-		g_object_unref (item);
+	if (!item)
+		return;
 
-		/* Notify the model that the item changed so the view updates */
-		g_list_store_remove (store, position);
-		item = hc_user_item_new (user->nick, user->hostname, user,
-		                         get_user_icon (sess->server, user), nick_color);
-		g_list_store_insert (store, position, item);
-		g_object_unref (item);
+	g_free (item->hostname);
+	item->hostname = user->hostname ? g_strdup (user->hostname) : NULL;
+	item->color_index = nick_color;
+	g_clear_object (&item->icon);
+	{
+		GdkPixbuf *pix = get_user_icon (sess->server, user);
+		if (pix)
+			item->icon = gdk_texture_new_for_pixbuf (pix);
+	}
+
+	/* Direct label refresh for currently-visible binds. */
+	{
+		GtkWidget *host_label = g_object_get_data (G_OBJECT (item), "hc-host-label");
+		GtkWidget *nick_label = g_object_get_data (G_OBJECT (item), "hc-nick-label");
+		GtkWidget *icon_picture = g_object_get_data (G_OBJECT (item), "hc-icon-picture");
+
+		if (host_label
+		    && g_object_get_data (G_OBJECT (host_label), "hc-bound-item") == item)
+		{
+			gtk_label_set_text (GTK_LABEL (host_label),
+				item->hostname ? item->hostname : "");
+		}
+		if (nick_label
+		    && g_object_get_data (G_OBJECT (nick_label), "hc-bound-item") == item)
+		{
+			/* Pass FALSE for selected — if the row actually is selected,
+			 * the notify::selected handler will restore the right color
+			 * separately. This avoids a fragile dereference of a stashed
+			 * GtkListItem pointer whose row may have been rebound. */
+			userlist_update_nick_color (GTK_LABEL (nick_label), item, FALSE);
+		}
+		if (icon_picture
+		    && g_object_get_data (G_OBJECT (icon_picture), "hc-bound-item") == item)
+		{
+			gtk_picture_set_paintable (GTK_PICTURE (icon_picture),
+				item->icon ? GDK_PAINTABLE (item->icon) : NULL);
+		}
+	}
+
+	g_object_unref (item);
+
+	/* Rehash can be triggered by an access-level change (ops/voice
+	 * promotion or demotion) that should reorder the sort. Invalidate
+	 * the current sorter — if the sort result is unchanged (the common
+	 * case, for hostname or away updates), GtkSortListModel emits
+	 * nothing and no rebind flicker occurs. If the access order did
+	 * change, only the affected rows rebind. */
+	if (sess == current_sess && sess->gui && sess->gui->user_tree)
+	{
+		GtkSorter *sorter = g_object_get_data (G_OBJECT (sess->gui->user_tree),
+		                                        "hc-userlist-sorter");
+		if (sorter)
+			gtk_sorter_changed (sorter, GTK_SORTER_CHANGE_DIFFERENT);
 	}
 
 	mg_queue_userlist_update (sess);
@@ -771,6 +823,10 @@ userlist_icon_bind_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer 
 	else
 		gtk_picture_set_paintable (GTK_PICTURE (picture), NULL);
 
+	/* Back-pointers for direct-update-on-rehash (see fe_userlist_rehash). */
+	g_object_set_data (G_OBJECT (user_item), "hc-icon-picture", picture);
+	g_object_set_data (G_OBJECT (picture), "hc-bound-item", user_item);
+
 	userlist_mark_friend_boundary (user_data, picture, user_item);
 }
 
@@ -844,6 +900,10 @@ userlist_nick_bind_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer 
 	/* Store reference to item on the label for position lookup during click handling */
 	g_object_set_data (G_OBJECT (nick_label), "hc-user-item", user_item);
 
+	/* Back-pointers for direct-update-on-rehash (see fe_userlist_rehash). */
+	g_object_set_data (G_OBJECT (user_item), "hc-nick-label", nick_label);
+	g_object_set_data (G_OBJECT (nick_label), "hc-bound-item", user_item);
+
 	/* Set nick color (respects selection state) */
 	userlist_update_nick_color (GTK_LABEL (nick_label), user_item, gtk_list_item_get_selected (item));
 
@@ -878,6 +938,10 @@ userlist_host_bind_cb (GtkListItemFactory *factory, GtkListItem *item, gpointer 
 		return;
 
 	gtk_label_set_text (GTK_LABEL (host_label), user_item->hostname ? user_item->hostname : "");
+
+	/* Back-pointers for direct-update-on-rehash (see fe_userlist_rehash). */
+	g_object_set_data (G_OBJECT (user_item), "hc-host-label", host_label);
+	g_object_set_data (G_OBJECT (host_label), "hc-bound-item", user_item);
 
 	userlist_mark_friend_boundary (user_data, host_label, user_item);
 }

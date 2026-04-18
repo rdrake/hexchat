@@ -3509,6 +3509,12 @@ mg_userlist_update_columns_idle (gpointer user_data)
 	if (!is_session (sess) || !sess->gui)
 		return G_SOURCE_REMOVE;
 
+	/* Clear the pending flag first so a further update queued during
+	 * mg_update_userlist_columns (unlikely, but) gets a fresh idle. */
+	if (sess->gui->user_tree)
+		g_object_set_data (G_OBJECT (sess->gui->user_tree),
+			"hc-userlist-update-id", GUINT_TO_POINTER (0));
+
 	pane_size = mg_userlist_pane_size (sess->gui);
 	if (pane_size > 0)
 		mg_update_userlist_columns (sess, pane_size);
@@ -3519,8 +3525,23 @@ mg_userlist_update_columns_idle (gpointer user_data)
 void
 mg_queue_userlist_update (session *sess)
 {
-	if (sess && sess->gui)
-		g_idle_add (mg_userlist_update_columns_idle, sess);
+	guint id;
+
+	if (!sess || !sess->gui || !sess->gui->user_tree)
+		return;
+
+	/* Coalesce: during a WHO burst (dozens of fe_userlist_update calls in
+	 * rapid succession) we only need one column-recompute pass, not one
+	 * per user. Without this the host column flickers as each response
+	 * races the pane allocation around the collapse threshold. */
+	id = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (sess->gui->user_tree),
+	                                           "hc-userlist-update-id"));
+	if (id != 0)
+		return;
+
+	id = g_idle_add (mg_userlist_update_columns_idle, sess);
+	g_object_set_data (G_OBJECT (sess->gui->user_tree),
+		"hc-userlist-update-id", GUINT_TO_POINTER (id));
 }
 
 /* Fire the pane-dependent UI updates (userlist columns, chanview compact
