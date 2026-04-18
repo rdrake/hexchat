@@ -22,7 +22,21 @@ typedef struct
 } hc_apple_runtime_state;
 
 extern hc_apple_runtime_state hc_apple_runtime;
+struct session *hc_apple_session_lookup_runtime_id (uint64_t session_id);
 
 void hc_apple_runtime_emit_log_line (const char *text);
+void hc_apple_runtime_emit_log_line_for_session (const char *text,
+                                                 const char *network,
+                                                 const char *channel,
+                                                 uint64_t session_id);
 void hc_apple_runtime_emit_lifecycle (hc_apple_lifecycle_phase phase, const char *text);
 void hc_apple_runtime_emit_command (const char *text, int code);
+void hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
+                                     const char *network,
+                                     const char *channel,
+                                     const char *nick,
+                                     uint64_t session_id);
+void hc_apple_runtime_emit_session (hc_apple_session_action action,
+                                    const char *network,
+                                    const char *channel,
+                                    uint64_t session_id);

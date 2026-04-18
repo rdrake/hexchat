@@ -16,7 +16,24 @@ typedef enum
 	HC_APPLE_EVENT_LOG_LINE = 0,
 	HC_APPLE_EVENT_LIFECYCLE = 1,
 	HC_APPLE_EVENT_COMMAND = 2,
+	HC_APPLE_EVENT_USERLIST = 3,
+	HC_APPLE_EVENT_SESSION = 4,
 } hc_apple_event_kind;
+
+typedef enum
+{
+	HC_APPLE_USERLIST_INSERT = 0,
+	HC_APPLE_USERLIST_REMOVE = 1,
+	HC_APPLE_USERLIST_CLEAR = 2,
+	HC_APPLE_USERLIST_UPDATE = 3,
+} hc_apple_userlist_action;
+
+typedef enum
+{
+	HC_APPLE_SESSION_UPSERT = 0,
+	HC_APPLE_SESSION_REMOVE = 1,
+	HC_APPLE_SESSION_ACTIVATE = 2,
+} hc_apple_session_action;
 
 typedef enum
 {
@@ -32,6 +49,10 @@ typedef struct
 	const char *text;
 	hc_apple_lifecycle_phase lifecycle_phase;
 	int code;
+	uint64_t session_id;
+	const char *network;
+	const char *channel;
+	const char *nick;
 } hc_apple_event;
 
 typedef void (*hc_apple_event_cb) (const hc_apple_event *event, void *userdata);
@@ -40,4 +61,19 @@ int hc_apple_runtime_start (const hc_apple_runtime_config *config,
                             hc_apple_event_cb callback,
                             void *userdata);
 int hc_apple_runtime_post_command (const char *command);
+int hc_apple_runtime_post_command_for_session (const char *command,
+                                               uint64_t session_id);
+void hc_apple_runtime_emit_log_line_for_session (const char *text,
+                                                 const char *network,
+                                                 const char *channel,
+                                                 uint64_t session_id);
+void hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
+                                     const char *network,
+                                     const char *channel,
+                                     const char *nick,
+                                     uint64_t session_id);
+void hc_apple_runtime_emit_session (hc_apple_session_action action,
+                                    const char *network,
+                                    const char *channel,
+                                    uint64_t session_id);
 void hc_apple_runtime_stop (void);

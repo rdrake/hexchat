@@ -47,5 +47,10 @@ let package = Package(
                 ]),
             ]
         ),
+        .testTarget(
+            name: "HexChatAppleShellTests",
+            dependencies: ["HexChatAppleShell"],
+            path: "Tests/HexChatAppleShellTests"
+        ),
     ]
 )

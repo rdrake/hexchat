@@ -9,6 +9,12 @@
 
 hc_apple_runtime_state hc_apple_runtime = {0};
 
+typedef struct
+{
+	char *command;
+	uint64_t session_id;
+} hc_apple_dispatch_command_data;
+
 static void
 hc_apple_runtime_emit_event (hc_apple_event_kind kind, const char *text,
                              hc_apple_lifecycle_phase lifecycle_phase, int code)
@@ -22,6 +28,32 @@ hc_apple_runtime_emit_event (hc_apple_event_kind kind, const char *text,
 	event.text = text;
 	event.lifecycle_phase = lifecycle_phase;
 	event.code = code;
+	event.session_id = 0;
+	event.network = NULL;
+	event.channel = NULL;
+	event.nick = NULL;
+	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
+}
+
+static void
+hc_apple_runtime_emit_event_with_context (hc_apple_event_kind kind, const char *text,
+                                          hc_apple_lifecycle_phase lifecycle_phase, int code,
+                                          const char *network, const char *channel, const char *nick,
+                                          uint64_t session_id)
+{
+	hc_apple_event event;
+
+	if (!hc_apple_runtime.callback)
+		return;
+
+	event.kind = kind;
+	event.text = text;
+	event.lifecycle_phase = lifecycle_phase;
+	event.code = code;
+	event.session_id = session_id;
+	event.network = network;
+	event.channel = channel;
+	event.nick = nick;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
@@ -36,6 +68,20 @@ hc_apple_runtime_emit_log_line (const char *text)
 }
 
 void
+hc_apple_runtime_emit_log_line_for_session (const char *text,
+                                            const char *network,
+                                            const char *channel,
+                                            uint64_t session_id)
+{
+	if (!text)
+		return;
+
+	hc_apple_runtime_emit_event_with_context (HC_APPLE_EVENT_LOG_LINE, text,
+	                                          HC_APPLE_LIFECYCLE_STARTING, 0,
+	                                          network, channel, NULL, session_id);
+}
+
+void
 hc_apple_runtime_emit_lifecycle (hc_apple_lifecycle_phase phase, const char *text)
 {
 	hc_apple_runtime_emit_event (HC_APPLE_EVENT_LIFECYCLE, text, phase, 0);
@@ -45,6 +91,51 @@ void
 hc_apple_runtime_emit_command (const char *text, int code)
 {
 	hc_apple_runtime_emit_event (HC_APPLE_EVENT_COMMAND, text, HC_APPLE_LIFECYCLE_STARTING, code);
+}
+
+void
+hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
+                                const char *network,
+                                const char *channel,
+                                const char *nick,
+                                uint64_t session_id)
+{
+	hc_apple_event event;
+
+	if (!hc_apple_runtime.callback)
+		return;
+
+	event.kind = HC_APPLE_EVENT_USERLIST;
+	event.text = NULL;
+	event.lifecycle_phase = HC_APPLE_LIFECYCLE_STARTING;
+	event.code = (int)action;
+	event.session_id = session_id;
+	event.network = network;
+	event.channel = channel;
+	event.nick = nick;
+	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
+}
+
+void
+hc_apple_runtime_emit_session (hc_apple_session_action action,
+                               const char *network,
+                               const char *channel,
+                               uint64_t session_id)
+{
+	hc_apple_event event;
+
+	if (!hc_apple_runtime.callback)
+		return;
+
+	event.kind = HC_APPLE_EVENT_SESSION;
+	event.text = NULL;
+	event.lifecycle_phase = HC_APPLE_LIFECYCLE_STARTING;
+	event.code = (int)action;
+	event.session_id = session_id;
+	event.network = network;
+	event.channel = channel;
+	event.nick = NULL;
+	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
 static gpointer
@@ -110,18 +201,38 @@ hc_apple_runtime_start (const hc_apple_runtime_config *config,
 static gboolean
 hc_apple_dispatch_command_cb (gpointer data)
 {
-	char *command = data;
-	session *target = current_tab ? current_tab : current_sess;
+	hc_apple_dispatch_command_data *dispatch = data;
+	session *target = NULL;
+
+	if (!dispatch)
+		return G_SOURCE_REMOVE;
+
+	if (dispatch->session_id)
+	{
+		target = hc_apple_session_lookup_runtime_id (dispatch->session_id);
+		if (target)
+			current_tab = target;
+	}
+
+	if (!target)
+		target = current_tab ? current_tab : current_sess;
 
 	if (target)
-		handle_command (target, command, FALSE);
+		handle_command (target, dispatch->command, FALSE);
 
-	g_free (command);
+	g_free (dispatch->command);
+	g_free (dispatch);
 	return G_SOURCE_REMOVE;
 }
 
 int
 hc_apple_runtime_post_command (const char *command)
+{
+	return hc_apple_runtime_post_command_for_session (command, 0);
+}
+
+int
+hc_apple_runtime_post_command_for_session (const char *command, uint64_t session_id)
 {
 	if (!command)
 	{
@@ -137,9 +248,13 @@ hc_apple_runtime_post_command (const char *command)
 
 	hc_apple_runtime_emit_command (command, 0);
 
+	hc_apple_dispatch_command_data *dispatch = g_new0 (hc_apple_dispatch_command_data, 1);
+	dispatch->session_id = session_id;
+	dispatch->command = g_strdup (command);
+
 	g_main_context_invoke (hc_apple_runtime.context,
 	                       hc_apple_dispatch_command_cb,
-	                       g_strdup (command));
+	                       dispatch);
 	return TRUE;
 }
 

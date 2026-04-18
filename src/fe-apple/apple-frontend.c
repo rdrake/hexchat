@@ -49,12 +49,134 @@
 
 
 static int done = FALSE;		  /* finished ? */
+static GHashTable *hc_apple_session_ids;
+static GHashTable *hc_apple_sessions_by_id;
+static guint64 hc_apple_next_session_id = 1;
 
 
 static void
 send_command (char *cmd)
 {
 	handle_multiline (current_tab, cmd, TRUE, FALSE);
+}
+
+static const char *
+hc_apple_session_network (const session *sess)
+{
+	if (!sess || !sess->server || !sess->server->servername || !sess->server->servername[0])
+		return "network";
+	return sess->server->servername;
+}
+
+static const char *
+hc_apple_session_channel (const session *sess)
+{
+	if (!sess)
+		return "server";
+	if (sess->channel[0])
+		return sess->channel;
+	if (sess->session_name[0])
+		return sess->session_name;
+	return "server";
+}
+
+static uint64_t
+hc_apple_session_runtime_id (const session *sess)
+{
+	gpointer stored;
+	guint64 id;
+
+	if (!sess)
+		return 0;
+
+	if (!hc_apple_session_ids)
+	{
+		hc_apple_session_ids = g_hash_table_new (g_direct_hash, g_direct_equal);
+		hc_apple_sessions_by_id = g_hash_table_new (g_direct_hash, g_direct_equal);
+		hc_apple_next_session_id = 1;
+	}
+
+	stored = g_hash_table_lookup (hc_apple_session_ids, sess);
+	if (stored)
+		return (uint64_t)GPOINTER_TO_SIZE (stored);
+
+	id = hc_apple_next_session_id++;
+	g_hash_table_insert (hc_apple_session_ids, (gpointer)sess, GSIZE_TO_POINTER ((gsize)id));
+	g_hash_table_insert (hc_apple_sessions_by_id, GSIZE_TO_POINTER ((gsize)id), (gpointer)sess);
+	return id;
+}
+
+static void
+hc_apple_session_forget_runtime_id (const session *sess)
+{
+	gpointer stored;
+
+	if (!hc_apple_session_ids || !sess)
+		return;
+	stored = g_hash_table_lookup (hc_apple_session_ids, sess);
+	if (stored && hc_apple_sessions_by_id)
+		g_hash_table_remove (hc_apple_sessions_by_id, stored);
+	g_hash_table_remove (hc_apple_session_ids, sess);
+}
+
+session *
+hc_apple_session_lookup_runtime_id (uint64_t session_id)
+{
+	if (!session_id || !hc_apple_sessions_by_id)
+		return NULL;
+	return (session *)g_hash_table_lookup (hc_apple_sessions_by_id,
+	                                       GSIZE_TO_POINTER ((gsize)session_id));
+}
+
+static void
+hc_apple_emit_session_upsert (const session *sess)
+{
+	hc_apple_runtime_emit_session (HC_APPLE_SESSION_UPSERT,
+	                               hc_apple_session_network (sess),
+	                               hc_apple_session_channel (sess),
+	                               hc_apple_session_runtime_id (sess));
+}
+
+static void
+hc_apple_emit_session_activate (const session *sess)
+{
+	hc_apple_runtime_emit_session (HC_APPLE_SESSION_ACTIVATE,
+	                               hc_apple_session_network (sess),
+	                               hc_apple_session_channel (sess),
+	                               hc_apple_session_runtime_id (sess));
+}
+
+static void
+hc_apple_emit_session_remove (const session *sess)
+{
+	hc_apple_runtime_emit_session (HC_APPLE_SESSION_REMOVE,
+	                               hc_apple_session_network (sess),
+	                               hc_apple_session_channel (sess),
+	                               hc_apple_session_runtime_id (sess));
+}
+
+static void
+hc_apple_emit_log_line_for_session (const session *sess, const char *text)
+{
+	hc_apple_runtime_emit_log_line_for_session (text,
+	                                            hc_apple_session_network (sess),
+	                                            hc_apple_session_channel (sess),
+	                                            hc_apple_session_runtime_id (sess));
+}
+
+static const char *
+hc_apple_prefixed_nick (const struct User *user, char *buffer, gsize buffer_size)
+{
+	if (!user || !buffer || buffer_size == 0)
+		return NULL;
+
+	if (user->prefix[0])
+	{
+		g_snprintf (buffer, buffer_size, "%c%s", user->prefix[0], user->nick);
+		return buffer;
+	}
+
+	return user->nick;
 }
 
 static gboolean
@@ -93,6 +215,9 @@ fe_new_window (struct session *sess, int focus)
 		sess->server->server_session = sess;
 	if (!current_tab || focus)
 		current_tab = sess;
+	hc_apple_emit_session_upsert (sess);
+	if (focus)
+		hc_apple_emit_session_activate (sess);
 
 	if (done_intro)
 		return;
@@ -153,6 +278,9 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 	int reverse = 0, under = 0, bold = 0,
 		comma, k, i = 0, j = 0, len = strlen (text);
 	unsigned char *newtext = g_malloc (len + 1024);
+
+	if (text && text[0])
+		hc_apple_emit_log_line_for_session (sess, text);
 
 	if (prefs.hex_stamp_text)
 	{
@@ -321,6 +449,9 @@ fe_print_text (struct session *sess, char *text, time_t stamp,
 	int comma, k, i = 0, j = 0, len = strlen (text);
 
 	unsigned char *newtext = g_malloc (len + 1024);
+
+	if (text && text[0])
+		hc_apple_emit_log_line_for_session (sess, text);
 
 	if (prefs.hex_stamp_text)
 	{
@@ -606,6 +737,7 @@ fe_exit (void)
 void
 fe_new_server (struct server *serv)
 {
+	(void)serv;
 	HC_APPLE_LOG_NOOP ("fe_new_server");
 }
 
@@ -616,7 +748,7 @@ fe_message (char *msg, int flags)
 	hc_apple_callback_log ("fe_message", HC_APPLE_CALLBACK_REQUIRED);
 	if (msg)
 	{
-		hc_apple_runtime_emit_log_line (msg);
+		hc_apple_emit_log_line_for_session (current_tab ? current_tab : current_sess, msg);
 		puts (msg);
 	}
 }
@@ -624,6 +756,8 @@ fe_message (char *msg, int flags)
 void
 fe_close_window (struct session *sess)
 {
+	hc_apple_emit_session_remove (sess);
+	hc_apple_session_forget_runtime_id (sess);
 	session_free (sess);
 	done = TRUE;
 }
@@ -688,6 +822,17 @@ fe_set_topic (struct session *sess, char *topic, char *stripped_topic)
 void
 fe_cleanup (void)
 {
+	if (hc_apple_session_ids)
+	{
+		g_hash_table_destroy (hc_apple_session_ids);
+		hc_apple_session_ids = NULL;
+	}
+	if (hc_apple_sessions_by_id)
+	{
+		g_hash_table_destroy (hc_apple_sessions_by_id);
+		hc_apple_sessions_by_id = NULL;
+	}
+	hc_apple_next_session_id = 1;
 }
 void
 fe_set_tab_color (struct session *sess, tabcolor col)
@@ -766,17 +911,43 @@ fe_progressbar_end (struct server *serv)
 void
 fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel)
 {
-	HC_APPLE_LOG_NOOP ("fe_userlist_insert");
+	char nickbuf[NICKLEN + 2];
+	const char *nick = NULL;
+
+	(void)sel;
+	nick = hc_apple_prefixed_nick (newuser, nickbuf, sizeof (nickbuf));
+	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_INSERT,
+	                                hc_apple_session_network (sess),
+	                                hc_apple_session_channel (sess),
+	                                nick,
+	                                hc_apple_session_runtime_id (sess));
 }
 int
 fe_userlist_remove (struct session *sess, struct User *user)
 {
+	char nickbuf[NICKLEN + 2];
+	const char *nick = NULL;
+
+	nick = hc_apple_prefixed_nick (user, nickbuf, sizeof (nickbuf));
+	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_REMOVE,
+	                                hc_apple_session_network (sess),
+	                                hc_apple_session_channel (sess),
+	                                nick,
+	                                hc_apple_session_runtime_id (sess));
 	return 0;
 }
 void
 fe_userlist_rehash (struct session *sess, struct User *user)
 {
-	HC_APPLE_LOG_NOOP ("fe_userlist_rehash");
+	char nickbuf[NICKLEN + 2];
+	const char *nick = NULL;
+
+	nick = hc_apple_prefixed_nick (user, nickbuf, sizeof (nickbuf));
+	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_UPDATE,
+	                                hc_apple_session_network (sess),
+	                                hc_apple_session_channel (sess),
+	                                nick,
+	                                hc_apple_session_runtime_id (sess));
 }
 void
 fe_userlist_numbers (struct session *sess)
@@ -786,7 +957,11 @@ fe_userlist_numbers (struct session *sess)
 void
 fe_userlist_clear (struct session *sess)
 {
-	HC_APPLE_LOG_NOOP ("fe_userlist_clear");
+	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_CLEAR,
+	                                hc_apple_session_network (sess),
+	                                hc_apple_session_channel (sess),
+	                                NULL,
+	                                hc_apple_session_runtime_id (sess));
 }
 void
 fe_userlist_set_selected (struct session *sess)
@@ -848,6 +1023,8 @@ fe_dcc_send_filereq (struct session *sess, char *nick, int maxcps, int passive)
 void
 fe_set_channel (struct session *sess)
 {
+	hc_apple_emit_session_upsert (sess);
+	hc_apple_emit_session_activate (sess);
 }
 void
 fe_set_title (struct session *sess)
@@ -1009,7 +1186,19 @@ void fe_tray_set_flash (const char *filename1, const char *filename2, int timeou
 void fe_tray_set_file (const char *filename){}
 void fe_tray_set_icon (feicon icon){}
 void fe_tray_set_tooltip (const char *text){}
-void fe_userlist_update (session *sess, struct User *user){}
+void
+fe_userlist_update (session *sess, struct User *user)
+{
+	char nickbuf[NICKLEN + 2];
+	const char *nick = NULL;
+
+	nick = hc_apple_prefixed_nick (user, nickbuf, sizeof (nickbuf));
+	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_UPDATE,
+	                                hc_apple_session_network (sess),
+	                                hc_apple_session_channel (sess),
+	                                nick,
+	                                hc_apple_session_runtime_id (sess));
+}
 void
 fe_open_chan_list (server *serv, char *filter, int do_refresh)
 {

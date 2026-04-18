@@ -9,6 +9,11 @@ typedef struct
 	int phase_positions[4];
 	gboolean saw_command_event;
 	gboolean saw_command_accepted;
+	gboolean saw_userlist_event;
+	gboolean saw_userlist_insert;
+	gboolean saw_session_event;
+	gboolean saw_session_activate;
+	gboolean saw_scoped_log_event;
 } runtime_events_state;
 
 static void
@@ -38,6 +43,43 @@ runtime_event_cb (const hc_apple_event *event, void *userdata)
 			state->saw_command_accepted = TRUE;
 		}
 	}
+
+	if (event->kind == HC_APPLE_EVENT_USERLIST)
+	{
+		state->saw_userlist_event = TRUE;
+		if (event->code == HC_APPLE_USERLIST_INSERT && event->session_id == 42 &&
+		    event->network && event->channel && event->nick &&
+		    strcmp (event->network, "runtime-net") == 0 &&
+		    strcmp (event->channel, "#runtime") == 0 &&
+		    strcmp (event->nick, "runtime-user") == 0)
+		{
+			state->saw_userlist_insert = TRUE;
+		}
+	}
+
+	if (event->kind == HC_APPLE_EVENT_SESSION)
+	{
+		state->saw_session_event = TRUE;
+		if (event->code == HC_APPLE_SESSION_ACTIVATE && event->session_id == 42 &&
+		    event->network && event->channel &&
+		    strcmp (event->network, "runtime-net") == 0 &&
+		    strcmp (event->channel, "#runtime") == 0)
+		{
+			state->saw_session_activate = TRUE;
+		}
+	}
+
+	if (event->kind == HC_APPLE_EVENT_LOG_LINE)
+	{
+		if (event->text && event->network && event->channel &&
+		    event->session_id == 42 &&
+		    strcmp (event->text, "scoped-log") == 0 &&
+		    strcmp (event->network, "runtime-net") == 0 &&
+		    strcmp (event->channel, "#runtime") == 0)
+		{
+			state->saw_scoped_log_event = TRUE;
+		}
+	}
 }
 
 static void
@@ -54,6 +96,9 @@ test_runtime_events_lifecycle_and_command_path (void)
 
 	g_assert_true (hc_apple_runtime_start (&config, runtime_event_cb, &state));
 	g_assert_true (hc_apple_runtime_post_command ("echo runtime-events"));
+	hc_apple_runtime_emit_log_line_for_session ("scoped-log", "runtime-net", "#runtime", 42);
+	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_INSERT, "runtime-net", "#runtime", "runtime-user", 42);
+	hc_apple_runtime_emit_session (HC_APPLE_SESSION_ACTIVATE, "runtime-net", "#runtime", 42);
 	hc_apple_runtime_stop ();
 
 	g_assert_cmpint (state.phase_positions[HC_APPLE_LIFECYCLE_STARTING], >=, 0);
@@ -68,6 +113,11 @@ test_runtime_events_lifecycle_and_command_path (void)
 	                 state.phase_positions[HC_APPLE_LIFECYCLE_STOPPED]);
 	g_assert_true (state.saw_command_event);
 	g_assert_true (state.saw_command_accepted);
+	g_assert_true (state.saw_userlist_event);
+	g_assert_true (state.saw_userlist_insert);
+	g_assert_true (state.saw_session_event);
+	g_assert_true (state.saw_session_activate);
+	g_assert_true (state.saw_scoped_log_event);
 }
 
 int
