@@ -13,6 +13,8 @@ Delegate for large/complex/difficult tasks: use agents
 
 Whenever you learn something particularly relevant or useful for the project, add it to an appropriate skill file, or create one
 
+When using subagent-driven development to implement plans, use a worktree unless instructed otherwise.  When using a worktree use the tool and DO NOT use the superpowers:worktrees skill.
+
 ## Build System
 
 ### Windows (Visual Studio)
