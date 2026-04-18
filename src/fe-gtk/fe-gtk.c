@@ -795,6 +795,18 @@ fe_init (void)
 				".hexchat-drop-indicator.hexchat-drop-hover { "
 				"  background-color: alpha(@theme_selected_bg_color, 0.35); "
 				"} "
+				/* Tabs-mode drop strips at the very top and bottom of the
+				 * window. Hidden via visible=FALSE by default; revealed
+				 * during a chanview drag. Subtle default tint so the user
+				 * can see where to aim; stronger tint on hover. */
+				".hexchat-drop-strip { "
+				"  min-height: 24px; "
+				"  background-color: alpha(@theme_selected_bg_color, 0.12); "
+				"  transition: background-color 120ms ease; "
+				"} "
+				".hexchat-drop-strip.hexchat-drop-hover { "
+				"  background-color: alpha(@theme_selected_bg_color, 0.45); "
+				"} "
 				/* Channel tabs - reduce horizontal padding for compact appearance */
 				"#hexchat-tab { "
 				"  padding: 2px 4px; "

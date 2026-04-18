@@ -89,6 +89,7 @@ enum
 
 static void mg_create_entry (session *sess, GtkWidget *box);
 static void mg_create_search (session *sess, GtkWidget *box);
+static GtkWidget *mg_create_drop_strip (int pos);
 static void mg_link_irctab (session *sess, int focus);
 void mg_update_window_minimum (session_gui *gui);
 
@@ -4852,6 +4853,17 @@ mg_create_tabwindow (session *sess)
 		gtk_widget_set_margin_bottom (table, 0);
 	gtk_window_set_child (GTK_WINDOW (win), table);
 
+	/* Tab-bar drop strips at the very top and very bottom of the grid.
+	 * Hidden by default; revealed on chanview drag-begin so the user
+	 * can drop the tab bar onto either strip to move it to POS_TOP or
+	 * POS_BOTTOM. Rows 0 and 4 are normally unused (irctab vbox at 2,
+	 * chanview POS_TOP at 1, chanview POS_BOTTOM at 3). */
+	sess->gui->top_drop_strip = mg_create_drop_strip (POS_TOP);
+	gtk_grid_attach (GTK_GRID (table), sess->gui->top_drop_strip, 0, 0, 3, 1);
+
+	sess->gui->bottom_drop_strip = mg_create_drop_strip (POS_BOTTOM);
+	gtk_grid_attach (GTK_GRID (table), sess->gui->bottom_drop_strip, 0, 4, 3, 1);
+
 	mg_create_irctab (sess, table);
 	mg_create_tabs (sess->gui);
 	mg_create_menu (sess, table, sess->server->is_away);
@@ -5338,6 +5350,20 @@ mg_xtext_file_drop_cb (GtkDropTarget *target, const GValue *value,
  * panel to a different slot on the same side if they'd collide. Called
  * from both the pane and xtext drop handlers with the pos resolved
  * beforehand — see mg_pane_layout_drop_cb / mg_xtext_layout_drop_cb. */
+/* Deferred layout rebuild after a layout-swap drop. The drop handler
+ * calls this from g_idle_add so the drag lifecycle (drag-end, widget-
+ * hierarchy settlement) completes BEFORE we reparent the drag source
+ * widget. Doing the reparent inline from the drop handler can wedge
+ * the drag source into a state where subsequent drags don't initiate. */
+static gboolean
+mg_layout_drop_idle_cb (gpointer user_data)
+{
+	session_gui *gui = user_data;
+	if (gui && current_sess && current_sess->gui == gui)
+		mg_place_userlist_and_chanview (gui);
+	return G_SOURCE_REMOVE;
+}
+
 static void
 mg_apply_layout_drop (const char *drop_type, int target_pos)
 {
@@ -5351,11 +5377,22 @@ mg_apply_layout_drop (const char *drop_type, int target_pos)
 
 	if (g_strcmp0 (drop_type, DND_TARGET_USERLIST) == 0)
 	{
+		/* Userlist can only live in the four vpane slots (1-4);
+		 * top/bottom strip positions don't have a userlist layout. */
+		if (target_pos < POS_TOPLEFT || target_pos > POS_BOTTOMRIGHT)
+			return;
 		this_pos = &prefs.hex_gui_ulist_pos;
 		other_pos = &prefs.hex_gui_tab_pos;
 	}
 	else if (g_strcmp0 (drop_type, DND_TARGET_CHANVIEW) == 0)
 	{
+		/* Chanview can land in any of the 6 positions: vpane slots
+		 * 1-4 (tree-style placement) or POS_TOP/POS_BOTTOM (horizontal
+		 * bar). The layout handles both regardless of current
+		 * hex_gui_tab_layout — if a wide tab bar ends up in a vpane
+		 * slot, it looks cramped but remains functional until the
+		 * user flips View→Channel Tree mode. (A future pref can
+		 * auto-convert mode on drop.) */
 		this_pos = &prefs.hex_gui_tab_pos;
 		other_pos = &prefs.hex_gui_ulist_pos;
 	}
@@ -5379,7 +5416,101 @@ mg_apply_layout_drop (const char *drop_type, int target_pos)
 		}
 	}
 
-	mg_place_userlist_and_chanview (gui);
+	/* Defer the actual layout rebuild: reparenting the drag source's
+	 * widget from the drop handler wedges subsequent drags. Scheduling
+	 * via idle lets drag-end fire and the gesture machinery reset before
+	 * the widget hierarchy changes underneath it. */
+	g_idle_add (mg_layout_drop_idle_cb, gui);
+}
+
+/* Drop handler for a top/bottom strip in tabs-mode: user_data is
+ * GINT_TO_POINTER(POS_TOP) or GINT_TO_POINTER(POS_BOTTOM). Only accepts
+ * chanview payloads (POS_TOP/BOTTOM don't apply to userlist). */
+static gboolean
+mg_strip_layout_drop_cb (GtkDropTarget *target, const GValue *value,
+                         double x, double y, gpointer user_data)
+{
+	GtkWidget *widget;
+	const char *drop_type;
+	int pos = GPOINTER_TO_INT (user_data);
+
+	(void) x; (void) y;
+
+	/* Clear our own hover class up front — some drop completions don't
+	 * emit a trailing leave event, which leaves the strip tinted. */
+	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
+	if (widget)
+		gtk_widget_remove_css_class (widget, "hexchat-drop-hover");
+
+	/* Hide both strips now too. The layout rebuild triggered by
+	 * mg_apply_layout_drop can reparent chanview / re-run pane placement,
+	 * which sometimes leaves drag-end without a clean ancestor walk from
+	 * the source back to the gui — relying on drag-end alone can leave
+	 * the strips visible (and their min-height reserving space). */
+	if (current_sess && current_sess->gui)
+	{
+		session_gui *gui = current_sess->gui;
+		if (gui->top_drop_strip)
+			gtk_widget_set_visible (gui->top_drop_strip, FALSE);
+		if (gui->bottom_drop_strip)
+			gtk_widget_set_visible (gui->bottom_drop_strip, FALSE);
+	}
+
+	if (!G_VALUE_HOLDS (value, G_TYPE_STRING))
+		return FALSE;
+	drop_type = g_value_get_string (value);
+	if (g_strcmp0 (drop_type, DND_TARGET_CHANVIEW) != 0)
+		return FALSE;
+
+	mg_apply_layout_drop (drop_type, pos);
+	return TRUE;
+}
+
+static GdkDragAction
+mg_strip_layout_motion_cb (GtkDropTarget *target, double x, double y,
+                           gpointer user_data)
+{
+	GtkWidget *widget;
+
+	(void) x; (void) y; (void) user_data;
+
+	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
+	gtk_widget_add_css_class (widget, "hexchat-drop-hover");
+	return GDK_ACTION_MOVE;
+}
+
+static void
+mg_strip_layout_leave_cb (GtkDropTarget *target, gpointer user_data)
+{
+	GtkWidget *widget;
+
+	(void) user_data;
+
+	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
+	gtk_widget_remove_css_class (widget, "hexchat-drop-hover");
+}
+
+/* Create a tab-bar drop strip for POS_TOP (pos == 5) or POS_BOTTOM
+ * (pos == 6). Hidden until a chanview drag begins. */
+static GtkWidget *
+mg_create_drop_strip (int pos)
+{
+	GtkWidget *strip;
+	GtkDropTarget *target;
+
+	strip = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_add_css_class (strip, "hexchat-drop-strip");
+	gtk_widget_set_hexpand (strip, TRUE);
+	gtk_widget_set_visible (strip, FALSE);
+
+	target = gtk_drop_target_new (G_TYPE_STRING, GDK_ACTION_MOVE);
+	g_signal_connect (target, "drop", G_CALLBACK (mg_strip_layout_drop_cb),
+	                  GINT_TO_POINTER (pos));
+	g_signal_connect (target, "motion", G_CALLBACK (mg_strip_layout_motion_cb), NULL);
+	g_signal_connect (target, "leave", G_CALLBACK (mg_strip_layout_leave_cb), NULL);
+	gtk_widget_add_controller (strip, GTK_EVENT_CONTROLLER (target));
+
+	return strip;
 }
 
 /* Drop handler for vpane_left / vpane_right. user_data is TRUE for the
@@ -5390,6 +5521,8 @@ mg_pane_layout_drop_cb (GtkDropTarget *target, const GValue *value,
                         double x, double y, gpointer user_data)
 {
 	GtkWidget *widget;
+	GtkWidget *top_ind;
+	GtkWidget *bot_ind;
 	const char *drop_type;
 	gboolean is_left = GPOINTER_TO_INT (user_data);
 	int height;
@@ -5397,13 +5530,35 @@ mg_pane_layout_drop_cb (GtkDropTarget *target, const GValue *value,
 
 	(void) x;
 
+	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
+
+	/* Clear hover state on the vpane's own indicators up front. Drop
+	 * completion doesn't always emit a matching leave event, and the
+	 * subsequent layout rebuild in mg_apply_layout_drop reparents
+	 * widgets in a way that drag-end's ancestor walk can miss. */
+	top_ind = widget ? g_object_get_data (G_OBJECT (widget), "hc-drop-top") : NULL;
+	bot_ind = widget ? g_object_get_data (G_OBJECT (widget), "hc-drop-bottom") : NULL;
+	if (top_ind) gtk_widget_remove_css_class (top_ind, "hexchat-drop-hover");
+	if (bot_ind) gtk_widget_remove_css_class (bot_ind, "hexchat-drop-hover");
+
+	/* Hide the tabs-mode strips too — if this drop is a chanview drag,
+	 * the drag-begin revealed them and we need to hide them now before
+	 * the layout rebuild that may prevent drag-end from finding them. */
+	if (current_sess && current_sess->gui)
+	{
+		session_gui *gui = current_sess->gui;
+		if (gui->top_drop_strip)
+			gtk_widget_set_visible (gui->top_drop_strip, FALSE);
+		if (gui->bottom_drop_strip)
+			gtk_widget_set_visible (gui->bottom_drop_strip, FALSE);
+	}
+
 	if (!G_VALUE_HOLDS (value, G_TYPE_STRING))
 		return FALSE;
 	drop_type = g_value_get_string (value);
 	if (!drop_type)
 		return FALSE;
 
-	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
 	height = gtk_widget_get_height (widget);
 
 	if (y < height / 2)
@@ -5426,8 +5581,25 @@ mg_pane_layout_drop_cb (GtkDropTarget *target, const GValue *value,
 static gboolean
 mg_xtext_drop_is_active (gboolean *paneless_left_out)
 {
-	gboolean left_paneless = prefs.hex_gui_tab_pos >= 3 && prefs.hex_gui_ulist_pos >= 3;
-	gboolean right_paneless = prefs.hex_gui_tab_pos <= 2 && prefs.hex_gui_ulist_pos <= 2;
+	/* A side is paneless when nothing is placed there. Check each pref
+	 * against the four pane-slot values explicitly — POS_TOP (5) and
+	 * POS_BOTTOM (6) are NOT on either side, so a naive >=3 / <=2 test
+	 * miscategorises tabs-mode chanview positions. Userlist contributes
+	 * to side occupancy only when it's visible. */
+	gboolean left_has_panel =
+		(prefs.hex_gui_tab_pos == POS_TOPLEFT
+		 || prefs.hex_gui_tab_pos == POS_BOTTOMLEFT)
+		|| (!prefs.hex_gui_ulist_hide
+		    && (prefs.hex_gui_ulist_pos == POS_TOPLEFT
+		        || prefs.hex_gui_ulist_pos == POS_BOTTOMLEFT));
+	gboolean right_has_panel =
+		(prefs.hex_gui_tab_pos == POS_TOPRIGHT
+		 || prefs.hex_gui_tab_pos == POS_BOTTOMRIGHT)
+		|| (!prefs.hex_gui_ulist_hide
+		    && (prefs.hex_gui_ulist_pos == POS_TOPRIGHT
+		        || prefs.hex_gui_ulist_pos == POS_BOTTOMRIGHT));
+	gboolean left_paneless = !left_has_panel;
+	gboolean right_paneless = !right_has_panel;
 
 	if (!left_paneless && !right_paneless)
 		return FALSE;
@@ -5533,7 +5705,7 @@ mg_xtext_layout_drop_cb (GtkDropTarget *target, const GValue *value,
 	const char *drop_type;
 	int height;
 	int pos;
-	gboolean left_paneless, right_paneless;
+	gboolean paneless_left = FALSE;
 
 	(void) x; (void) user_data;
 
@@ -5543,18 +5715,15 @@ mg_xtext_layout_drop_cb (GtkDropTarget *target, const GValue *value,
 	if (!drop_type)
 		return FALSE;
 
-	/* A side is "paneless" when BOTH configured panels are on the
-	 * opposite side — slots 1/2 = left, 3/4 = right. */
-	left_paneless = prefs.hex_gui_tab_pos >= 3 && prefs.hex_gui_ulist_pos >= 3;
-	right_paneless = prefs.hex_gui_tab_pos <= 2 && prefs.hex_gui_ulist_pos <= 2;
-
-	if (!left_paneless && !right_paneless)
+	/* Use the same paneless detector as the motion handler so drops
+	 * land on the side the user saw highlighted. */
+	if (!mg_xtext_drop_is_active (&paneless_left))
 		return FALSE;
 
 	widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (target));
 	height = gtk_widget_get_height (widget);
 
-	if (left_paneless)
+	if (paneless_left)
 		pos = (y < height / 2) ? 1 : 2;
 	else
 		pos = (y < height / 2) ? 3 : 4;
@@ -5595,22 +5764,45 @@ mg_drag_snapshot_icon (GtkWidget *widget, double scale)
 }
 
 /* Set a scaled-down widget snapshot as the drag icon on source, with the
- * hotspot placed at the user's click coordinates (scaled to match). */
+ * hotspot placed at the user's click coordinates (scaled to match).
+ * If the drag-source widget has a stashed "hc-drag-snapshot-target",
+ * use that widget for the snapshot instead — the chanview tab bar wants
+ * to snapshot just the tabs container, not the outer box (which is
+ * often wider than the tabs themselves and leaves dead space / cursor
+ * hovering in void around the icon). */
 static void
 mg_drag_set_snapshot_icon (GtkDragSource *source, double x, double y, double scale)
 {
 	GtkWidget *widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (source));
+	GtkWidget *snap_target;
 	GdkPaintable *icon;
+	double hotspot_x = x, hotspot_y = y;
 
 	if (!widget)
 		return;
+
+	snap_target = g_object_get_data (G_OBJECT (widget), "hc-drag-snapshot-target");
+	if (snap_target && gtk_widget_get_width (snap_target) > 0
+	                && gtk_widget_get_height (snap_target) > 0)
+	{
+		/* Translate the click point from the source widget's coordinate
+		 * space into the snapshot target's space for a sensible hotspot. */
+		graphene_point_t src_pt = GRAPHENE_POINT_INIT ((float) x, (float) y);
+		graphene_point_t dst_pt;
+		if (gtk_widget_compute_point (widget, snap_target, &src_pt, &dst_pt))
+		{
+			hotspot_x = dst_pt.x;
+			hotspot_y = dst_pt.y;
+		}
+		widget = snap_target;
+	}
 
 	icon = mg_drag_snapshot_icon (widget, scale);
 	if (!icon)
 		return;
 
 	gtk_drag_source_set_icon (source, icon,
-	                          (int) (x * scale), (int) (y * scale));
+	                          (int) (hotspot_x * scale), (int) (hotspot_y * scale));
 	g_object_unref (icon);
 }
 
@@ -5774,6 +5966,84 @@ mg_setup_userlist_drag_source (GtkWidget *treeview)
 	gtk_widget_add_controller (treeview, GTK_EVENT_CONTROLLER (source));
 }
 
+/* Walk up from the drag-source widget to find the session_gui that
+ * owns it, so we can toggle its top/bottom drop strips during drag. */
+static session_gui *
+mg_gui_for_widget (GtkWidget *w)
+{
+	GSList *list;
+
+	for (list = sess_list; list; list = list->next)
+	{
+		session *sess = list->data;
+		if (sess->gui && sess->gui->main_table
+		    && gtk_widget_is_ancestor (w, sess->gui->main_table))
+			return sess->gui;
+	}
+	return NULL;
+}
+
+static void
+mg_chanview_drag_begin_cb (GtkDragSource *source, GdkDrag *drag,
+                           gpointer user_data)
+{
+	GtkWidget *src_widget;
+	session_gui *gui;
+
+	(void) drag; (void) user_data;
+
+	src_widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (source));
+	gui = src_widget ? mg_gui_for_widget (src_widget) : NULL;
+	if (!gui)
+		return;
+
+	if (gui->top_drop_strip)
+		gtk_widget_set_visible (gui->top_drop_strip, TRUE);
+	if (gui->bottom_drop_strip)
+		gtk_widget_set_visible (gui->bottom_drop_strip, TRUE);
+}
+
+static void
+mg_chanview_drag_end_cb (GtkDragSource *source, GdkDrag *drag,
+                         gboolean delete_data, gpointer user_data)
+{
+	GSList *list;
+
+	(void) drag; (void) delete_data; (void) user_data;
+
+	/* Reset the drag source gesture so its internal sequence state is
+	 * clean for the next drag. Without this, in-app drops that reparent
+	 * the drag source widget (our layout swap does exactly that) can
+	 * leave the gesture in a state where the next press doesn't start
+	 * a drag — clicks and right-click menus still work, just drag. */
+	if (source)
+		gtk_event_controller_reset (GTK_EVENT_CONTROLLER (source));
+
+	/* Iterate every session's gui and force-hide its tabs-mode drop
+	 * strips. Walking from the source widget back to a specific gui is
+	 * unreliable after a drop — the layout rebuild in mg_apply_layout_drop
+	 * can reparent chanview such that gtk_widget_is_ancestor() fails.
+	 * Since only one drag is active at a time across the whole
+	 * application, clearing all sessions here is harmless. */
+	for (list = sess_list; list; list = list->next)
+	{
+		session *sess = list->data;
+		session_gui *gui = sess->gui;
+		if (!gui)
+			continue;
+		if (gui->top_drop_strip)
+		{
+			gtk_widget_remove_css_class (gui->top_drop_strip, "hexchat-drop-hover");
+			gtk_widget_set_visible (gui->top_drop_strip, FALSE);
+		}
+		if (gui->bottom_drop_strip)
+		{
+			gtk_widget_remove_css_class (gui->bottom_drop_strip, "hexchat-drop-hover");
+			gtk_widget_set_visible (gui->bottom_drop_strip, FALSE);
+		}
+	}
+}
+
 /* Set up chanview as drag source for layout swapping */
 void
 mg_setup_chanview_drag_source (GtkWidget *widget)
@@ -5783,5 +6053,9 @@ mg_setup_chanview_drag_source (GtkWidget *widget)
 	source = gtk_drag_source_new ();
 	gtk_drag_source_set_actions (source, GDK_ACTION_MOVE);
 	g_signal_connect (source, "prepare", G_CALLBACK (mg_chanview_drag_prepare_cb), NULL);
+	/* Reveal tabs-mode drop strips during the drag so the user can
+	 * target POS_TOP / POS_BOTTOM. Hidden again on drag-end. */
+	g_signal_connect (source, "drag-begin", G_CALLBACK (mg_chanview_drag_begin_cb), NULL);
+	g_signal_connect (source, "drag-end", G_CALLBACK (mg_chanview_drag_end_cb), NULL);
 	gtk_widget_add_controller (widget, GTK_EVENT_CONTROLLER (source));
 }

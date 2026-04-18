@@ -567,6 +567,18 @@ cv_tabs_init (chanview *cv)
 static void
 cv_tabs_postinit (chanview *cv)
 {
+	GtkWidget *outer = ((tabview *)cv)->outer;
+	GtkWidget *inner = ((tabview *)cv)->inner;
+	if (!outer)
+		return;
+
+	/* Use the inner tabs container for the drag snapshot so the icon
+	 * is tightly cropped around the visible tabs, not the outer box's
+	 * full allocation (which can extend past the last tab). */
+	if (inner)
+		g_object_set_data (G_OBJECT (outer), "hc-drag-snapshot-target", inner);
+
+	mg_setup_chanview_drag_source (outer);
 }
 
 static void
@@ -1244,6 +1256,13 @@ cv_tabs_change_orientation (chanview *cv)
 
 	/* now rebuild a new tabbar or tree */
 	cv->func_init (cv);
+	/* Re-run postinit so the drag source (and any other one-time widget
+	 * wiring) attaches to the fresh outer widget. Without this, dragging
+	 * the tab bar stops working after any orientation change — the old
+	 * outer (with the drag source) is destroyed and the new one never
+	 * gets its controller installed. */
+	if (cv->func_postinit)
+		cv->func_postinit (cv);
 	chanview_populate (cv);
 }
 
