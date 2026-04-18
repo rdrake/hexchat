@@ -11169,12 +11169,30 @@ gtk_xtext_entry_add_reaction (xtext_buffer *buf, textentry *ent,
 		reaction->count++;
 		ri->total_count++;
 
-		/* Update extra line count and trigger redraw */
+		/* Update extra line count and trigger redraw. Recompute
+		 * adj->upper immediately so a user anchored to the bottom
+		 * stays pinned past the reacted-to entry's new height —
+		 * needs_recalc alone isn't checked during live rendering
+		 * (only on buffer switch), so without this call the truly-
+		 * last entry gets pushed beyond the scroll range. */
 		if (ent->extra_lines_below == 0)
 		{
 			ent->extra_lines_below = 1;
 			if (buf)
+			{
 				buf->needs_recalc = TRUE;
+				if (buf->xtext)
+				{
+					gtk_xtext_calc_lines (buf, TRUE);
+					/* If the user was pinned to the bottom, follow
+					 * adj->upper so the truly-last entry stays in
+					 * view after the reacted-to entry grew. */
+					if (buf->scroll_anchor.anchor_to_bottom)
+						gtk_adjustment_set_value (buf->xtext->adj,
+							gtk_adjustment_get_upper (buf->xtext->adj) -
+							gtk_adjustment_get_page_size (buf->xtext->adj));
+				}
+			}
 		}
 		if (buf && buf->xtext)
 			gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
@@ -11215,12 +11233,24 @@ gtk_xtext_entry_remove_reaction (xtext_buffer *buf, textentry *ent,
 					g_ptr_array_remove_index (ri->reactions, i);
 				}
 
-				/* Clear extra line if no reactions remain */
+				/* Clear extra line if no reactions remain.
+				 * Recompute adj->upper so the scrollback shrinks
+				 * cleanly when the last reaction is removed. */
 				if (ri->total_count <= 0)
 				{
 					ent->extra_lines_below = 0;
 					if (buf)
+					{
 						buf->needs_recalc = TRUE;
+						if (buf->xtext)
+						{
+							gtk_xtext_calc_lines (buf, TRUE);
+							if (buf->scroll_anchor.anchor_to_bottom)
+								gtk_adjustment_set_value (buf->xtext->adj,
+									gtk_adjustment_get_upper (buf->xtext->adj) -
+									gtk_adjustment_get_page_size (buf->xtext->adj));
+						}
+					}
 				}
 
 				if (buf && buf->xtext)
@@ -11258,17 +11288,24 @@ gtk_xtext_entry_set_reply (xtext_buffer *buf, textentry *ent,
 
 	ent->extra_lines_above = (ent->flags & TEXTENTRY_FLAG_DAY_BOUNDARY) ? 2 : 1;
 
+	/* Recompute num_lines from scratch rather than ++'ing. The delta is
+	 * always +1 here in principle (0→1 or 1→2 depending on boundary),
+	 * but a full calc is robust against any drift in prior state and
+	 * matches the pattern used for reactions. It also preserves
+	 * scroll_anchor.anchor_to_bottom across the recompute. */
 	if (buf)
 	{
-		buf->num_lines++;
-		gtk_xtext_adjustment_set (buf, TRUE);
-		if (buf->scroll_anchor.anchor_to_bottom && buf->xtext)
-			gtk_adjustment_set_value (buf->xtext->adj,
-				gtk_adjustment_get_upper (buf->xtext->adj) -
-				gtk_adjustment_get_page_size (buf->xtext->adj));
+		buf->needs_recalc = TRUE;
+		if (buf->xtext)
+		{
+			gtk_xtext_calc_lines (buf, TRUE);
+			if (buf->scroll_anchor.anchor_to_bottom)
+				gtk_adjustment_set_value (buf->xtext->adj,
+					gtk_adjustment_get_upper (buf->xtext->adj) -
+					gtk_adjustment_get_page_size (buf->xtext->adj));
+			gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
+		}
 	}
-	if (buf && buf->xtext)
-		gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
 }
 
 /* IRCv3 reply context: read-only accessors */
