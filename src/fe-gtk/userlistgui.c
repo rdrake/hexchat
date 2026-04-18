@@ -1395,6 +1395,33 @@ userlist_refresh_nick_labels (GtkWidget *view)
 }
 
 /*
+ * Refresh the .hexchat-friend / .hexchat-nonfriend CSS class on every
+ * bound row, based on each row's current item's friend-ness. Does NOT
+ * touch the selection model, so GtkColumnView keeps its current size
+ * allocation — no re-measure, no paned re-clamp, no host-column flicker.
+ *
+ * Needed because GtkListView optimizes away bind-cb calls when only
+ * positions change, leaving a row's stale friend class in place when
+ * the underlying user flipped friend-ness (e.g. account-observed).
+ */
+void
+userlist_refresh_friend_classes (GtkWidget *view)
+{
+	GPtrArray *labels = g_object_get_data (G_OBJECT (view), "nick-labels");
+	guint i;
+
+	if (!labels)
+		return;
+
+	for (i = 0; i < labels->len; i++)
+	{
+		GtkWidget *label = g_ptr_array_index (labels, i);
+		HcUserItem *item = g_object_get_data (G_OBJECT (label), "hc-user-item");
+		userlist_mark_friend_boundary (view, label, item);
+	}
+}
+
+/*
  * GTK4: Connect the session's model to the GtkColumnView with sorting
  */
 void

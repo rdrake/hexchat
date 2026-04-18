@@ -51,6 +51,7 @@
 #include "menu.h"
 #include "notifygui.h"
 #include "textgui.h"
+#include "userlistgui.h"
 #include "fkeys.h"
 #include "plugin-tray.h"
 #include "urlgrab.h"
@@ -1142,19 +1143,25 @@ fe_notify_friends_changed_idle (gpointer user_data)
 	(void) user_data;
 	fe_notify_friends_idle_id = 0;
 
-	/* Tell every live userlist view's sorter that comparison results may
-	 * have changed so the sort re-runs. Also force a full rebind by
-	 * null-then-restoring the selection model — GtkListView optimizes away
-	 * bind cb calls when the same item just moves positions, which leaves
-	 * the .hexchat-friend / .hexchat-nonfriend classes stale on moved
-	 * rows (e.g. a user flipping from non-friend to friend keeps the old
-	 * class and the boundary line ends up in the wrong place). */
+	/* Two updates per view:
+	 *   1. Kick the sorter so friend-first ordering re-runs.
+	 *   2. Re-apply .hexchat-friend / .hexchat-nonfriend on every
+	 *      bound row — GtkListView optimizes away bind-cb calls when
+	 *      an item just moves positions, so rows whose underlying
+	 *      user flipped friend-ness (e.g. account-observed) keep
+	 *      their stale class otherwise.
+	 *
+	 * Previously this did a full column_view model null-and-restore
+	 * to force rebinds. That caused GtkColumnView to re-measure its
+	 * internal layout, which (combined with the paned min-size
+	 * coupling) manifested as the host column hiding and reshowing
+	 * multiple times during a WHO burst. Refreshing classes directly
+	 * keeps the ColumnView size allocation stable — no re-measure. */
 	for (list = sess_list; list; list = list->next)
 	{
 		session *sess = list->data;
 		GtkWidget *view;
 		GtkSorter *sorter;
-		GtkSelectionModel *sel_model;
 
 		if (!sess->gui || !sess->gui->user_tree)
 			continue;
@@ -1164,14 +1171,7 @@ fe_notify_friends_changed_idle (gpointer user_data)
 		if (sorter)
 			gtk_sorter_changed (sorter, GTK_SORTER_CHANGE_DIFFERENT);
 
-		sel_model = gtk_column_view_get_model (GTK_COLUMN_VIEW (view));
-		if (sel_model)
-		{
-			g_object_ref (sel_model);
-			gtk_column_view_set_model (GTK_COLUMN_VIEW (view), NULL);
-			gtk_column_view_set_model (GTK_COLUMN_VIEW (view), sel_model);
-			g_object_unref (sel_model);
-		}
+		userlist_refresh_friend_classes (view);
 	}
 
 	return G_SOURCE_REMOVE;
