@@ -7762,6 +7762,10 @@ gtk_xtext_remove_top (xtext_buffer *buffer)
 				buffer->text_first->display_lines--;
 				if (buffer->entry_tree)
 					update_weight234 (buffer->entry_tree, buffer->text_first, -1);
+				/* Keep num_lines in sync with tree weight. Without this
+				 * decrement, num_lines is off by 1 (stale) until the
+				 * next gtk_xtext_calc_lines, and adj->upper with it. */
+				buffer->num_lines--;
 				ent_lines++;  /* account for the removed boundary line */
 			}
 		}
