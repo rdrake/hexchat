@@ -901,6 +901,11 @@ fe_notify_update (char *name)
 	HC_APPLE_LOG_NOOP ("fe_notify_update");
 }
 void
+fe_notify_friends_changed (void)
+{
+	HC_APPLE_LOG_NOOP ("fe_notify_friends_changed");
+}
+void
 fe_notify_ask (char *name, char *networks)
 {
 	(void)name;
