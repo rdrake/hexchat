@@ -2079,53 +2079,51 @@ fe_set_inputbox_contents (session *sess, char *text)
 static char *
 url_escape_hostname (const char *url)
 {
-    char *host_start, *host_end, *ret, *hostname;
+	char *host_start, *host_end, *ret, *hostname;
+	char *url_copy = g_strdup (url);
 
-    host_start = strstr (url, "://");
-    if (host_start != NULL)
-    {
-        *host_start = '\0';
-        host_start += 3;
-        host_end = strchr (host_start, '/');
+	host_start = strstr (url_copy, "://");
+	if (host_start != NULL)
+	{
+		*host_start = '\0';
+		host_start += 3;
+		host_end = strchr (host_start, '/');
 
-        if (host_end != NULL)
-        {
-            *host_end = '\0';
-            host_end++;
-        }
+		if (host_end != NULL)
+		{
+			*host_end = '\0';
+			host_end++;
+		}
 
-        hostname = g_hostname_to_ascii (host_start);
-        if (host_end != NULL)
-            ret = g_strdup_printf ("%s://%s/%s", url, hostname, host_end);
-        else
-            ret = g_strdup_printf ("%s://%s", url, hostname);
+		hostname = g_hostname_to_ascii (host_start);
+		if (host_end != NULL)
+			ret = g_strdup_printf ("%s://%s/%s", url_copy, hostname, host_end);
+		else
+			ret = g_strdup_printf ("%s://%s", url_copy, hostname);
 
-        g_free (hostname);
-        return ret;
-    }
+		g_free (hostname);
+		g_free (url_copy);
+		return ret;
+	}
 
-    return g_strdup (url);
+	return url_copy;
 }
 
 static void
 osx_show_uri (const char *url)
 {
-    char *escaped_url, *encoded_url, *open, *cmd;
+	char *escaped_url;
+	char *argv[] = {"open", NULL, NULL};
 
-    escaped_url = url_escape_hostname (url);
-    encoded_url = g_filename_from_utf8 (escaped_url, -1, NULL, NULL, NULL);
-    if (encoded_url)
-    {
-        open = g_find_program_in_path ("open");
-        cmd = g_strjoin (" ", open, encoded_url, NULL);
+	escaped_url = url_escape_hostname (url);
+	argv[1] = escaped_url;
 
-        hexchat_exec (cmd);
+	if (!g_spawn_async (NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, NULL))
+	{
+		g_printerr ("Failed to open URL \"%s\"\n", escaped_url);
+	}
 
-        g_free (encoded_url);
-        g_free (cmd);
-    }
-
-    g_free (escaped_url);
+	g_free (escaped_url);
 }
 
 #endif

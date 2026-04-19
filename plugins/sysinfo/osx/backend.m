@@ -45,7 +45,6 @@ get_os (void)
 	NSString *version = [systemversion objectForKey:@"ProductUserVisibleVersion"];
 	if (!version)
 	{
-		[build release];
 		return NULL;
 	}
 
@@ -61,16 +60,13 @@ get_os (void)
 			break;
 		}
 	}
-	[build release];
 
 	if (!os_name)
 	{
-		[version release];
 		return NULL;
 	}
 
 	char *ret = g_strdup_printf ("%s %s", [os_name UTF8String], [version UTF8String]);
-	[version release];
 
 	return ret;
 }
