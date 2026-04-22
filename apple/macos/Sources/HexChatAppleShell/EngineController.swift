@@ -130,7 +130,10 @@ final class EngineController {
             id: Self.sessionID(network: "network", channel: "server"),
             network: "network", channel: "server", isActive: false, uuid: id)
         sessions.append(placeholder)
-        sessionByLocator[.composed(network: "network", channel: "server")] = id
+        // Do NOT register the placeholder in sessionByLocator. If a real session is later
+        // upserted with the same composed key ("network", "server"), reregisterLocators would
+        // silently orphan systemSessionUUIDStorage. The placeholder is still found by
+        // sessionUUID(forSessionID:) which scans the sessions array; that path is sufficient.
         sessions = sessions.sorted(by: sessionSort)
         return id
     }
@@ -363,10 +366,14 @@ final class EngineController {
         messages.append(ChatMessage(sessionID: targetUUID, raw: raw, kind: kind))
     }
 
-    func appendForTestUnattributed(raw: String, kind: ChatMessageKind) {
+    func appendUnattributedForTest(raw: String, kind: ChatMessageKind) {
         appendMessage(raw: raw, kind: kind, event: nil)
     }
 
+    // Fallback order `active → selected → first → system` mirrors the pre-migration
+    // `activeSessionID ?? selectedSessionID ?? visibleSessionID` chain. `visibleSessionID`
+    // is user-facing (it prefers selected over active); message routing is engine-facing
+    // (it prefers active — the session the engine last activated).
     private func resolveMessageSessionID(event: RuntimeEvent?) -> UUID {
         if let event, let resolved = resolveEventSessionID(event) { return resolved }
         if let act = activeSessionID, let uuid = sessionUUID(forSessionID: act) { return uuid }
