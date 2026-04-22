@@ -588,6 +588,38 @@ final class EngineControllerTests: XCTestCase {
         connection.selfNick = "alice_"
         XCTAssertEqual(connection.selfNick, "alice_", "selfNick is mutable")
     }
+
+    func testUpsertNetworkIsCaseInsensitive() {
+        let controller = EngineController()
+        let a = controller.upsertNetworkForTest(name: "AfterNET")
+        let b = controller.upsertNetworkForTest(name: "afternet")
+        XCTAssertEqual(a, b, "AfterNET and afternet resolve to the same Network.id")
+        XCTAssertEqual(
+            controller.networks[a]?.displayName, "AfterNET",
+            "displayName keeps the first-seen casing")
+    }
+
+    func testUpsertConnectionRegistersByServerID() {
+        let controller = EngineController()
+        let networkID = controller.upsertNetworkForTest(name: "Libera")
+        let connectionID = controller.upsertConnectionForTest(
+            serverID: 42, networkID: networkID, serverName: "irc.libera.chat", selfNick: "alice")
+        XCTAssertEqual(controller.connectionsByServerID[42], connectionID)
+        XCTAssertEqual(controller.connections[connectionID]?.networkID, networkID)
+        XCTAssertEqual(controller.connections[connectionID]?.selfNick, "alice")
+    }
+
+    func testUpsertConnectionRefreshesSelfNickAndServerName() {
+        let controller = EngineController()
+        let networkID = controller.upsertNetworkForTest(name: "Libera")
+        let first = controller.upsertConnectionForTest(
+            serverID: 42, networkID: networkID, serverName: "irc.libera.chat", selfNick: "alice")
+        let second = controller.upsertConnectionForTest(
+            serverID: 42, networkID: networkID, serverName: "sol.libera.chat", selfNick: "alice_")
+        XCTAssertEqual(first, second, "same serverID must resolve to same Connection UUID")
+        XCTAssertEqual(controller.connections[first]?.selfNick, "alice_")
+        XCTAssertEqual(controller.connections[first]?.serverName, "sol.libera.chat")
+    }
 }
 #else
 @testable import HexChatAppleShell

@@ -181,6 +181,11 @@ final class EngineController {
 
     private(set) var sessionByLocator: [SessionLocator: UUID] = [:]
 
+    var networks: [UUID: Network] = [:]
+    var connections: [UUID: Connection] = [:]
+    private(set) var networksByName: [String: UUID] = [:]
+    private(set) var connectionsByServerID: [UInt64: UUID] = [:]
+
     @ObservationIgnored
     private var systemSessionUUIDStorage: UUID?
 
@@ -447,6 +452,17 @@ final class EngineController {
         handleRuntimeEvent(event)
     }
 
+    // Test helpers, parallel to the other applyForTest methods.
+    func upsertNetworkForTest(name: String) -> UUID { upsertNetwork(name: name) }
+
+    func upsertConnectionForTest(
+        serverID: UInt64, networkID: UUID, serverName: String, selfNick: String?
+    ) -> UUID {
+        upsertConnection(
+            serverID: serverID, networkID: networkID,
+            serverName: serverName, selfNick: selfNick)
+    }
+
     fileprivate func handleRuntimeEvent(_ event: RuntimeEvent) {
         switch event.kind {
         case HC_APPLE_EVENT_LOG_LINE:
@@ -579,6 +595,33 @@ final class EngineController {
         sessionByLocator[targetLocator] = new.id
         sessions = sessions.sorted(by: sessionSort)
         if selectedSessionID == nil { selectedSessionID = new.id }
+        return new.id
+    }
+
+    @discardableResult
+    private func upsertNetwork(name: String) -> UUID {
+        let key = name.lowercased()
+        if let existing = networksByName[key] { return existing }
+        let new = Network(id: UUID(), displayName: name)
+        networks[new.id] = new
+        networksByName[key] = new.id
+        return new.id
+    }
+
+    @discardableResult
+    private func upsertConnection(
+        serverID: UInt64, networkID: UUID, serverName: String, selfNick: String?
+    ) -> UUID {
+        if let existing = connectionsByServerID[serverID] {
+            connections[existing]?.serverName = serverName
+            if let nick = selfNick { connections[existing]?.selfNick = nick }
+            return existing
+        }
+        let new = Connection(
+            id: UUID(), networkID: networkID,
+            serverName: serverName, selfNick: selfNick)
+        connections[new.id] = new
+        connectionsByServerID[serverID] = new.id
         return new.id
     }
 
