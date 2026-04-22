@@ -146,6 +146,29 @@ final class EngineControllerTests: XCTestCase {
         seen.insert(composed)
         XCTAssertTrue(seen.contains(SessionLocator.composed(network: "LIBERA", channel: "#A")))
     }
+
+    func testVisibleSessionIDFallbackWhenNoSessions() {
+        let controller = EngineController()
+        XCTAssertTrue(controller.sessions.isEmpty)
+        // With no sessions, visibleSessionID must still return a non-empty id.
+        XCTAssertFalse(controller.visibleSessionID.isEmpty)
+        // And visibleMessages must simply be empty, not crash.
+        XCTAssertTrue(controller.visibleMessages.isEmpty)
+        XCTAssertTrue(controller.visibleUsers.isEmpty)
+    }
+
+    func testVisibleSessionIDPrefersSelectedOverActiveOverFirst() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#b")
+        // Post-activate: active = #b. selected was set to #a by the first upsert.
+        let a = EngineController.sessionID(network: "AfterNET", channel: "#a")
+        let b = EngineController.sessionID(network: "AfterNET", channel: "#b")
+        controller.selectedSessionID = a
+        XCTAssertEqual(controller.visibleSessionID, a, "selected takes precedence over active")
+        controller.selectedSessionID = nil
+        XCTAssertEqual(controller.visibleSessionID, b, "active chosen when selected is nil")
+    }
 }
 #else
 @testable import HexChatAppleShell
