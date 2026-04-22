@@ -7,21 +7,23 @@ struct ChatSession: Identifiable, Hashable {
     var network: String
     var channel: String
     var isActive: Bool
-    var composedKey: String
+    var locator: SessionLocator
 
     init(
         id: UUID = UUID(),
         network: String,
         channel: String,
         isActive: Bool,
-        composedKey: String? = nil
+        locator: SessionLocator? = nil
     ) {
         self.id = id
         self.network = network
         self.channel = channel
         self.isActive = isActive
-        self.composedKey = composedKey ?? "\(network.lowercased())::\(channel.lowercased())"
+        self.locator = locator ?? .composed(network: network, channel: channel)
     }
+
+    var composedKey: String { locator.composedKey }
 
     var isChannel: Bool {
         channel.hasPrefix("#") || channel.hasPrefix("&")
@@ -86,6 +88,15 @@ enum SessionLocator: Hashable {
     case composed(network: String, channel: String)
     case runtime(id: UInt64)
 
+    var composedKey: String {
+        switch self {
+        case .composed(let network, let channel):
+            return "\(network.lowercased())::\(channel.lowercased())"
+        case .runtime(let id):
+            return "sess:\(id)"
+        }
+    }
+
     static func == (lhs: SessionLocator, rhs: SessionLocator) -> Bool {
         switch (lhs, rhs) {
         case (.composed(let an, let ac), .composed(let bn, let bc)):
@@ -127,28 +138,25 @@ final class EngineController {
     @ObservationIgnored
     private var systemSessionUUIDStorage: UUID?
 
+    private enum SystemSession {
+        static let network = "network"
+        static let channel = "server"
+        static let locator: SessionLocator = .composed(network: network, channel: channel)
+    }
+
     private func systemSessionUUID() -> UUID {
         if let existing = systemSessionUUIDStorage { return existing }
         let placeholder = ChatSession(
-            network: "network",
-            channel: "server",
+            network: SystemSession.network,
+            channel: SystemSession.channel,
             isActive: false,
-            composedKey: Self.composedKey(for: .composed(network: "network", channel: "server"))
+            locator: SystemSession.locator
         )
         sessions.append(placeholder)
         sessions = sessions.sorted(by: sessionSort)
         systemSessionUUIDStorage = placeholder.id
-        sessionByLocator[.composed(network: "network", channel: "server")] = placeholder.id
+        sessionByLocator[SystemSession.locator] = placeholder.id
         return placeholder.id
-    }
-
-    private static func composedKey(for locator: SessionLocator) -> String {
-        switch locator {
-        case .composed(let network, let channel):
-            return "\(network.lowercased())::\(channel.lowercased())"
-        case .runtime(let id):
-            return "sess:\(id)"
-        }
     }
 
     func sessionUUID(for locator: SessionLocator) -> UUID? {
@@ -171,7 +179,7 @@ final class EngineController {
         guard let uuid = visibleSessionUUID,
               let session = sessions.first(where: { $0.id == uuid })
         else {
-            return Self.composedKey(for: .composed(network: "network", channel: "server"))
+            return SystemSession.locator.composedKey
         }
         return session.composedKey
     }
@@ -252,7 +260,7 @@ final class EngineController {
     }
 
     func prefillPrivateMessage(to nick: String) {
-        let target = stripModePrefix(nick)
+        let target = NickPrefix.strip(nick)
         input = "/msg \(target) "
     }
 
@@ -379,11 +387,6 @@ final class EngineController {
         appendMessage(raw: raw, kind: kind, event: nil)
     }
 
-    // Fallback order `active → selected → first → system` mirrors the pre-migration
-    // `activeSessionID ?? selectedSessionID ?? visibleSessionID` chain. `visibleSessionID`
-    // is user-facing (it prefers selected over active); message routing is engine-facing
-    // (it prefers active — the session the engine last activated).
-    //
     // Safety: `activeSessionID`/`selectedSessionID` always reference a session currently
     // in `sessions`. Each engine event is dispatched as its own `Task { @MainActor }` block,
     // so a LOG_LINE cannot interleave with `HC_APPLE_SESSION_REMOVE` mid-handler. The REMOVE
@@ -406,8 +409,8 @@ final class EngineController {
     }
 
     private func handleSessionEvent(_ event: RuntimeEvent) {
-        let network = event.network ?? "network"
-        let channel = event.channel ?? "server"
+        let network = event.network ?? SystemSession.network
+        let channel = event.channel ?? SystemSession.channel
         let locator: SessionLocator = event.sessionID > 0
             ? .runtime(id: event.sessionID)
             : .composed(network: network, channel: channel)
@@ -419,7 +422,7 @@ final class EngineController {
             if let uuid = sessionByLocator[locator],
                let removed = sessions.first(where: { $0.id == uuid }) {
                 usersBySession[uuid] = nil
-                deregisterLocators(for: removed)
+                sessionByLocator[removed.locator] = nil
                 if selectedSessionID == uuid { selectedSessionID = nil }
                 // Evaluated against the still-intact `sessions` array, before the removeAll call below.
                 if activeSessionID == uuid { activeSessionID = sessions.first(where: { $0.id != uuid })?.id }
@@ -433,11 +436,10 @@ final class EngineController {
             break
         }
 
-        sessions = sessions.map { session in
-            var mutable = session
-            mutable.isActive = (session.id == activeSessionID)
-            return mutable
-        }.sorted(by: sessionSort)
+        // sessionSort ignores isActive, so no re-sort is needed after flipping flags.
+        for idx in sessions.indices {
+            sessions[idx].isActive = (sessions[idx].id == activeSessionID)
+        }
     }
 
     @discardableResult
@@ -452,10 +454,14 @@ final class EngineController {
 
         if let existing = sessionByLocator[locator],
            let idx = sessions.firstIndex(where: { $0.id == existing }) {
+            let oldLocator = sessions[idx].locator
             sessions[idx].network = network
             sessions[idx].channel = channel
-            sessions[idx].composedKey = Self.composedKey(for: targetLocator)
-            registerLocator(targetLocator, for: sessions[idx])
+            sessions[idx].locator = targetLocator
+            if oldLocator != targetLocator {
+                sessionByLocator[oldLocator] = nil
+            }
+            sessionByLocator[targetLocator] = existing
             sessions = sessions.sorted(by: sessionSort)
             return existing
         }
@@ -463,7 +469,7 @@ final class EngineController {
             network: network,
             channel: channel,
             isActive: false,
-            composedKey: Self.composedKey(for: targetLocator)
+            locator: targetLocator
         )
         sessions.append(new)
         sessionByLocator[targetLocator] = new.id
@@ -472,18 +478,9 @@ final class EngineController {
         return new.id
     }
 
-    private func deregisterLocators(for session: ChatSession) {
-        sessionByLocator = sessionByLocator.filter { $0.value != session.id }
-    }
-
-    private func registerLocator(_ locator: SessionLocator, for session: ChatSession) {
-        deregisterLocators(for: session)
-        sessionByLocator[locator] = session.id
-    }
-
     private func handleUserlistEvent(_ event: RuntimeEvent) {
-        let network = event.network ?? "network"
-        let channel = event.channel ?? "server"
+        let network = event.network ?? SystemSession.network
+        let channel = event.channel ?? SystemSession.channel
         let locator: SessionLocator = event.sessionID > 0
             ? .runtime(id: event.sessionID)
             : .composed(network: network, channel: channel)
@@ -497,7 +494,7 @@ final class EngineController {
         case HC_APPLE_USERLIST_REMOVE:
             guard !nick.isEmpty else { return }
             usersBySession[uuid, default: []].removeAll {
-                stripModePrefix($0).caseInsensitiveCompare(stripModePrefix(nick)) == .orderedSame
+                NickPrefix.strip($0).caseInsensitiveCompare(NickPrefix.strip(nick)) == .orderedSame
             }
         case HC_APPLE_USERLIST_CLEAR:
             usersBySession[uuid] = []
@@ -509,9 +506,9 @@ final class EngineController {
     }
 
     private func upsertNick(_ nick: String, inSession uuid: UUID) {
-        let normalized = stripModePrefix(nick)
+        let normalized = NickPrefix.strip(nick)
         var nicks = usersBySession[uuid, default: []]
-        if let idx = nicks.firstIndex(where: { stripModePrefix($0).caseInsensitiveCompare(normalized) == .orderedSame }) {
+        if let idx = nicks.firstIndex(where: { NickPrefix.strip($0).caseInsensitiveCompare(normalized) == .orderedSame }) {
             nicks[idx] = nick
         } else {
             nicks.append(nick)
@@ -530,19 +527,37 @@ final class EngineController {
     }
 
     private func userSort(_ lhs: String, _ rhs: String) -> Bool {
-        let lhsRank = modeRank(lhs)
-        let rhsRank = modeRank(rhs)
+        let lhsRank = NickPrefix.rank(lhs)
+        let rhsRank = NickPrefix.rank(rhs)
         if lhsRank != rhsRank {
             return lhsRank < rhsRank
         }
-        return stripModePrefix(lhs).localizedStandardCompare(stripModePrefix(rhs)) == .orderedAscending
+        return NickPrefix.strip(lhs).localizedStandardCompare(NickPrefix.strip(rhs)) == .orderedAscending
     }
 
-    private func modeRank(_ nick: String) -> Int {
-        guard let prefix = nick.first else {
-            return 99
-        }
-        switch prefix {
+    internal func numericRuntimeSessionID(forSelection uuid: UUID) -> UInt64 {
+        guard let session = sessions.first(where: { $0.id == uuid }),
+              case .runtime(let n) = session.locator
+        else { return 0 }
+        return n
+    }
+}
+
+enum NickPrefix {
+    static let characters: Set<Character> = ["~", "&", "@", "%", "+"]
+
+    static func strip(_ nick: String) -> String {
+        guard let first = nick.first, characters.contains(first) else { return nick }
+        return String(nick.dropFirst())
+    }
+
+    static func badge(_ nick: String) -> Character? {
+        guard let first = nick.first, characters.contains(first) else { return nil }
+        return first
+    }
+
+    static func rank(_ nick: String) -> Int {
+        switch nick.first {
         case "~": return 0
         case "&": return 1
         case "@": return 2
@@ -550,23 +565,6 @@ final class EngineController {
         case "+": return 4
         default: return 99
         }
-    }
-
-    private func stripModePrefix(_ nick: String) -> String {
-        guard let first = nick.first else {
-            return nick
-        }
-        if ["~", "&", "@", "%", "+"].contains(first) {
-            return String(nick.dropFirst())
-        }
-        return nick
-    }
-
-    internal func numericRuntimeSessionID(forSelection uuid: UUID) -> UInt64 {
-        for (locator, sessionUUID) in sessionByLocator where sessionUUID == uuid {
-            if case .runtime(let n) = locator { return n }
-        }
-        return 0
     }
 }
 

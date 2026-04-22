@@ -143,11 +143,11 @@ struct ContentView: View {
 
             List(controller.visibleUsers, id: \.self) { nick in
                 HStack(spacing: 8) {
-                    Text(modeBadge(nick))
+                    Text(NickPrefix.badge(nick).map(String.init) ?? "")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .frame(width: 16, alignment: .center)
-                    Text(bareNick(nick))
+                    Text(NickPrefix.strip(nick))
                         .font(.system(.body, design: .monospaced))
                 }
                 .contentShape(Rectangle())
@@ -196,19 +196,5 @@ struct ContentView: View {
         case .notice, .lifecycle: return Color(red: 0.44, green: 0.46, blue: 0.49)
         case .message: return Color(red: 0.30, green: 0.33, blue: 0.36)
         }
-    }
-
-    private func modeBadge(_ nick: String) -> String {
-        guard let first = nick.first, ["~", "&", "@", "%", "+"].contains(first) else {
-            return ""
-        }
-        return String(first)
-    }
-
-    private func bareNick(_ nick: String) -> String {
-        guard let first = nick.first, ["~", "&", "@", "%", "+"].contains(first) else {
-            return nick
-        }
-        return String(nick.dropFirst())
     }
 }
