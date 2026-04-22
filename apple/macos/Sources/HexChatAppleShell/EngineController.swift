@@ -54,6 +54,40 @@ struct ChatMessage: Identifiable {
     let kind: ChatMessageKind
 }
 
+/// A user in a single channel's roster.
+///
+/// `id` is the lowercased `nick` and is **only valid within one channel's roster**:
+/// the same nick across multiple channels yields equal-`id` `ChatUser` records that
+/// nonetheless represent independent rows in `usersBySession`. Phase 4 introduces
+/// per-`Connection` `User` identity backed by a stable UUID and a `ChannelMembership`
+/// junction; until then, do not treat `ChatUser.id` as a cross-channel identifier.
+struct ChatUser: Identifiable, Hashable {
+    var nick: String
+    var modePrefix: Character?
+    var account: String?
+    var host: String?
+    var isMe: Bool
+    var isAway: Bool
+
+    init(
+        nick: String,
+        modePrefix: Character? = nil,
+        account: String? = nil,
+        host: String? = nil,
+        isMe: Bool = false,
+        isAway: Bool = false
+    ) {
+        self.nick = nick
+        self.modePrefix = modePrefix
+        self.account = account
+        self.host = host
+        self.isMe = isMe
+        self.isAway = isAway
+    }
+
+    var id: String { nick.lowercased() }
+}
+
 enum ChatMessageClassifier {
     static func classify(raw: String, fallback: ChatMessageKind = .message) -> ChatMessageKind {
         if raw.hasPrefix("[STARTING]") || raw.hasPrefix("[READY]") || raw.hasPrefix("[STOPPING]") || raw.hasPrefix("[STOPPED]") {

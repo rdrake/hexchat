@@ -320,6 +320,26 @@ final class EngineControllerTests: XCTestCase {
             controller.sessionUUID(for: .composed(network: "network", channel: "server")),
             "system session must be registered in sessionByLocator so real events fold into it")
     }
+
+    func testChatUserIdentityIsCaseInsensitiveNick() {
+        let a = ChatUser(
+            nick: "Alice", modePrefix: "@", account: "alice_acct",
+            host: "host.example", isMe: false, isAway: false)
+        let b = ChatUser(
+            nick: "alice", modePrefix: nil, account: nil, host: nil,
+            isMe: true, isAway: true)
+        XCTAssertEqual(a.id, b.id, "ChatUser identity must be case-insensitive on nick")
+        XCTAssertNotEqual(a, b, "Equality is field-by-field; identity is nick alone")
+    }
+
+    func testChatUserDefaultsAreSafe() {
+        let user = ChatUser(nick: "bob")
+        XCTAssertNil(user.modePrefix)
+        XCTAssertNil(user.account)
+        XCTAssertNil(user.host)
+        XCTAssertFalse(user.isMe)
+        XCTAssertFalse(user.isAway)
+    }
 }
 #else
 @testable import HexChatAppleShell
