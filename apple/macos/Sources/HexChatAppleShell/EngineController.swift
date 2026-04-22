@@ -4,23 +4,23 @@ import AppleAdapterBridge
 
 struct ChatSession: Identifiable, Hashable {
     let id: UUID
-    var network: String
+    var connectionID: UUID
     var channel: String
     var isActive: Bool
     var locator: SessionLocator
 
     init(
         id: UUID = UUID(),
-        network: String,
+        connectionID: UUID,
         channel: String,
         isActive: Bool,
         locator: SessionLocator? = nil
     ) {
         self.id = id
-        self.network = network
+        self.connectionID = connectionID
         self.channel = channel
         self.isActive = isActive
-        self.locator = locator ?? .composed(network: network, channel: channel)
+        self.locator = locator ?? .composed(connectionID: connectionID, channel: channel)
     }
 
     var composedKey: String { locator.composedKey }
@@ -131,13 +131,13 @@ enum ChatMessageClassifier {
 }
 
 enum SessionLocator: Hashable {
-    case composed(network: String, channel: String)
+    case composed(connectionID: UUID, channel: String)
     case runtime(id: UInt64)
 
     var composedKey: String {
         switch self {
-        case .composed(let network, let channel):
-            return "\(network.lowercased())::\(channel.lowercased())"
+        case .composed(let connectionID, let channel):
+            return "\(connectionID.uuidString.lowercased())::\(channel.lowercased())"
         case .runtime(let id):
             return "sess:\(id)"
         }
@@ -145,9 +145,8 @@ enum SessionLocator: Hashable {
 
     static func == (lhs: SessionLocator, rhs: SessionLocator) -> Bool {
         switch (lhs, rhs) {
-        case (.composed(let an, let ac), .composed(let bn, let bc)):
-            return an.caseInsensitiveCompare(bn) == .orderedSame
-                && ac.caseInsensitiveCompare(bc) == .orderedSame
+        case (.composed(let a, let ac), .composed(let b, let bc)):
+            return a == b && ac.caseInsensitiveCompare(bc) == .orderedSame
         case (.runtime(let a), .runtime(let b)):
             return a == b
         default:
@@ -157,10 +156,10 @@ enum SessionLocator: Hashable {
 
     func hash(into hasher: inout Hasher) {
         switch self {
-        case .composed(let n, let c):
+        case .composed(let connectionID, let channel):
             hasher.combine(0)
-            hasher.combine(n.lowercased())
-            hasher.combine(c.lowercased())
+            hasher.combine(connectionID)
+            hasher.combine(channel.lowercased())
         case .runtime(let id):
             hasher.combine(1)
             hasher.combine(id)
@@ -186,31 +185,54 @@ final class EngineController {
     private(set) var networksByName: [String: UUID] = [:]
     private(set) var connectionsByServerID: [UInt64: UUID] = [:]
 
+    private enum SystemSession {
+        static let networkName = "network"
+        static let channel = "server"
+    }
+
     @ObservationIgnored
     private var systemSessionUUIDStorage: UUID?
+    @ObservationIgnored
+    private var systemNetworkUUIDStorage: UUID?
+    @ObservationIgnored
+    private var systemConnectionUUIDStorage: UUID?
 
-    private enum SystemSession {
-        static let network = "network"
-        static let channel = "server"
-        static let locator: SessionLocator = .composed(network: network, channel: channel)
+    private func systemNetworkUUID() -> UUID {
+        if let cached = systemNetworkUUIDStorage { return cached }
+        let id = upsertNetwork(name: SystemSession.networkName)
+        systemNetworkUUIDStorage = id
+        return id
+    }
+
+    private func systemConnectionUUID() -> UUID {
+        if let cached = systemConnectionUUIDStorage { return cached }
+        let networkID = systemNetworkUUID()
+        let new = Connection(
+            id: UUID(), networkID: networkID,
+            serverName: SystemSession.networkName, selfNick: nil)
+        connections[new.id] = new
+        // Intentionally NOT in connectionsByServerID: server_id == 0 is reserved for "no real server."
+        systemConnectionUUIDStorage = new.id
+        return new.id
     }
 
     private func systemSessionUUID() -> UUID {
-        if let existing = sessionByLocator[SystemSession.locator] {
+        let connectionID = systemConnectionUUID()
+        let locator = SessionLocator.composed(connectionID: connectionID, channel: SystemSession.channel)
+        if let existing = sessionByLocator[locator] {
             systemSessionUUIDStorage = existing
             return existing
         }
         if let cached = systemSessionUUIDStorage { return cached }
         let placeholder = ChatSession(
-            network: SystemSession.network,
+            connectionID: connectionID,
             channel: SystemSession.channel,
             isActive: false,
-            locator: SystemSession.locator
-        )
+            locator: locator)
         sessions.append(placeholder)
         sessions = sessions.sorted(by: sessionSort)
         systemSessionUUIDStorage = placeholder.id
-        sessionByLocator[SystemSession.locator] = placeholder.id
+        sessionByLocator[locator] = placeholder.id
         return placeholder.id
     }
 
@@ -234,7 +256,8 @@ final class EngineController {
         guard let uuid = visibleSessionUUID,
               let session = sessions.first(where: { $0.id == uuid })
         else {
-            return SystemSession.locator.composedKey
+            let connID = systemConnectionUUID()
+            return SessionLocator.composed(connectionID: connID, channel: SystemSession.channel).composedKey
         }
         return session.composedKey
     }
@@ -250,17 +273,27 @@ final class EngineController {
     }
 
     var visibleSessionTitle: String {
-        if let uuid = visibleSessionUUID, let session = sessions.first(where: { $0.id == uuid }) {
-            return "\(session.network) • \(session.channel)"
+        guard let uuid = visibleSessionUUID,
+              let session = sessions.first(where: { $0.id == uuid }),
+              let connection = connections[session.connectionID],
+              let network = networks[connection.networkID]
+        else {
+            return "No Session"
         }
-        return "No Session"
+        return "\(network.displayName) • \(session.channel)"
     }
 
     var networkSections: [NetworkSection] {
-        let grouped = Dictionary(grouping: sessions) { $0.network }
-        return grouped.keys.sorted(using: KeyPathComparator(\.self, comparator: .localizedStandard)).map { network in
-            let rows = grouped[network, default: []].sorted(by: sessionSort)
-            return NetworkSection(id: network.lowercased(), name: network, sessions: rows)
+        let grouped = Dictionary(grouping: sessions) { session -> UUID? in
+            connections[session.connectionID]?.networkID
+        }
+        let ordered = grouped.keys
+            .compactMap { $0 }
+            .compactMap { networks[$0] }
+            .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        return ordered.map { network in
+            let rows = (grouped[network.id] ?? []).sorted(by: sessionSort)
+            return NetworkSection(id: network.id.uuidString, name: network.displayName, sessions: rows)
         }
     }
 
@@ -435,12 +468,22 @@ final class EngineController {
     }
 
     func applyRenameForTest(network: String, fromChannel: String, toChannel: String) {
+        // Legacy helper — looks up the first registered connection for this network name,
+        // falling back to the system connection. The old implementation relied on the
+        // composed locator's network string; with connection-UUID keying, we resolve
+        // via networksByName.
+        let networkID = networksByName[network.lowercased()]
+        let connectionID = connections.values
+            .first(where: { $0.networkID == networkID })?.id
+            ?? systemConnectionUUID()
         upsertSession(
-            locator: .composed(network: network, channel: fromChannel),
-            network: network,
+            locator: .composed(connectionID: connectionID, channel: fromChannel),
+            connectionID: connectionID,
             channel: toChannel
         )
     }
+
+    func systemConnectionUUIDForTest() -> UUID { systemConnectionUUID() }
 
     func applyLifecycleForTest(phase: hc_apple_lifecycle_phase) {
         let event = RuntimeEvent(
@@ -506,10 +549,16 @@ final class EngineController {
                 isRunning = false
                 usersBySession = [:]
                 sessionByLocator = [:]
+                networks = [:]
+                connections = [:]
+                networksByName = [:]
+                connectionsByServerID = [:]
                 if let old = systemSessionUUIDStorage {
                     sessions.removeAll { $0.id == old }
                 }
                 systemSessionUUIDStorage = nil
+                systemConnectionUUIDStorage = nil
+                systemNetworkUUIDStorage = nil
             }
         case HC_APPLE_EVENT_COMMAND:
             if event.code != 0 {
@@ -547,24 +596,36 @@ final class EngineController {
         return systemSessionUUID()
     }
 
+    @discardableResult
+    private func registerConnection(from event: RuntimeEvent) -> UUID? {
+        guard event.connectionID != 0, let networkName = event.network else { return nil }
+        let networkID = upsertNetwork(name: networkName)
+        return upsertConnection(
+            serverID: event.connectionID,
+            networkID: networkID,
+            serverName: networkName,
+            selfNick: event.selfNick)
+    }
+
     private func resolveEventSessionID(_ event: RuntimeEvent) -> UUID? {
-        guard let network = event.network, let channel = event.channel else { return nil }
+        guard let connectionID = registerConnection(from: event),
+              let channel = event.channel else { return nil }
         let locator: SessionLocator = event.sessionID > 0
             ? .runtime(id: event.sessionID)
-            : .composed(network: network, channel: channel)
-        return upsertSession(locator: locator, network: network, channel: channel)
+            : .composed(connectionID: connectionID, channel: channel)
+        return upsertSession(locator: locator, connectionID: connectionID, channel: channel)
     }
 
     private func handleSessionEvent(_ event: RuntimeEvent) {
-        let network = event.network ?? SystemSession.network
         let channel = event.channel ?? SystemSession.channel
+        let connectionID = registerConnection(from: event) ?? systemConnectionUUID()
         let locator: SessionLocator = event.sessionID > 0
             ? .runtime(id: event.sessionID)
-            : .composed(network: network, channel: channel)
+            : .composed(connectionID: connectionID, channel: channel)
 
         switch event.sessionAction {
         case HC_APPLE_SESSION_UPSERT:
-            upsertSession(locator: locator, network: network, channel: channel)
+            upsertSession(locator: locator, connectionID: connectionID, channel: channel)
         case HC_APPLE_SESSION_REMOVE:
             if let uuid = sessionByLocator[locator],
                let removed = sessions.first(where: { $0.id == uuid }) {
@@ -576,7 +637,7 @@ final class EngineController {
                 sessions.removeAll { $0.id == uuid }
             }
         case HC_APPLE_SESSION_ACTIVATE:
-            let uuid = upsertSession(locator: locator, network: network, channel: channel)
+            let uuid = upsertSession(locator: locator, connectionID: connectionID, channel: channel)
             activeSessionID = uuid
             if selectedSessionID == nil { selectedSessionID = uuid }
         default:
@@ -590,19 +651,21 @@ final class EngineController {
     }
 
     @discardableResult
-    private func upsertSession(locator: SessionLocator, network: String, channel: String) -> UUID {
+    private func upsertSession(
+        locator: SessionLocator, connectionID: UUID, channel: String
+    ) -> UUID {
         let targetLocator: SessionLocator
         switch locator {
         case .runtime:
             targetLocator = locator
         case .composed:
-            targetLocator = .composed(network: network, channel: channel)
+            targetLocator = .composed(connectionID: connectionID, channel: channel)
         }
 
         if let existing = sessionByLocator[locator],
            let idx = sessions.firstIndex(where: { $0.id == existing }) {
             let oldLocator = sessions[idx].locator
-            sessions[idx].network = network
+            sessions[idx].connectionID = connectionID
             sessions[idx].channel = channel
             sessions[idx].locator = targetLocator
             if oldLocator != targetLocator {
@@ -613,11 +676,10 @@ final class EngineController {
             return existing
         }
         let new = ChatSession(
-            network: network,
+            connectionID: connectionID,
             channel: channel,
             isActive: false,
-            locator: targetLocator
-        )
+            locator: targetLocator)
         sessions.append(new)
         sessionByLocator[targetLocator] = new.id
         sessions = sessions.sorted(by: sessionSort)
@@ -653,12 +715,12 @@ final class EngineController {
     }
 
     private func handleUserlistEvent(_ event: RuntimeEvent) {
-        let network = event.network ?? SystemSession.network
         let channel = event.channel ?? SystemSession.channel
+        let connectionID = registerConnection(from: event) ?? systemConnectionUUID()
         let locator: SessionLocator = event.sessionID > 0
             ? .runtime(id: event.sessionID)
-            : .composed(network: network, channel: channel)
-        let uuid = upsertSession(locator: locator, network: network, channel: channel)
+            : .composed(connectionID: connectionID, channel: channel)
+        let uuid = upsertSession(locator: locator, connectionID: connectionID, channel: channel)
         let nick = event.nick ?? ""
 
         switch event.userlistAction {
@@ -697,8 +759,10 @@ final class EngineController {
     }
 
     private func sessionSort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {
-        if lhs.network != rhs.network {
-            return lhs.network.localizedStandardCompare(rhs.network) == .orderedAscending
+        let lhsName = connections[lhs.connectionID].flatMap { networks[$0.networkID]?.displayName } ?? ""
+        let rhsName = connections[rhs.connectionID].flatMap { networks[$0.networkID]?.displayName } ?? ""
+        if lhsName != rhsName {
+            return lhsName.localizedStandardCompare(rhsName) == .orderedAscending
         }
         if lhs.isChannel != rhs.isChannel {
             return lhs.isChannel && !rhs.isChannel
