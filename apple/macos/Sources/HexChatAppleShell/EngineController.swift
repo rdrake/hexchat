@@ -41,7 +41,7 @@ enum ChatMessageKind: String {
 
 struct ChatMessage: Identifiable {
     let id = UUID()
-    let sessionID: String
+    let sessionID: UUID
     let raw: String
     let kind: ChatMessageKind
 }
@@ -118,6 +118,23 @@ final class EngineController {
 
     private(set) var sessionByLocator: [SessionLocator: UUID] = [:]
 
+    @ObservationIgnored
+    private var systemSessionUUIDStorage: UUID?
+
+    private func systemSessionUUID() -> UUID {
+        if let existing = systemSessionUUIDStorage { return existing }
+        let id = UUID()
+        systemSessionUUIDStorage = id
+        // Insert a placeholder ChatSession so visibleMessages filtering works.
+        let placeholder = ChatSession(
+            id: Self.sessionID(network: "network", channel: "server"),
+            network: "network", channel: "server", isActive: false, uuid: id)
+        sessions.append(placeholder)
+        sessionByLocator[.composed(network: "network", channel: "server")] = id
+        sessions = sessions.sorted(by: sessionSort)
+        return id
+    }
+
     func sessionUUID(for locator: SessionLocator) -> UUID? {
         sessionByLocator[locator]
     }
@@ -155,7 +172,8 @@ final class EngineController {
     }
 
     var visibleMessages: [ChatMessage] {
-        messages.filter { $0.sessionID == visibleSessionID }
+        guard let uuid = sessionUUID(forSessionID: visibleSessionID) else { return [] }
+        return messages.filter { $0.sessionID == uuid }
     }
 
     var visibleUsers: [String] {
@@ -321,6 +339,10 @@ final class EngineController {
                 isRunning = false
                 usersBySession = [:]
                 sessionByLocator = [:]
+                if let old = systemSessionUUIDStorage {
+                    sessions.removeAll { $0.uuid == old }
+                }
+                systemSessionUUIDStorage = nil
             }
         case HC_APPLE_EVENT_COMMAND:
             if event.code != 0 {
@@ -337,28 +359,29 @@ final class EngineController {
     }
 
     private func appendMessage(raw: String, kind: ChatMessageKind, event: RuntimeEvent? = nil) {
-        let targetSessionID = resolveMessageSessionID(event: event)
-        messages.append(ChatMessage(sessionID: targetSessionID, raw: raw, kind: kind))
+        let targetUUID = resolveMessageSessionID(event: event)
+        messages.append(ChatMessage(sessionID: targetUUID, raw: raw, kind: kind))
     }
 
-    private func resolveMessageSessionID(event: RuntimeEvent?) -> String {
-        if let event {
-            if let resolved = resolveEventSessionID(event) {
-                return resolved
-            }
-        }
-        return activeSessionID ?? selectedSessionID ?? visibleSessionID
+    func appendForTestUnattributed(raw: String, kind: ChatMessageKind) {
+        appendMessage(raw: raw, kind: kind, event: nil)
     }
 
-    private func resolveEventSessionID(_ event: RuntimeEvent) -> String? {
-        guard let network = event.network, let channel = event.channel else {
-            return nil
-        }
-        let id = event.sessionID > 0
+    private func resolveMessageSessionID(event: RuntimeEvent?) -> UUID {
+        if let event, let resolved = resolveEventSessionID(event) { return resolved }
+        if let act = activeSessionID, let uuid = sessionUUID(forSessionID: act) { return uuid }
+        if let sel = selectedSessionID, let uuid = sessionUUID(forSessionID: sel) { return uuid }
+        if let first = sessions.first?.uuid { return first }
+        return systemSessionUUID()
+    }
+
+    private func resolveEventSessionID(_ event: RuntimeEvent) -> UUID? {
+        guard let network = event.network, let channel = event.channel else { return nil }
+        let composedID = event.sessionID > 0
             ? Self.runtimeSessionID(event.sessionID)
             : Self.sessionID(network: network, channel: channel)
-        upsertSession(id: id, network: network, channel: channel)
-        return id
+        upsertSession(id: composedID, network: network, channel: channel)
+        return sessionUUID(forSessionID: composedID)
     }
 
     private func handleSessionEvent(_ event: RuntimeEvent) {

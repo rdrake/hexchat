@@ -71,8 +71,8 @@ final class EngineControllerTests: XCTestCase {
 
         controller.applyLogLineForTest(network: "Libera", channel: "#b", text: "message for b")
 
-        let sessionA = EngineController.sessionID(network: "Libera", channel: "#a")
-        let sessionB = EngineController.sessionID(network: "Libera", channel: "#b")
+        let sessionA = controller.sessionUUID(for: .composed(network: "Libera", channel: "#a"))!
+        let sessionB = controller.sessionUUID(for: .composed(network: "Libera", channel: "#b"))!
         XCTAssertFalse(controller.messages.contains(where: { $0.sessionID == sessionA && $0.raw == "message for b" }))
         XCTAssertTrue(controller.messages.contains(where: { $0.sessionID == sessionB && $0.raw == "message for b" }))
     }
@@ -84,8 +84,10 @@ final class EngineControllerTests: XCTestCase {
 
         controller.applyLogLineForTest(network: "Libera", channel: "#same", text: "message for 202", sessionID: 202)
 
-        XCTAssertTrue(controller.messages.contains(where: { $0.sessionID == EngineController.runtimeSessionID(202) && $0.raw == "message for 202" }))
-        XCTAssertFalse(controller.messages.contains(where: { $0.sessionID == EngineController.runtimeSessionID(101) && $0.raw == "message for 202" }))
+        let sessionB202 = controller.sessionUUID(for: .runtime(id: 202))!
+        let sessionB101 = controller.sessionUUID(for: .runtime(id: 101))!
+        XCTAssertTrue(controller.messages.contains(where: { $0.sessionID == sessionB202 && $0.raw == "message for 202" }))
+        XCTAssertFalse(controller.messages.contains(where: { $0.sessionID == sessionB101 && $0.raw == "message for 202" }))
     }
 
     func testServerAndChannelSessionsAreDistinctForUILists() {
@@ -121,8 +123,8 @@ final class EngineControllerTests: XCTestCase {
         controller.applyLogLineForTest(network: "AfterNET", channel: "server", text: "-server notice-", sessionID: 1)
         controller.applyLogLineForTest(network: "AfterNET", channel: "#cybercafe", text: "<alice> hi", sessionID: 2)
 
-        let serverSession = EngineController.runtimeSessionID(1)
-        let channelSession = EngineController.runtimeSessionID(2)
+        let serverSession = controller.sessionUUID(for: .runtime(id: 1))!
+        let channelSession = controller.sessionUUID(for: .runtime(id: 2))!
         XCTAssertTrue(controller.messages.contains(where: { $0.sessionID == serverSession && $0.raw == "-server notice-" }))
         XCTAssertTrue(controller.messages.contains(where: { $0.sessionID == channelSession && $0.raw == "<alice> hi" }))
         XCTAssertFalse(controller.messages.contains(where: { $0.sessionID == serverSession && $0.raw == "<alice> hi" }))
@@ -242,6 +244,25 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a", nick: "alice")
         let uuid = controller.sessionUUID(for: .composed(network: "Libera", channel: "#a"))!
         XCTAssertEqual(controller.usersBySession[uuid], ["alice"])
+    }
+
+    func testChatMessageSessionIDIsUUID() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyLogLineForTest(network: "Libera", channel: "#a", text: "hello")
+        let uuid = controller.sessionUUID(for: .composed(network: "Libera", channel: "#a"))!
+        XCTAssertEqual(controller.messages.last?.sessionID, uuid)
+    }
+
+    func testUnattributableMessageStillReceivesSessionUUID() {
+        // Before any session exists, route a manually-crafted unattributable message through appendMessage.
+        // The message must still land with *some* non-nil UUID (the synthetic system session).
+        let controller = EngineController()
+        controller.appendForTestUnattributed(raw: "! system error", kind: .error)
+        XCTAssertFalse(controller.messages.isEmpty)
+        // There must be exactly one session (the synthetic one) and its UUID matches the message.
+        XCTAssertEqual(controller.sessions.count, 1)
+        XCTAssertEqual(controller.messages.last?.sessionID, controller.sessions.first?.uuid)
     }
 
     func testSessionRemoveReselectsActiveAndClearsSelectedWhenMatching() {
