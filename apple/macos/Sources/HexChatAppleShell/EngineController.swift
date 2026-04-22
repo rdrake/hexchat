@@ -287,6 +287,11 @@ final class EngineController {
         let grouped = Dictionary(grouping: sessions) { session -> UUID? in
             connections[session.connectionID]?.networkID
         }
+        // Orphan sessions (connectionID not in connections) are intentionally dropped here.
+        // In normal operation this is unreachable — upsertSession runs after registerConnection
+        // (or falls back to systemConnectionUUID). Retained as defense for LIFECYCLE_STOPPED's
+        // inter-statement window where connections = [:] is set before the system session is
+        // removed from `sessions`.
         let ordered = grouped.keys
             .compactMap { $0 }
             .compactMap { networks[$0] }
@@ -495,8 +500,8 @@ final class EngineController {
     }
 
     func applyLogLineForTest(
-        network: String,
-        channel: String,
+        network: String? = nil,
+        channel: String? = nil,
         text: String,
         sessionID: UInt64 = 0,
         connectionID: UInt64 = 0,

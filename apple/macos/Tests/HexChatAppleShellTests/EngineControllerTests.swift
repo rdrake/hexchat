@@ -808,6 +808,94 @@ final class EngineControllerTests: XCTestCase {
         let names = controller.networkSections.map(\.name)
         XCTAssertEqual(names.sorted(), ["AfterNET", "Libera"])
     }
+
+    // MARK: - Task 9 new tests
+
+    func testLifecycleStoppedClearsNetworksAndConnections() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        XCTAssertFalse(controller.networks.isEmpty)
+        XCTAssertFalse(controller.connections.isEmpty)
+        XCTAssertFalse(controller.networksByName.isEmpty)
+        XCTAssertFalse(controller.connectionsByServerID.isEmpty)
+
+        controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
+
+        XCTAssertTrue(controller.networks.isEmpty)
+        XCTAssertTrue(controller.connections.isEmpty)
+        XCTAssertTrue(controller.networksByName.isEmpty)
+        XCTAssertTrue(controller.connectionsByServerID.isEmpty)
+        XCTAssertTrue(controller.sessionByLocator.isEmpty)
+    }
+
+    func testSelfNickRefreshesOnSubsequentEvent() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            connectionID: 1, selfNick: "alice")
+        let connID = controller.connectionsByServerID[1]!
+        XCTAssertEqual(controller.connections[connID]?.selfNick, "alice")
+
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b",
+            connectionID: 1, selfNick: "alice_")
+        XCTAssertEqual(
+            controller.connections[connID]?.selfNick, "alice_",
+            "subsequent events refresh selfNick on the already-registered Connection")
+    }
+
+    func testSystemConnectionIsNotRegisteredByServerID() {
+        let controller = EngineController()
+        // Trigger system-session creation.
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+        XCTAssertFalse(controller.connections.isEmpty, "system connection must be created")
+        XCTAssertTrue(
+            controller.connectionsByServerID.isEmpty,
+            "system connection has no server-id slot — server_id == 0 is reserved")
+    }
+
+    func testSystemSessionHasSystemConnectionAndNetwork() {
+        let controller = EngineController()
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+
+        let systemNetworkID = controller.networksByName["network"]
+        XCTAssertNotNil(systemNetworkID)
+        let systemConnectionID = controller.systemConnectionUUIDForTest()
+        XCTAssertEqual(controller.connections[systemConnectionID]?.networkID, systemNetworkID)
+        XCTAssertEqual(
+            controller.networks.values.filter { $0.displayName == "network" }.count, 1,
+            "exactly one system Network")
+    }
+
+    func testConnectionIDZeroRoutesToSystemConnection() {
+        // Events with connection_id == 0 (no struct server) reuse the system Connection
+        // rather than spawning a fresh per-call Connection.
+        let controller = EngineController()
+        controller.applyLogLineForTest(
+            network: nil, channel: nil,
+            text: "first unattributed", sessionID: 0,
+            connectionID: 0, selfNick: nil)
+        controller.applyLogLineForTest(
+            network: nil, channel: nil,
+            text: "second unattributed", sessionID: 0,
+            connectionID: 0, selfNick: nil)
+        XCTAssertEqual(controller.connections.count, 1, "both events reuse the system connection")
+    }
+
+    func testNetworkDisplayNamePrefersFirstSeenCasing() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#c",
+            connectionID: 1, selfNick: "me")
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "afternet", channel: "#d",
+            connectionID: 1, selfNick: "me")
+        // Same Network.id, first-seen display casing preserved.
+        XCTAssertEqual(controller.networks.count, 1)
+        XCTAssertEqual(controller.networks.values.first?.displayName, "AfterNET")
+    }
 }
 #else
 @testable import HexChatAppleShell
