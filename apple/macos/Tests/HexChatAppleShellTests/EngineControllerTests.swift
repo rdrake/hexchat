@@ -211,7 +211,7 @@ final class EngineControllerTests: XCTestCase {
         let uuid = controller.sessionUUID(for: oldLocator)!
 
         // Mutate the session in place. Emitting UPSERT with the same id but new channel simulates a rename.
-        controller.applyForTestMutate(
+        controller.applyRenameForTest(
             id: EngineController.sessionID(network: "Libera", channel: "#old"),
             toNetwork: "Libera", channel: "#new")
         XCTAssertNil(controller.sessionUUID(for: oldLocator), "old composed locator must purge")
@@ -223,6 +223,17 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
         controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
         XCTAssertNil(controller.sessionUUID(for: .composed(network: "Libera", channel: "#a")))
+    }
+
+    func testSessionRemovePurgesRuntimeLocator() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#r", sessionID: 77)
+        XCTAssertNotNil(controller.sessionUUID(for: .runtime(id: 77)))
+
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_REMOVE, network: "AfterNET", channel: "#r", sessionID: 77)
+        XCTAssertNil(controller.sessionUUID(for: .runtime(id: 77)))
     }
 
     func testSessionRemoveReselectsActiveAndClearsSelectedWhenMatching() {

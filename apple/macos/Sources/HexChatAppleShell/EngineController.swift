@@ -275,7 +275,7 @@ final class EngineController {
         handleSessionEvent(event)
     }
 
-    func applyForTestMutate(id: String, toNetwork: String, channel: String) {
+    func applyRenameForTest(id: String, toNetwork: String, channel: String) {
         upsertSession(id: id, network: toNetwork, channel: channel)
     }
 
@@ -368,7 +368,7 @@ final class EngineController {
             upsertSession(id: id, network: network, channel: channel)
         case HC_APPLE_SESSION_REMOVE:
             if let removed = sessions.first(where: { $0.id == id }) {
-                sessionByLocator = sessionByLocator.filter { $0.value != removed.uuid }
+                deregisterLocators(for: removed)
             }
             sessions.removeAll { $0.id == id }
             usersBySession[id] = nil
@@ -413,9 +413,14 @@ final class EngineController {
         }
     }
 
-    private func reregisterLocators(for session: ChatSession) {
-        // Purge any existing locators pointing at this UUID before re-registering.
+    private func deregisterLocators(for session: ChatSession) {
         sessionByLocator = sessionByLocator.filter { $0.value != session.uuid }
+    }
+
+    private func reregisterLocators(for session: ChatSession) {
+        deregisterLocators(for: session)
+        // Each session is identified by exactly one locator kind — runtime-id if its string id
+        // carries the "sess:" prefix from the C runtime, composed (network, channel) otherwise.
         if session.id.hasPrefix("sess:"), let num = UInt64(session.id.dropFirst("sess:".count)) {
             sessionByLocator[.runtime(id: num)] = session.uuid
         } else {
