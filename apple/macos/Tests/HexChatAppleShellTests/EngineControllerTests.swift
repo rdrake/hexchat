@@ -896,6 +896,31 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.networks.count, 1)
         XCTAssertEqual(controller.networks.values.first?.displayName, "AfterNET")
     }
+
+    func testConnectionIDZeroIsReservedSentinelAndDistinctFromID1() {
+        let controller = EngineController()
+        // connectionID 0 must route to the system connection (not create a real one).
+        controller.applyLogLineForTest(
+            network: nil, channel: nil,
+            text: "sentinel", sessionID: 0,
+            connectionID: 0, selfNick: nil)
+        XCTAssertTrue(
+            controller.connectionsByServerID.isEmpty,
+            "connectionID 0 must not populate connectionsByServerID")
+        let systemConn = controller.systemConnectionUUIDForTest()
+
+        // A real event with connectionID 1 must create a DISTINCT Connection.
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            sessionID: 0, connectionID: 1, selfNick: "me")
+        let realConn = controller.connectionsByServerID[1]!
+        XCTAssertNotEqual(
+            realConn, systemConn,
+            "Real server connections must be distinct from the system sentinel")
+        XCTAssertEqual(
+            controller.connections.count, 2,
+            "One system connection + one real connection")
+    }
 }
 #else
 @testable import HexChatAppleShell

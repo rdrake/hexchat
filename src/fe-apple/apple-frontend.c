@@ -113,7 +113,9 @@ hc_apple_session_runtime_id (const session *sess)
 static uint64_t
 hc_apple_session_connection_id (const session *sess)
 {
-	return (sess && sess->server) ? (uint64_t)sess->server->id : 0;
+	/* server->id starts at 0; offset by 1 so that connection_id == 0 in the
+	 * Swift bridge unambiguously means "no server context." */
+	return (sess && sess->server) ? (uint64_t)sess->server->id + 1 : 0;
 }
 
 static const char *
