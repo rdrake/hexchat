@@ -116,6 +116,12 @@ final class EngineController {
     var selectedSessionID: String?
     var activeSessionID: String?
 
+    private(set) var sessionByLocator: [SessionLocator: UUID] = [:]
+
+    func sessionUUID(for locator: SessionLocator) -> UUID? {
+        sessionByLocator[locator]
+    }
+
     private(set) var commandHistory: [String] = []
     private var historyCursor = 0
     private var historyDraft = ""
@@ -269,6 +275,17 @@ final class EngineController {
         handleSessionEvent(event)
     }
 
+    func applyForTestMutate(id: String, toNetwork: String, channel: String) {
+        upsertSession(id: id, network: toNetwork, channel: channel)
+    }
+
+    func applyLifecycleForTest(phase: hc_apple_lifecycle_phase) {
+        let event = RuntimeEvent(
+            kind: HC_APPLE_EVENT_LIFECYCLE, text: nil, phase: phase,
+            code: 0, sessionID: 0, network: nil, channel: nil, nick: nil)
+        handleRuntimeEvent(event)
+    }
+
     func applyLogLineForTest(network: String, channel: String, text: String, sessionID: UInt64 = 0) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_LOG_LINE,
@@ -298,6 +315,7 @@ final class EngineController {
             } else if event.phase == HC_APPLE_LIFECYCLE_STOPPED {
                 isRunning = false
                 usersBySession = [:]
+                sessionByLocator = [:]
             }
         case HC_APPLE_EVENT_COMMAND:
             if event.code != 0 {
@@ -349,6 +367,9 @@ final class EngineController {
         case HC_APPLE_SESSION_UPSERT:
             upsertSession(id: id, network: network, channel: channel)
         case HC_APPLE_SESSION_REMOVE:
+            if let removed = sessions.first(where: { $0.id == id }) {
+                sessionByLocator = sessionByLocator.filter { $0.value != removed.uuid }
+            }
             sessions.removeAll { $0.id == id }
             usersBySession[id] = nil
             if selectedSessionID == id {
@@ -378,14 +399,27 @@ final class EngineController {
         if let index = sessions.firstIndex(where: { $0.id == id }) {
             sessions[index].network = network
             sessions[index].channel = channel
+            reregisterLocators(for: sessions[index])
             sessions = sessions.sorted(by: sessionSort)
             return
         }
 
-        sessions.append(ChatSession(id: id, network: network, channel: channel, isActive: false))
+        let new = ChatSession(id: id, network: network, channel: channel, isActive: false)
+        sessions.append(new)
+        reregisterLocators(for: new)
         sessions = sessions.sorted(by: sessionSort)
         if selectedSessionID == nil {
             selectedSessionID = id
+        }
+    }
+
+    private func reregisterLocators(for session: ChatSession) {
+        // Purge any existing locators pointing at this UUID before re-registering.
+        sessionByLocator = sessionByLocator.filter { $0.value != session.uuid }
+        if session.id.hasPrefix("sess:"), let num = UInt64(session.id.dropFirst("sess:".count)) {
+            sessionByLocator[.runtime(id: num)] = session.uuid
+        } else {
+            sessionByLocator[.composed(network: session.network, channel: session.channel)] = session.uuid
         }
     }
 

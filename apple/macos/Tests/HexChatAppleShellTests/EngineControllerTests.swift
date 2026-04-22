@@ -186,6 +186,45 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(session.uuid, firstUUID, "UUID must not change when other fields mutate")
     }
 
+    func testSessionByLocatorIndexPopulatesAndRemoves() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
+        let locator = SessionLocator.composed(network: "Libera", channel: "#a")
+        XCTAssertNotNil(controller.sessionUUID(for: locator))
+
+        controller.applySessionForTest(action: HC_APPLE_SESSION_REMOVE, network: "Libera", channel: "#a")
+        XCTAssertNil(controller.sessionUUID(for: locator))
+    }
+
+    func testSessionByLocatorIndexHandlesRuntimeID() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#same", sessionID: 42)
+        XCTAssertNotNil(controller.sessionUUID(for: .runtime(id: 42)))
+    }
+
+    func testSessionByLocatorPurgesStaleCompositesOnRename() {
+        // If a session's (network, channel) changes, stale composed locators must not linger.
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#old")
+        let oldLocator = SessionLocator.composed(network: "Libera", channel: "#old")
+        let uuid = controller.sessionUUID(for: oldLocator)!
+
+        // Mutate the session in place. Emitting UPSERT with the same id but new channel simulates a rename.
+        controller.applyForTestMutate(
+            id: EngineController.sessionID(network: "Libera", channel: "#old"),
+            toNetwork: "Libera", channel: "#new")
+        XCTAssertNil(controller.sessionUUID(for: oldLocator), "old composed locator must purge")
+        XCTAssertEqual(controller.sessionUUID(for: .composed(network: "Libera", channel: "#new")), uuid)
+    }
+
+    func testLifecycleStoppedClearsLocatorIndex() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
+        controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
+        XCTAssertNil(controller.sessionUUID(for: .composed(network: "Libera", channel: "#a")))
+    }
+
     func testSessionRemoveReselectsActiveAndClearsSelectedWhenMatching() {
         let controller = EngineController()
         controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#a")
