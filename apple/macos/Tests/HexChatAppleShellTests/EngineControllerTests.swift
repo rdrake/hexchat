@@ -157,7 +157,7 @@ final class EngineControllerTests: XCTestCase {
         // With no sessions, visibleSessionID must return the specific synthetic fallback id.
         XCTAssertEqual(
             controller.visibleSessionID,
-            EngineController.sessionID(network: "network", channel: "server"),
+            "network::server",
             "fresh controller with no sessions must fall back to the synthetic network::server id"
         )
         // And visibleMessages must simply be empty, not crash.
@@ -170,8 +170,8 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#a")
         controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#b")
         // Post-activate: active = #b. selected was set to #a by the first upsert.
-        let a = EngineController.sessionID(network: "AfterNET", channel: "#a")
-        let b = EngineController.sessionID(network: "AfterNET", channel: "#b")
+        let a = "afternet::#a"
+        let b = "afternet::#b"
         let aUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#a"))!
         controller.selectedSessionID = aUUID
         XCTAssertEqual(controller.visibleSessionID, a, "selected takes precedence over active")

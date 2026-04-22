@@ -160,16 +160,6 @@ final class EngineController {
 
     private var callbackUserdata: UnsafeMutableRawPointer?
 
-    // TODO: remove in Phase 1 Task 10 — use `SessionLocator` + `sessionUUID(for:)` instead.
-    static func sessionID(network: String, channel: String) -> String {
-        "\(network.lowercased())::\(channel.lowercased())"
-    }
-
-    // TODO: remove in Phase 1 Task 10 — use `SessionLocator.runtime(id:)` instead.
-    static func runtimeSessionID(_ sessionID: UInt64) -> String {
-        "sess:\(sessionID)"
-    }
-
     var visibleSessionUUID: UUID? {
         if let selectedSessionID { return selectedSessionID }
         if let activeSessionID { return activeSessionID }
