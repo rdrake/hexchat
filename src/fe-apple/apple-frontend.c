@@ -939,6 +939,11 @@ fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel)
 	                                hc_apple_session_network (sess),
 	                                hc_apple_session_channel (sess),
 	                                nick,
+	                                0,        /* mode_prefix — populated in Task 3 */
+	                                NULL,     /* account */
+	                                NULL,     /* host */
+	                                0,        /* is_me */
+	                                0,        /* is_away */
 	                                hc_apple_session_runtime_id (sess));
 }
 int
@@ -952,6 +957,11 @@ fe_userlist_remove (struct session *sess, struct User *user)
 	                                hc_apple_session_network (sess),
 	                                hc_apple_session_channel (sess),
 	                                nick,
+	                                0,
+	                                NULL,
+	                                NULL,
+	                                0,
+	                                0,
 	                                hc_apple_session_runtime_id (sess));
 	return 0;
 }
@@ -966,6 +976,11 @@ fe_userlist_rehash (struct session *sess, struct User *user)
 	                                hc_apple_session_network (sess),
 	                                hc_apple_session_channel (sess),
 	                                nick,
+	                                0,
+	                                NULL,
+	                                NULL,
+	                                0,
+	                                0,
 	                                hc_apple_session_runtime_id (sess));
 }
 void
@@ -980,6 +995,11 @@ fe_userlist_clear (struct session *sess)
 	                                hc_apple_session_network (sess),
 	                                hc_apple_session_channel (sess),
 	                                NULL,
+	                                0,
+	                                NULL,
+	                                NULL,
+	                                0,
+	                                0,
 	                                hc_apple_session_runtime_id (sess));
 }
 void
@@ -1216,6 +1236,11 @@ fe_userlist_update (session *sess, struct User *user)
 	                                hc_apple_session_network (sess),
 	                                hc_apple_session_channel (sess),
 	                                nick,
+	                                0,
+	                                NULL,
+	                                NULL,
+	                                0,
+	                                0,
 	                                hc_apple_session_runtime_id (sess));
 }
 void

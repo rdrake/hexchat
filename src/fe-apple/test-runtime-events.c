@@ -54,7 +54,12 @@ runtime_event_cb (const hc_apple_event *event, void *userdata)
 		    event->network && event->channel && event->nick &&
 		    strcmp (event->network, "runtime-net") == 0 &&
 		    strcmp (event->channel, "#runtime") == 0 &&
-		    strcmp (event->nick, "runtime-user") == 0)
+		    strcmp (event->nick, "runtime-user") == 0 &&
+		    event->mode_prefix == 0 &&
+		    event->account == NULL &&
+		    event->host == NULL &&
+		    event->is_me == 0 &&
+		    event->is_away == 0)
 		{
 			state->saw_userlist_insert = TRUE;
 		}
@@ -137,7 +142,8 @@ test_runtime_events_lifecycle_and_command_path (void)
 	g_assert_true (hc_apple_runtime_post_command ("/echo runtime-events-slash"));
 	g_assert_true (wait_for_flag (&state.saw_echo_slash_log, 3000));
 	hc_apple_runtime_emit_log_line_for_session ("scoped-log", "runtime-net", "#runtime", 42);
-	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_INSERT, "runtime-net", "#runtime", "runtime-user", 42);
+	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_INSERT, "runtime-net", "#runtime",
+	                                "runtime-user", 0, NULL, NULL, 0, 0, 42);
 	hc_apple_runtime_emit_session (HC_APPLE_SESSION_ACTIVATE, "runtime-net", "#runtime", 42);
 	hc_apple_runtime_stop ();
 

@@ -43,6 +43,13 @@ typedef enum
 	HC_APPLE_LIFECYCLE_STOPPED = 3
 } hc_apple_lifecycle_phase;
 
+/*
+ * In-tree consumers only: the Swift Apple shell is the sole consumer of this
+ * struct and is built from the same source tree as the producer (apple-frontend.c
+ * + apple-runtime.c). Adding fields here is an ABI break for any out-of-tree
+ * consumer; rebuild required. There is no version field — both sides are pinned
+ * to the same commit.
+ */
 typedef struct
 {
 	hc_apple_event_kind kind;
@@ -53,6 +60,12 @@ typedef struct
 	const char *network;
 	const char *channel;
 	const char *nick;
+	/* Phase 2: userlist metadata. Zero/NULL for non-userlist events. */
+	uint8_t mode_prefix;          /* '@', '+', '%', '&', '~', or 0 */
+	const char *account;
+	const char *host;
+	uint8_t is_me;
+	uint8_t is_away;
 } hc_apple_event;
 
 typedef void (*hc_apple_event_cb) (const hc_apple_event *event, void *userdata);
@@ -71,6 +84,11 @@ void hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
                                      const char *network,
                                      const char *channel,
                                      const char *nick,
+                                     uint8_t mode_prefix,
+                                     const char *account,
+                                     const char *host,
+                                     uint8_t is_me,
+                                     uint8_t is_away,
                                      uint64_t session_id);
 void hc_apple_runtime_emit_session (hc_apple_session_action action,
                                     const char *network,
