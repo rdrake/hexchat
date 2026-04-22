@@ -236,6 +236,14 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertNil(controller.sessionUUID(for: .runtime(id: 77)))
     }
 
+    func testUsersBySessionIsKeyedByUUID() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a", nick: "alice")
+        let uuid = controller.sessionUUID(for: .composed(network: "Libera", channel: "#a"))!
+        XCTAssertEqual(controller.usersBySession[uuid], ["alice"])
+    }
+
     func testSessionRemoveReselectsActiveAndClearsSelectedWhenMatching() {
         let controller = EngineController()
         controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#a")
@@ -248,14 +256,15 @@ final class EngineControllerTests: XCTestCase {
 
         // Put users in #a so we can assert the cleanup.
         controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#a", nick: "alice")
-        XCTAssertFalse(controller.usersBySession[a, default: []].isEmpty)
+        let aUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#a"))!
+        XCTAssertFalse(controller.usersBySession[aUUID, default: []].isEmpty)
 
         controller.applySessionForTest(action: HC_APPLE_SESSION_REMOVE, network: "AfterNET", channel: "#a")
 
         XCTAssertFalse(controller.sessions.contains(where: { $0.id == a }), "#a must be gone")
         XCTAssertNil(controller.selectedSessionID, "selected must clear when its session is removed")
         XCTAssertEqual(controller.activeSessionID, b, "active must reassign to a remaining session")
-        XCTAssertNil(controller.usersBySession[a], "usersBySession entry must be cleaned up")
+        XCTAssertNil(controller.usersBySession[aUUID], "usersBySession entry must be cleaned up")
         // Exactly one session should have isActive == true, and it should be #b.
         let actives = controller.sessions.filter { $0.isActive }
         XCTAssertEqual(actives.map(\.id), [b])

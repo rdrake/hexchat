@@ -110,7 +110,7 @@ final class EngineController {
     var isRunning = false
     var messages: [ChatMessage] = []
     var sessions: [ChatSession] = []
-    var usersBySession: [String: [String]] = [:]
+    var usersBySession: [UUID: [String]] = [:]
     var input = ""
 
     var selectedSessionID: String?
@@ -120,6 +120,10 @@ final class EngineController {
 
     func sessionUUID(for locator: SessionLocator) -> UUID? {
         sessionByLocator[locator]
+    }
+
+    private func sessionUUID(forSessionID id: String) -> UUID? {
+        sessions.first(where: { $0.id == id })?.uuid
     }
 
     private(set) var commandHistory: [String] = []
@@ -155,7 +159,8 @@ final class EngineController {
     }
 
     var visibleUsers: [String] {
-        usersBySession[visibleSessionID] ?? []
+        guard let uuid = sessionUUID(forSessionID: visibleSessionID) else { return [] }
+        return usersBySession[uuid] ?? []
     }
 
     var visibleSessionTitle: String {
@@ -368,10 +373,10 @@ final class EngineController {
             upsertSession(id: id, network: network, channel: channel)
         case HC_APPLE_SESSION_REMOVE:
             if let removed = sessions.first(where: { $0.id == id }) {
+                usersBySession[removed.uuid] = nil
                 deregisterLocators(for: removed)
             }
             sessions.removeAll { $0.id == id }
-            usersBySession[id] = nil
             if selectedSessionID == id {
                 selectedSessionID = nil
             }
@@ -431,39 +436,40 @@ final class EngineController {
     private func handleUserlistEvent(_ event: RuntimeEvent) {
         let network = event.network ?? "network"
         let channel = event.channel ?? "server"
-        let sessionID = event.sessionID > 0
+        let composedID = event.sessionID > 0
             ? Self.runtimeSessionID(event.sessionID)
             : Self.sessionID(network: network, channel: channel)
-        upsertSession(id: sessionID, network: network, channel: channel)
+        upsertSession(id: composedID, network: network, channel: channel)
+        guard let uuid = sessionUUID(forSessionID: composedID) else { return }
         let nick = event.nick ?? ""
 
         switch event.userlistAction {
         case HC_APPLE_USERLIST_INSERT, HC_APPLE_USERLIST_UPDATE:
             guard !nick.isEmpty else { return }
-            upsertNick(nick, in: sessionID)
+            upsertNick(nick, inSession: uuid)
         case HC_APPLE_USERLIST_REMOVE:
             guard !nick.isEmpty else { return }
-            usersBySession[sessionID, default: []].removeAll {
+            usersBySession[uuid, default: []].removeAll {
                 stripModePrefix($0).caseInsensitiveCompare(stripModePrefix(nick)) == .orderedSame
             }
         case HC_APPLE_USERLIST_CLEAR:
-            usersBySession[sessionID] = []
+            usersBySession[uuid] = []
         default:
             break
         }
 
-        usersBySession[sessionID, default: []].sort(by: userSort)
+        usersBySession[uuid, default: []].sort(by: userSort)
     }
 
-    private func upsertNick(_ nick: String, in sessionID: String) {
+    private func upsertNick(_ nick: String, inSession uuid: UUID) {
         let normalized = stripModePrefix(nick)
-        var nicks = usersBySession[sessionID, default: []]
+        var nicks = usersBySession[uuid, default: []]
         if let idx = nicks.firstIndex(where: { stripModePrefix($0).caseInsensitiveCompare(normalized) == .orderedSame }) {
             nicks[idx] = nick
         } else {
             nicks.append(nick)
         }
-        usersBySession[sessionID] = nicks
+        usersBySession[uuid] = nicks
     }
 
     private func sessionSort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {
