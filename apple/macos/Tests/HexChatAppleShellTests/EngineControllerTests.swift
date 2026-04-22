@@ -178,6 +178,14 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.visibleSessionID, a, "first session used when both selected and active are nil")
     }
 
+    func testChatSessionCarriesStableUUIDAcrossMutations() {
+        var session = ChatSession(id: "libera::#a", network: "Libera", channel: "#a", isActive: false)
+        let firstUUID = session.uuid
+        session.network = "RenamedNetwork"
+        session.channel = "#renamed"
+        XCTAssertEqual(session.uuid, firstUUID, "UUID must not change when other fields mutate")
+    }
+
     func testSessionRemoveReselectsActiveAndClearsSelectedWhenMatching() {
         let controller = EngineController()
         controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#a")

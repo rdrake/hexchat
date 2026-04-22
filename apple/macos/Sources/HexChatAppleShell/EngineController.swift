@@ -4,9 +4,18 @@ import AppleAdapterBridge
 
 struct ChatSession: Identifiable, Hashable {
     let id: String
+    let uuid: UUID
     var network: String
     var channel: String
     var isActive: Bool
+
+    init(id: String, network: String, channel: String, isActive: Bool, uuid: UUID = UUID()) {
+        self.id = id
+        self.uuid = uuid
+        self.network = network
+        self.channel = channel
+        self.isActive = isActive
+    }
 
     var isChannel: Bool {
         channel.hasPrefix("#") || channel.hasPrefix("&")
