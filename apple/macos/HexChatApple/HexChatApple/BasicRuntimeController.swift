@@ -53,13 +53,12 @@ final class BasicRuntimeController {
             return
         }
 
+        appendLog("> \(command)")
         let posted = runtime.postCommand(command)
-        if posted {
-            appendLog("> \(command)")
-            commandInput = ""
-        } else {
+        if !posted {
             appendLog("! failed to send command")
         }
+        commandInput = ""
     }
 
     func appendLog(_ line: String) {

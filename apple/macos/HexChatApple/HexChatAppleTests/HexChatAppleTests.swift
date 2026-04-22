@@ -47,8 +47,8 @@ struct HexChatAppleTests {
         controller.sendCurrentCommand()
 
         #expect(runtime.postedCommands == ["/join #hexchat"])
-        #expect(controller.logs == ["! failed to send command"])
-        #expect(controller.commandInput == "/join #hexchat")
+        #expect(controller.logs == ["> /join #hexchat", "! failed to send command"])
+        #expect(controller.commandInput.isEmpty)
     }
 
     @MainActor
