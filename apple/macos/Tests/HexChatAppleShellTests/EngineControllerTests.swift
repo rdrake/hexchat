@@ -177,6 +177,31 @@ final class EngineControllerTests: XCTestCase {
         // sessions are sorted so #a comes first alphabetically.
         XCTAssertEqual(controller.visibleSessionID, a, "first session used when both selected and active are nil")
     }
+
+    func testSessionRemoveReselectsActiveAndClearsSelectedWhenMatching() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#b")
+
+        let a = EngineController.sessionID(network: "AfterNET", channel: "#a")
+        let b = EngineController.sessionID(network: "AfterNET", channel: "#b")
+        controller.selectedSessionID = a
+        XCTAssertEqual(controller.activeSessionID, a)
+
+        // Put users in #a so we can assert the cleanup.
+        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#a", nick: "alice")
+        XCTAssertFalse(controller.usersBySession[a, default: []].isEmpty)
+
+        controller.applySessionForTest(action: HC_APPLE_SESSION_REMOVE, network: "AfterNET", channel: "#a")
+
+        XCTAssertFalse(controller.sessions.contains(where: { $0.id == a }), "#a must be gone")
+        XCTAssertNil(controller.selectedSessionID, "selected must clear when its session is removed")
+        XCTAssertEqual(controller.activeSessionID, b, "active must reassign to a remaining session")
+        XCTAssertNil(controller.usersBySession[a], "usersBySession entry must be cleaned up")
+        // Exactly one session should have isActive == true, and it should be #b.
+        let actives = controller.sessions.filter { $0.isActive }
+        XCTAssertEqual(actives.map(\.id), [b])
+    }
 }
 #else
 @testable import HexChatAppleShell
