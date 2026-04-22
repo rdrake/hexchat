@@ -3,18 +3,24 @@ import Observation
 import AppleAdapterBridge
 
 struct ChatSession: Identifiable, Hashable {
-    let id: String
-    let uuid: UUID
+    let id: UUID
     var network: String
     var channel: String
     var isActive: Bool
+    var composedKey: String?
 
-    init(id: String, network: String, channel: String, isActive: Bool, uuid: UUID = UUID()) {
+    init(
+        id: UUID = UUID(),
+        network: String,
+        channel: String,
+        isActive: Bool,
+        composedKey: String? = nil
+    ) {
         self.id = id
-        self.uuid = uuid
         self.network = network
         self.channel = channel
         self.isActive = isActive
+        self.composedKey = composedKey
     }
 
     var isChannel: Bool {
@@ -123,27 +129,29 @@ final class EngineController {
 
     private func systemSessionUUID() -> UUID {
         if let existing = systemSessionUUIDStorage { return existing }
-        let id = UUID()
-        systemSessionUUIDStorage = id
-        // Insert a placeholder ChatSession so visibleMessages filtering works.
         let placeholder = ChatSession(
-            id: Self.sessionID(network: "network", channel: "server"),
-            network: "network", channel: "server", isActive: false, uuid: id)
+            network: "network",
+            channel: "server",
+            isActive: false,
+            composedKey: Self.composedKey(for: .composed(network: "network", channel: "server"))
+        )
         sessions.append(placeholder)
-        // Do NOT register the placeholder in sessionByLocator. If a real session is later
-        // upserted with the same composed key ("network", "server"), reregisterLocators would
-        // silently orphan systemSessionUUIDStorage. The placeholder is still found by
-        // sessionUUID(forSessionID:) which scans the sessions array; that path is sufficient.
         sessions = sessions.sorted(by: sessionSort)
-        return id
+        systemSessionUUIDStorage = placeholder.id
+        return placeholder.id
+    }
+
+    private static func composedKey(for locator: SessionLocator) -> String {
+        switch locator {
+        case .composed(let network, let channel):
+            return "\(network.lowercased())::\(channel.lowercased())"
+        case .runtime(let id):
+            return "sess:\(id)"
+        }
     }
 
     func sessionUUID(for locator: SessionLocator) -> UUID? {
         sessionByLocator[locator]
-    }
-
-    private func sessionUUID(forSessionID id: String) -> UUID? {
-        sessions.first(where: { $0.id == id })?.uuid
     }
 
     private(set) var commandHistory: [String] = []
@@ -163,29 +171,30 @@ final class EngineController {
     var visibleSessionUUID: UUID? {
         if let selectedSessionID { return selectedSessionID }
         if let activeSessionID { return activeSessionID }
-        return sessions.first?.uuid
+        return sessions.first?.id
     }
 
     var visibleSessionID: String {
         guard let uuid = visibleSessionUUID,
-              let session = sessions.first(where: { $0.uuid == uuid }) else {
-            return Self.sessionID(network: "network", channel: "server")
+              let session = sessions.first(where: { $0.id == uuid })
+        else {
+            return Self.composedKey(for: .composed(network: "network", channel: "server"))
         }
-        return session.id
+        return session.composedKey ?? Self.composedKey(for: .composed(network: session.network, channel: session.channel))
     }
 
     var visibleMessages: [ChatMessage] {
-        guard let uuid = sessionUUID(forSessionID: visibleSessionID) else { return [] }
+        guard let uuid = visibleSessionUUID else { return [] }
         return messages.filter { $0.sessionID == uuid }
     }
 
     var visibleUsers: [String] {
-        guard let uuid = sessionUUID(forSessionID: visibleSessionID) else { return [] }
+        guard let uuid = visibleSessionUUID else { return [] }
         return usersBySession[uuid] ?? []
     }
 
     var visibleSessionTitle: String {
-        if let session = sessions.first(where: { $0.id == visibleSessionID }) {
+        if let uuid = visibleSessionUUID, let session = sessions.first(where: { $0.id == uuid }) {
             return "\(session.network) • \(session.channel)"
         }
         return "No Session"
@@ -304,8 +313,12 @@ final class EngineController {
         handleSessionEvent(event)
     }
 
-    func applyRenameForTest(id: String, toNetwork: String, channel: String) {
-        upsertSession(id: id, network: toNetwork, channel: channel)
+    func applyRenameForTest(network: String, fromChannel: String, toChannel: String) {
+        upsertSession(
+            locator: .composed(network: network, channel: fromChannel),
+            network: network,
+            channel: toChannel
+        )
     }
 
     func applyLifecycleForTest(phase: hc_apple_lifecycle_phase) {
@@ -346,7 +359,7 @@ final class EngineController {
                 usersBySession = [:]
                 sessionByLocator = [:]
                 if let old = systemSessionUUIDStorage {
-                    sessions.removeAll { $0.uuid == old }
+                    sessions.removeAll { $0.id == old }
                 }
                 systemSessionUUIDStorage = nil
             }
@@ -387,98 +400,98 @@ final class EngineController {
         if let event, let resolved = resolveEventSessionID(event) { return resolved }
         if let act = activeSessionID { return act }
         if let sel = selectedSessionID { return sel }
-        if let first = sessions.first?.uuid { return first }
+        if let first = sessions.first?.id { return first }
         return systemSessionUUID()
     }
 
     private func resolveEventSessionID(_ event: RuntimeEvent) -> UUID? {
         guard let network = event.network, let channel = event.channel else { return nil }
-        let composedID = event.sessionID > 0
-            ? Self.runtimeSessionID(event.sessionID)
-            : Self.sessionID(network: network, channel: channel)
-        upsertSession(id: composedID, network: network, channel: channel)
-        return sessionUUID(forSessionID: composedID)
+        let locator: SessionLocator = event.sessionID > 0
+            ? .runtime(id: event.sessionID)
+            : .composed(network: network, channel: channel)
+        return upsertSession(locator: locator, network: network, channel: channel)
     }
 
     private func handleSessionEvent(_ event: RuntimeEvent) {
         let network = event.network ?? "network"
         let channel = event.channel ?? "server"
-        let id = event.sessionID > 0
-            ? Self.runtimeSessionID(event.sessionID)
-            : Self.sessionID(network: network, channel: channel)
+        let locator: SessionLocator = event.sessionID > 0
+            ? .runtime(id: event.sessionID)
+            : .composed(network: network, channel: channel)
 
         switch event.sessionAction {
         case HC_APPLE_SESSION_UPSERT:
-            upsertSession(id: id, network: network, channel: channel)
+            upsertSession(locator: locator, network: network, channel: channel)
         case HC_APPLE_SESSION_REMOVE:
-            if let removed = sessions.first(where: { $0.id == id }) {
-                usersBySession[removed.uuid] = nil
+            if let uuid = sessionByLocator[locator],
+               let removed = sessions.first(where: { $0.id == uuid }) {
+                usersBySession[uuid] = nil
                 deregisterLocators(for: removed)
-                if selectedSessionID == removed.uuid { selectedSessionID = nil }
+                if selectedSessionID == uuid { selectedSessionID = nil }
                 // Evaluated against the still-intact `sessions` array, before the removeAll call below.
-                if activeSessionID == removed.uuid {
-                    activeSessionID = sessions.first(where: { $0.uuid != removed.uuid })?.uuid
-                }
+                if activeSessionID == uuid { activeSessionID = sessions.first(where: { $0.id != uuid })?.id }
+                sessions.removeAll { $0.id == uuid }
             }
-            sessions.removeAll { $0.id == id }
         case HC_APPLE_SESSION_ACTIVATE:
-            upsertSession(id: id, network: network, channel: channel)
-            if let new = sessions.first(where: { $0.id == id }) {
-                activeSessionID = new.uuid
-                if selectedSessionID == nil { selectedSessionID = new.uuid }
-            }
+            let uuid = upsertSession(locator: locator, network: network, channel: channel)
+            activeSessionID = uuid
+            if selectedSessionID == nil { selectedSessionID = uuid }
         default:
             break
         }
 
         sessions = sessions.map { session in
             var mutable = session
-            mutable.isActive = (session.uuid == activeSessionID)
+            mutable.isActive = (session.id == activeSessionID)
             return mutable
         }.sorted(by: sessionSort)
     }
 
-    private func upsertSession(id: String, network: String, channel: String) {
-        if let index = sessions.firstIndex(where: { $0.id == id }) {
-            sessions[index].network = network
-            sessions[index].channel = channel
-            reregisterLocators(for: sessions[index])
+    @discardableResult
+    private func upsertSession(locator: SessionLocator, network: String, channel: String) -> UUID {
+        if let existing = sessionByLocator[locator],
+           let idx = sessions.firstIndex(where: { $0.id == existing }) {
+            sessions[idx].network = network
+            sessions[idx].channel = channel
+            sessions[idx].composedKey = Self.composedKey(for: locator)
+            reregisterLocators(for: sessions[idx])
             sessions = sessions.sorted(by: sessionSort)
-            return
+            return existing
         }
-
-        let new = ChatSession(id: id, network: network, channel: channel, isActive: false)
+        let new = ChatSession(
+            network: network,
+            channel: channel,
+            isActive: false,
+            composedKey: Self.composedKey(for: locator)
+        )
         sessions.append(new)
-        reregisterLocators(for: new)
+        sessionByLocator[locator] = new.id
         sessions = sessions.sorted(by: sessionSort)
-        if selectedSessionID == nil {
-            selectedSessionID = new.uuid
-        }
+        if selectedSessionID == nil { selectedSessionID = new.id }
+        return new.id
     }
 
     private func deregisterLocators(for session: ChatSession) {
-        sessionByLocator = sessionByLocator.filter { $0.value != session.uuid }
+        sessionByLocator = sessionByLocator.filter { $0.value != session.id }
     }
 
     private func reregisterLocators(for session: ChatSession) {
         deregisterLocators(for: session)
-        // Each session is identified by exactly one locator kind — runtime-id if its string id
-        // carries the "sess:" prefix from the C runtime, composed (network, channel) otherwise.
-        if session.id.hasPrefix("sess:"), let num = UInt64(session.id.dropFirst("sess:".count)) {
-            sessionByLocator[.runtime(id: num)] = session.uuid
+        guard let key = session.composedKey else { return }
+        if key.hasPrefix("sess:"), let num = UInt64(key.dropFirst("sess:".count)) {
+            sessionByLocator[.runtime(id: num)] = session.id
         } else {
-            sessionByLocator[.composed(network: session.network, channel: session.channel)] = session.uuid
+            sessionByLocator[.composed(network: session.network, channel: session.channel)] = session.id
         }
     }
 
     private func handleUserlistEvent(_ event: RuntimeEvent) {
         let network = event.network ?? "network"
         let channel = event.channel ?? "server"
-        let composedID = event.sessionID > 0
-            ? Self.runtimeSessionID(event.sessionID)
-            : Self.sessionID(network: network, channel: channel)
-        upsertSession(id: composedID, network: network, channel: channel)
-        guard let uuid = sessionUUID(forSessionID: composedID) else { return }
+        let locator: SessionLocator = event.sessionID > 0
+            ? .runtime(id: event.sessionID)
+            : .composed(network: network, channel: channel)
+        let uuid = upsertSession(locator: locator, network: network, channel: channel)
         let nick = event.nick ?? ""
 
         switch event.userlistAction {

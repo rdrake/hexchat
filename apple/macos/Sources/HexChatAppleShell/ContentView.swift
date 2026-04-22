@@ -56,7 +56,7 @@ struct ContentView: View {
                                     .font(.system(.body, design: .monospaced))
                                     .lineLimit(1)
                             }
-                            .tag(Optional(session.uuid))
+                            .tag(Optional(session.id))
                         }
                     }
                 }

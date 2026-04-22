@@ -95,8 +95,10 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "server", sessionID: 1)
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#cybercafe", sessionID: 2)
 
-        XCTAssertTrue(controller.sessions.contains(where: { $0.id == EngineController.runtimeSessionID(1) && $0.channel == "server" }))
-        XCTAssertTrue(controller.sessions.contains(where: { $0.id == EngineController.runtimeSessionID(2) && $0.channel == "#cybercafe" }))
+        let serverUUID = controller.sessionUUID(for: .runtime(id: 1))
+        let channelUUID = controller.sessionUUID(for: .runtime(id: 2))
+        XCTAssertTrue(controller.sessions.contains(where: { $0.id == serverUUID && $0.channel == "server" }))
+        XCTAssertTrue(controller.sessions.contains(where: { $0.id == channelUUID && $0.channel == "#cybercafe" }))
         XCTAssertEqual(controller.networkSections.first(where: { $0.name == "AfterNET" })?.sessions.count, 2)
     }
 
@@ -182,11 +184,11 @@ final class EngineControllerTests: XCTestCase {
     }
 
     func testChatSessionCarriesStableUUIDAcrossMutations() {
-        var session = ChatSession(id: "libera::#a", network: "Libera", channel: "#a", isActive: false)
-        let firstUUID = session.uuid
+        var session = ChatSession(network: "Libera", channel: "#a", isActive: false)
+        let firstID = session.id
         session.network = "RenamedNetwork"
         session.channel = "#renamed"
-        XCTAssertEqual(session.uuid, firstUUID, "UUID must not change when other fields mutate")
+        XCTAssertEqual(session.id, firstID, "ID must not change when other fields mutate")
     }
 
     func testSessionByLocatorIndexPopulatesAndRemoves() {
@@ -213,10 +215,8 @@ final class EngineControllerTests: XCTestCase {
         let oldLocator = SessionLocator.composed(network: "Libera", channel: "#old")
         let uuid = controller.sessionUUID(for: oldLocator)!
 
-        // Mutate the session in place. Emitting UPSERT with the same id but new channel simulates a rename.
-        controller.applyRenameForTest(
-            id: EngineController.sessionID(network: "Libera", channel: "#old"),
-            toNetwork: "Libera", channel: "#new")
+        // Mutate the session in place. Emitting UPSERT with the same locator but new channel simulates a rename.
+        controller.applyRenameForTest(network: "Libera", fromChannel: "#old", toChannel: "#new")
         XCTAssertNil(controller.sessionUUID(for: oldLocator), "old composed locator must purge")
         XCTAssertEqual(controller.sessionUUID(for: .composed(network: "Libera", channel: "#new")), uuid)
     }
@@ -262,7 +262,7 @@ final class EngineControllerTests: XCTestCase {
         controller.appendUnattributedForTest(raw: "! system error", kind: .error)
         XCTAssertFalse(controller.messages.isEmpty)
         XCTAssertFalse(controller.sessions.isEmpty)
-        XCTAssertEqual(controller.messages.last?.sessionID, controller.sessions.first?.uuid)
+        XCTAssertEqual(controller.messages.last?.sessionID, controller.sessions.first?.id)
     }
 
     func testSessionRemoveReselectsActiveAndClearsSelectedWhenMatching() {
@@ -270,8 +270,6 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#a")
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#b")
 
-        let a = EngineController.sessionID(network: "AfterNET", channel: "#a")
-        let b = EngineController.sessionID(network: "AfterNET", channel: "#b")
         let aUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#a"))!
         let bUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#b"))!
         controller.selectedSessionID = aUUID
@@ -283,13 +281,13 @@ final class EngineControllerTests: XCTestCase {
 
         controller.applySessionForTest(action: HC_APPLE_SESSION_REMOVE, network: "AfterNET", channel: "#a")
 
-        XCTAssertFalse(controller.sessions.contains(where: { $0.id == a }), "#a must be gone")
+        XCTAssertFalse(controller.sessions.contains(where: { $0.id == aUUID }), "#a must be gone")
         XCTAssertNil(controller.selectedSessionID, "selected must clear when its session is removed")
         XCTAssertEqual(controller.activeSessionID, bUUID, "active must reassign to a remaining session")
         XCTAssertNil(controller.usersBySession[aUUID], "usersBySession entry must be cleaned up")
         // Exactly one session should have isActive == true, and it should be #b.
         let actives = controller.sessions.filter { $0.isActive }
-        XCTAssertEqual(actives.map(\.id), [b])
+        XCTAssertEqual(actives.map(\.id), [bUUID])
     }
 
     func testSelectedSessionIDIsUUIDAndRoutesRuntimeCommands() {
@@ -306,6 +304,12 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
         let uuid = controller.sessionUUID(for: .composed(network: "Libera", channel: "#a"))
         XCTAssertEqual(controller.activeSessionID, uuid)
+    }
+
+    func testChatSessionIDIsUUID() {
+        let session = ChatSession(network: "Libera", channel: "#a", isActive: false)
+        let _: UUID = session.id  // compile-time type assertion
+        XCTAssertNotNil(session.id)
     }
 }
 #else
