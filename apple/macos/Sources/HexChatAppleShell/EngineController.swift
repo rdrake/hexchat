@@ -113,8 +113,8 @@ final class EngineController {
     var usersBySession: [UUID: [String]] = [:]
     var input = ""
 
-    var selectedSessionID: String?
-    var activeSessionID: String?
+    var selectedSessionID: UUID?
+    var activeSessionID: UUID?
 
     private(set) var sessionByLocator: [SessionLocator: UUID] = [:]
 
@@ -160,18 +160,18 @@ final class EngineController {
         "sess:\(sessionID)"
     }
 
+    var visibleSessionUUID: UUID? {
+        if let selectedSessionID { return selectedSessionID }
+        if let activeSessionID { return activeSessionID }
+        return sessions.first?.uuid
+    }
+
     var visibleSessionID: String {
-        if let selectedSessionID {
-            return selectedSessionID
+        guard let uuid = visibleSessionUUID,
+              let session = sessions.first(where: { $0.uuid == uuid }) else {
+            return Self.sessionID(network: "network", channel: "server")
         }
-        if let activeSessionID {
-            return activeSessionID
-        }
-        let fallback = Self.sessionID(network: "network", channel: "server")
-        if sessions.contains(where: { $0.id == fallback }) {
-            return fallback
-        }
-        return sessions.first?.id ?? fallback
+        return session.id
     }
 
     var visibleMessages: [ChatMessage] {
@@ -231,7 +231,10 @@ final class EngineController {
             historyDraft = ""
         }
 
-        let targetSessionID = selectedRuntimeSessionNumericID()
+        let targetSessionID: UInt64 = {
+            guard let uuid = selectedSessionID else { return 0 }
+            return numericRuntimeSessionID(forSelection: uuid)
+        }()
         appendMessage(raw: "> \(trimmed)", kind: .command)
         trimmed.withCString { cString in
             let code: Int32
@@ -376,8 +379,8 @@ final class EngineController {
     // (it prefers active — the session the engine last activated).
     private func resolveMessageSessionID(event: RuntimeEvent?) -> UUID {
         if let event, let resolved = resolveEventSessionID(event) { return resolved }
-        if let act = activeSessionID, let uuid = sessionUUID(forSessionID: act) { return uuid }
-        if let sel = selectedSessionID, let uuid = sessionUUID(forSessionID: sel) { return uuid }
+        if let act = activeSessionID { return act }
+        if let sel = selectedSessionID { return sel }
         if let first = sessions.first?.uuid { return first }
         return systemSessionUUID()
     }
@@ -405,19 +408,17 @@ final class EngineController {
             if let removed = sessions.first(where: { $0.id == id }) {
                 usersBySession[removed.uuid] = nil
                 deregisterLocators(for: removed)
+                if selectedSessionID == removed.uuid { selectedSessionID = nil }
+                if activeSessionID == removed.uuid {
+                    activeSessionID = sessions.first(where: { $0.uuid != removed.uuid })?.uuid
+                }
             }
             sessions.removeAll { $0.id == id }
-            if selectedSessionID == id {
-                selectedSessionID = nil
-            }
-            if activeSessionID == id {
-                activeSessionID = sessions.first?.id
-            }
         case HC_APPLE_SESSION_ACTIVATE:
             upsertSession(id: id, network: network, channel: channel)
-            activeSessionID = id
-            if selectedSessionID == nil {
-                selectedSessionID = id
+            if let new = sessions.first(where: { $0.id == id }) {
+                activeSessionID = new.uuid
+                if selectedSessionID == nil { selectedSessionID = new.uuid }
             }
         default:
             break
@@ -425,7 +426,7 @@ final class EngineController {
 
         sessions = sessions.map { session in
             var mutable = session
-            mutable.isActive = (session.id == activeSessionID)
+            mutable.isActive = (session.uuid == activeSessionID)
             return mutable
         }.sorted(by: sessionSort)
     }
@@ -444,7 +445,7 @@ final class EngineController {
         reregisterLocators(for: new)
         sessions = sessions.sorted(by: sessionSort)
         if selectedSessionID == nil {
-            selectedSessionID = id
+            selectedSessionID = new.uuid
         }
     }
 
@@ -545,12 +546,11 @@ final class EngineController {
         return nick
     }
 
-    private func selectedRuntimeSessionNumericID() -> UInt64 {
-        guard let selectedSessionID, selectedSessionID.hasPrefix("sess:") else {
-            return 0
+    func numericRuntimeSessionID(forSelection uuid: UUID) -> UInt64 {
+        for (locator, sessionUUID) in sessionByLocator where sessionUUID == uuid {
+            if case .runtime(let n) = locator { return n }
         }
-        let raw = selectedSessionID.dropFirst("sess:".count)
-        return UInt64(raw) ?? 0
+        return 0
     }
 }
 

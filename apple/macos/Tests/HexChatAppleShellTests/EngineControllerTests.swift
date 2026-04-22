@@ -29,10 +29,10 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a", nick: "alice")
         controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#b", nick: "bob")
 
-        controller.selectedSessionID = EngineController.sessionID(network: "Libera", channel: "#a")
+        controller.selectedSessionID = controller.sessionUUID(for: .composed(network: "Libera", channel: "#a"))
         XCTAssertEqual(controller.visibleUsers, ["alice"])
 
-        controller.selectedSessionID = EngineController.sessionID(network: "Libera", channel: "#b")
+        controller.selectedSessionID = controller.sessionUUID(for: .composed(network: "Libera", channel: "#b"))
         XCTAssertEqual(controller.visibleUsers, ["bob"])
     }
 
@@ -67,7 +67,7 @@ final class EngineControllerTests: XCTestCase {
         let controller = EngineController()
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
-        controller.selectedSessionID = EngineController.sessionID(network: "Libera", channel: "#a")
+        controller.selectedSessionID = controller.sessionUUID(for: .composed(network: "Libera", channel: "#a"))
 
         controller.applyLogLineForTest(network: "Libera", channel: "#b", text: "message for b")
 
@@ -108,10 +108,10 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#cybercafe", nick: "alice", sessionID: 2)
         controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#cybercafe", nick: "@bob", sessionID: 2)
 
-        controller.selectedSessionID = EngineController.runtimeSessionID(1)
+        controller.selectedSessionID = controller.sessionUUID(for: .runtime(id: 1))
         XCTAssertTrue(controller.visibleUsers.isEmpty)
 
-        controller.selectedSessionID = EngineController.runtimeSessionID(2)
+        controller.selectedSessionID = controller.sessionUUID(for: .runtime(id: 2))
         XCTAssertEqual(controller.visibleUsers, ["@bob", "alice"])
     }
 
@@ -170,7 +170,9 @@ final class EngineControllerTests: XCTestCase {
         // Post-activate: active = #b. selected was set to #a by the first upsert.
         let a = EngineController.sessionID(network: "AfterNET", channel: "#a")
         let b = EngineController.sessionID(network: "AfterNET", channel: "#b")
-        controller.selectedSessionID = a
+        let aUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#a"))!
+        let bUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#b"))!
+        controller.selectedSessionID = aUUID
         XCTAssertEqual(controller.visibleSessionID, a, "selected takes precedence over active")
         controller.selectedSessionID = nil
         XCTAssertEqual(controller.visibleSessionID, b, "active chosen when selected is nil")
@@ -178,6 +180,7 @@ final class EngineControllerTests: XCTestCase {
         // both selected and active are now nil — should fall back to sessions.first
         // sessions are sorted so #a comes first alphabetically.
         XCTAssertEqual(controller.visibleSessionID, a, "first session used when both selected and active are nil")
+        _ = bUUID  // suppress unused warning
     }
 
     func testChatSessionCarriesStableUUIDAcrossMutations() {
@@ -271,23 +274,40 @@ final class EngineControllerTests: XCTestCase {
 
         let a = EngineController.sessionID(network: "AfterNET", channel: "#a")
         let b = EngineController.sessionID(network: "AfterNET", channel: "#b")
-        controller.selectedSessionID = a
-        XCTAssertEqual(controller.activeSessionID, a)
+        let aUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#a"))!
+        let bUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#b"))!
+        controller.selectedSessionID = aUUID
+        XCTAssertEqual(controller.activeSessionID, aUUID)
 
         // Put users in #a so we can assert the cleanup.
         controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#a", nick: "alice")
-        let aUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#a"))!
         XCTAssertFalse(controller.usersBySession[aUUID, default: []].isEmpty)
 
         controller.applySessionForTest(action: HC_APPLE_SESSION_REMOVE, network: "AfterNET", channel: "#a")
 
         XCTAssertFalse(controller.sessions.contains(where: { $0.id == a }), "#a must be gone")
         XCTAssertNil(controller.selectedSessionID, "selected must clear when its session is removed")
-        XCTAssertEqual(controller.activeSessionID, b, "active must reassign to a remaining session")
+        XCTAssertEqual(controller.activeSessionID, bUUID, "active must reassign to a remaining session")
         XCTAssertNil(controller.usersBySession[aUUID], "usersBySession entry must be cleaned up")
         // Exactly one session should have isActive == true, and it should be #b.
         let actives = controller.sessions.filter { $0.isActive }
         XCTAssertEqual(actives.map(\.id), [b])
+    }
+
+    func testSelectedSessionIDIsUUIDAndRoutesRuntimeCommands() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#same", sessionID: 7)
+        let uuid = controller.sessionUUID(for: .runtime(id: 7))!
+        controller.selectedSessionID = uuid
+        XCTAssertEqual(controller.numericRuntimeSessionID(forSelection: uuid), 7)
+    }
+
+    func testActiveSessionIDIsUUID() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let uuid = controller.sessionUUID(for: .composed(network: "Libera", channel: "#a"))
+        XCTAssertEqual(controller.activeSessionID, uuid)
     }
 }
 #else
