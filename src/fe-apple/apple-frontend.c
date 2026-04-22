@@ -164,21 +164,6 @@ hc_apple_emit_log_line_for_session (const session *sess, const char *text)
 	                                            hc_apple_session_runtime_id (sess));
 }
 
-static const char *
-hc_apple_prefixed_nick (const struct User *user, char *buffer, gsize buffer_size)
-{
-	if (!user || !buffer || buffer_size == 0)
-		return NULL;
-
-	if (user->prefix[0])
-	{
-		g_snprintf (buffer, buffer_size, "%c%s", user->prefix[0], user->nick);
-		return buffer;
-	}
-
-	return user->nick;
-}
-
 static gboolean
 handle_line (GIOChannel *channel, GIOCondition cond, gpointer data)
 {
@@ -930,57 +915,51 @@ fe_progressbar_end (struct server *serv)
 void
 fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel)
 {
-	char nickbuf[NICKLEN + 2];
-	const char *nick = NULL;
-
 	(void)sel;
-	nick = hc_apple_prefixed_nick (newuser, nickbuf, sizeof (nickbuf));
+	if (!newuser)
+		return;
 	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_INSERT,
 	                                hc_apple_session_network (sess),
 	                                hc_apple_session_channel (sess),
-	                                nick,
-	                                0,        /* mode_prefix — populated in Task 3 */
-	                                NULL,     /* account */
-	                                NULL,     /* host */
-	                                0,        /* is_me */
-	                                0,        /* is_away */
+	                                newuser->nick,
+	                                (uint8_t)newuser->prefix[0],
+	                                newuser->account,
+	                                newuser->hostname,
+	                                newuser->me ? 1 : 0,
+	                                newuser->away ? 1 : 0,
 	                                hc_apple_session_runtime_id (sess));
 }
 int
 fe_userlist_remove (struct session *sess, struct User *user)
 {
-	char nickbuf[NICKLEN + 2];
-	const char *nick = NULL;
-
-	nick = hc_apple_prefixed_nick (user, nickbuf, sizeof (nickbuf));
+	if (!user)
+		return 0;
 	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_REMOVE,
 	                                hc_apple_session_network (sess),
 	                                hc_apple_session_channel (sess),
-	                                nick,
-	                                0,
-	                                NULL,
-	                                NULL,
-	                                0,
-	                                0,
+	                                user->nick,
+	                                (uint8_t)user->prefix[0],
+	                                user->account,
+	                                user->hostname,
+	                                user->me ? 1 : 0,
+	                                user->away ? 1 : 0,
 	                                hc_apple_session_runtime_id (sess));
 	return 0;
 }
 void
 fe_userlist_rehash (struct session *sess, struct User *user)
 {
-	char nickbuf[NICKLEN + 2];
-	const char *nick = NULL;
-
-	nick = hc_apple_prefixed_nick (user, nickbuf, sizeof (nickbuf));
+	if (!user)
+		return;
 	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_UPDATE,
 	                                hc_apple_session_network (sess),
 	                                hc_apple_session_channel (sess),
-	                                nick,
-	                                0,
-	                                NULL,
-	                                NULL,
-	                                0,
-	                                0,
+	                                user->nick,
+	                                (uint8_t)user->prefix[0],
+	                                user->account,
+	                                user->hostname,
+	                                user->me ? 1 : 0,
+	                                user->away ? 1 : 0,
 	                                hc_apple_session_runtime_id (sess));
 }
 void
@@ -1228,19 +1207,17 @@ void fe_tray_set_tooltip (const char *text){}
 void
 fe_userlist_update (session *sess, struct User *user)
 {
-	char nickbuf[NICKLEN + 2];
-	const char *nick = NULL;
-
-	nick = hc_apple_prefixed_nick (user, nickbuf, sizeof (nickbuf));
+	if (!user)
+		return;
 	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_UPDATE,
 	                                hc_apple_session_network (sess),
 	                                hc_apple_session_channel (sess),
-	                                nick,
-	                                0,
-	                                NULL,
-	                                NULL,
-	                                0,
-	                                0,
+	                                user->nick,
+	                                (uint8_t)user->prefix[0],
+	                                user->account,
+	                                user->hostname,
+	                                user->me ? 1 : 0,
+	                                user->away ? 1 : 0,
 	                                hc_apple_session_runtime_id (sess));
 }
 void

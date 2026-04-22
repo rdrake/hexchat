@@ -13,6 +13,7 @@ typedef struct
 	gboolean saw_command_accepted;
 	gboolean saw_userlist_event;
 	gboolean saw_userlist_insert;
+	gboolean saw_userlist_metadata;
 	gboolean saw_session_event;
 	gboolean saw_session_activate;
 	gboolean saw_scoped_log_event;
@@ -62,6 +63,16 @@ runtime_event_cb (const hc_apple_event *event, void *userdata)
 		    event->is_away == 0)
 		{
 			state->saw_userlist_insert = TRUE;
+		}
+		if (event->code == HC_APPLE_USERLIST_UPDATE &&
+		    event->nick && strcmp (event->nick, "meta-user") == 0 &&
+		    event->mode_prefix == '@' &&
+		    event->account && strcmp (event->account, "meta-acct") == 0 &&
+		    event->host && strcmp (event->host, "meta.example") == 0 &&
+		    event->is_me == 1 &&
+		    event->is_away == 1)
+		{
+			state->saw_userlist_metadata = TRUE;
 		}
 	}
 
@@ -144,6 +155,9 @@ test_runtime_events_lifecycle_and_command_path (void)
 	hc_apple_runtime_emit_log_line_for_session ("scoped-log", "runtime-net", "#runtime", 42);
 	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_INSERT, "runtime-net", "#runtime",
 	                                "runtime-user", 0, NULL, NULL, 0, 0, 42);
+	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_UPDATE, "runtime-net", "#runtime",
+	                                "meta-user", '@', "meta-acct", "meta.example",
+	                                1, 1, 42);
 	hc_apple_runtime_emit_session (HC_APPLE_SESSION_ACTIVATE, "runtime-net", "#runtime", 42);
 	hc_apple_runtime_stop ();
 
@@ -161,6 +175,7 @@ test_runtime_events_lifecycle_and_command_path (void)
 	g_assert_true (state.saw_command_accepted);
 	g_assert_true (state.saw_userlist_event);
 	g_assert_true (state.saw_userlist_insert);
+	g_assert_true (state.saw_userlist_metadata);
 	g_assert_true (state.saw_session_event);
 	g_assert_true (state.saw_session_activate);
 	g_assert_true (state.saw_scoped_log_event);
