@@ -141,18 +141,18 @@ struct ContentView: View {
             Text("Users (\(controller.visibleUsers.count))")
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
 
-            List(controller.visibleUsers, id: \.self) { nick in
+            List(controller.visibleUsers) { user in
                 HStack(spacing: 8) {
-                    Text(NickPrefix.badge(nick).map(String.init) ?? "")
+                    Text(user.modePrefix.map(String.init) ?? "")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .frame(width: 16, alignment: .center)
-                    Text(NickPrefix.strip(nick))
+                    Text(user.nick)
                         .font(.system(.body, design: .monospaced))
                 }
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
-                    controller.prefillPrivateMessage(to: nick)
+                    controller.prefillPrivateMessage(to: user.nick)
                 }
             }
             .scrollContentBackground(.hidden)

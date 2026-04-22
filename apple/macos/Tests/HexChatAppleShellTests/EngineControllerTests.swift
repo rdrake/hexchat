@@ -8,16 +8,24 @@ final class EngineControllerTests: XCTestCase {
         let controller = EngineController()
         controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#hexchat")
 
-        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#hexchat", nick: "bob")
-        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#hexchat", nick: "@alice")
-        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#hexchat", nick: "+bob")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#hexchat", nick: "bob")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#hexchat",
+            nick: "alice", modePrefix: "@")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#hexchat",
+            nick: "bob", modePrefix: "+")
 
-        XCTAssertEqual(controller.visibleUsers, ["@alice", "+bob"])
+        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["alice", "bob"])
+        XCTAssertEqual(controller.visibleUsers.map(\.modePrefix), ["@", "+"])
 
-        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_REMOVE, network: "Libera", channel: "#hexchat", nick: "bob")
-        XCTAssertEqual(controller.visibleUsers, ["@alice"])
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_REMOVE, network: "Libera", channel: "#hexchat", nick: "bob")
+        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["alice"])
 
-        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_CLEAR, network: "Libera", channel: "#hexchat", nick: nil)
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_CLEAR, network: "Libera", channel: "#hexchat", nick: nil)
         XCTAssertTrue(controller.visibleUsers.isEmpty)
     }
 
@@ -30,10 +38,10 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#b", nick: "bob")
 
         controller.selectedSessionID = controller.sessionUUID(for: .composed(network: "Libera", channel: "#a"))
-        XCTAssertEqual(controller.visibleUsers, ["alice"])
+        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["alice"])
 
         controller.selectedSessionID = controller.sessionUUID(for: .composed(network: "Libera", channel: "#b"))
-        XCTAssertEqual(controller.visibleUsers, ["bob"])
+        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["bob"])
     }
 
     func testHistoryBrowseUpDownRestoresDraft() {
@@ -107,14 +115,19 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "server", sessionID: 1)
         controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#cybercafe", sessionID: 2)
 
-        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#cybercafe", nick: "alice", sessionID: 2)
-        controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#cybercafe", nick: "@bob", sessionID: 2)
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#cybercafe",
+            nick: "alice", sessionID: 2)
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#cybercafe",
+            nick: "bob", modePrefix: "@", sessionID: 2)
 
         controller.selectedSessionID = controller.sessionUUID(for: .runtime(id: 1))
         XCTAssertTrue(controller.visibleUsers.isEmpty)
 
         controller.selectedSessionID = controller.sessionUUID(for: .runtime(id: 2))
-        XCTAssertEqual(controller.visibleUsers, ["@bob", "alice"])
+        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["bob", "alice"])
+        XCTAssertEqual(controller.visibleUsers.map(\.modePrefix), ["@", nil])
     }
 
     func testServerAndChannelMessagesRemainRoutedToOwnSessions() {
@@ -244,7 +257,7 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
         controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a", nick: "alice")
         let uuid = controller.sessionUUID(for: .composed(network: "Libera", channel: "#a"))!
-        XCTAssertEqual(controller.usersBySession[uuid], ["alice"])
+        XCTAssertEqual(controller.usersBySession[uuid]?.map(\.nick), ["alice"])
     }
 
     func testChatMessageSessionIDIsUUID() {
@@ -341,6 +354,23 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertFalse(user.isAway)
     }
 
+    func testVisibleUsersReturnStructuredChatUsers() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
+            nick: "alice", modePrefix: "@", account: "alice_acct", isMe: false, isAway: false)
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
+            nick: "bob", modePrefix: "+", isMe: true, isAway: false)
+
+        let users = controller.visibleUsers
+        XCTAssertEqual(users.map(\.nick), ["alice", "bob"], "ops then voiced; identical-rank sorted by name")
+        XCTAssertEqual(users.first?.modePrefix, "@")
+        XCTAssertEqual(users.first?.account, "alice_acct")
+        XCTAssertTrue(users[1].isMe)
+    }
+
     func testApplyUserlistForTestPropagatesMetadataToRuntimeEvent() {
         // Until Task 5, the engine doesn't read these fields, but the helper signature
         // must accept them so Task 5 has somewhere to land.
@@ -368,7 +398,9 @@ import AppleAdapterBridge
 func _hexchatAppleShellTestsCompileProbe() {
     let controller = EngineController()
     controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#probe")
-    controller.applyUserlistForTest(action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#probe", nick: "@alice")
+    controller.applyUserlistForTest(
+        action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#probe",
+        nick: "alice", modePrefix: "@")
     _ = controller.visibleUsers
 }
 #endif

@@ -161,7 +161,7 @@ final class EngineController {
     var isRunning = false
     var messages: [ChatMessage] = []
     var sessions: [ChatSession] = []
-    var usersBySession: [UUID: [String]] = [:]
+    var usersBySession: [UUID: [ChatUser]] = [:]
     var input = ""
 
     var selectedSessionID: UUID?
@@ -179,7 +179,11 @@ final class EngineController {
     }
 
     private func systemSessionUUID() -> UUID {
-        if let existing = systemSessionUUIDStorage { return existing }
+        if let existing = sessionByLocator[SystemSession.locator] {
+            systemSessionUUIDStorage = existing
+            return existing
+        }
+        if let cached = systemSessionUUIDStorage { return cached }
         let placeholder = ChatSession(
             network: SystemSession.network,
             channel: SystemSession.channel,
@@ -223,7 +227,7 @@ final class EngineController {
         return messages.filter { $0.sessionID == uuid }
     }
 
-    var visibleUsers: [String] {
+    var visibleUsers: [ChatUser] {
         guard let uuid = visibleSessionUUID else { return [] }
         return usersBySession[uuid] ?? []
     }
@@ -294,8 +298,7 @@ final class EngineController {
     }
 
     func prefillPrivateMessage(to nick: String) {
-        let target = NickPrefix.strip(nick)
-        input = "/msg \(target) "
+        input = "/msg \(nick) "
     }
 
     func browseHistory(delta: Int) {
@@ -551,12 +554,11 @@ final class EngineController {
         switch event.userlistAction {
         case HC_APPLE_USERLIST_INSERT, HC_APPLE_USERLIST_UPDATE:
             guard !nick.isEmpty else { return }
-            upsertNick(nick, inSession: uuid)
+            upsertChatUser(from: event, nick: nick, inSession: uuid)
         case HC_APPLE_USERLIST_REMOVE:
             guard !nick.isEmpty else { return }
-            usersBySession[uuid, default: []].removeAll {
-                NickPrefix.strip($0).caseInsensitiveCompare(NickPrefix.strip(nick)) == .orderedSame
-            }
+            let key = nick.lowercased()
+            usersBySession[uuid, default: []].removeAll { $0.id == key }
         case HC_APPLE_USERLIST_CLEAR:
             usersBySession[uuid] = []
         default:
@@ -566,15 +568,22 @@ final class EngineController {
         usersBySession[uuid, default: []].sort(by: userSort)
     }
 
-    private func upsertNick(_ nick: String, inSession uuid: UUID) {
-        let normalized = NickPrefix.strip(nick)
-        var nicks = usersBySession[uuid, default: []]
-        if let idx = nicks.firstIndex(where: { NickPrefix.strip($0).caseInsensitiveCompare(normalized) == .orderedSame }) {
-            nicks[idx] = nick
+    private func upsertChatUser(from event: RuntimeEvent, nick: String, inSession uuid: UUID) {
+        let candidate = ChatUser(
+            nick: nick,
+            modePrefix: event.modePrefix,
+            account: event.account,
+            host: event.host,
+            isMe: event.isMe,
+            isAway: event.isAway
+        )
+        var roster = usersBySession[uuid, default: []]
+        if let idx = roster.firstIndex(where: { $0.id == candidate.id }) {
+            roster[idx] = candidate
         } else {
-            nicks.append(nick)
+            roster.append(candidate)
         }
-        usersBySession[uuid] = nicks
+        usersBySession[uuid] = roster
     }
 
     private func sessionSort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {
@@ -587,13 +596,13 @@ final class EngineController {
         return lhs.channel.localizedStandardCompare(rhs.channel) == .orderedAscending
     }
 
-    private func userSort(_ lhs: String, _ rhs: String) -> Bool {
-        let lhsRank = NickPrefix.rank(lhs)
-        let rhsRank = NickPrefix.rank(rhs)
+    private func userSort(_ lhs: ChatUser, _ rhs: ChatUser) -> Bool {
+        let lhsRank = NickPrefix.rank(lhs.modePrefix)
+        let rhsRank = NickPrefix.rank(rhs.modePrefix)
         if lhsRank != rhsRank {
             return lhsRank < rhsRank
         }
-        return NickPrefix.strip(lhs).localizedStandardCompare(NickPrefix.strip(rhs)) == .orderedAscending
+        return lhs.nick.localizedStandardCompare(rhs.nick) == .orderedAscending
     }
 
     internal func numericRuntimeSessionID(forSelection uuid: UUID) -> UInt64 {
@@ -617,8 +626,8 @@ enum NickPrefix {
         return first
     }
 
-    static func rank(_ nick: String) -> Int {
-        switch nick.first {
+    static func rank(_ prefix: Character?) -> Int {
+        switch prefix {
         case "~": return 0
         case "&": return 1
         case "@": return 2
