@@ -312,6 +312,14 @@ final class EngineControllerTests: XCTestCase {
         let another = ChatSession(network: "Libera", channel: "#b", isActive: false)
         XCTAssertNotEqual(session.id, another.id, "default UUIDs must be distinct")
     }
+
+    func testUnattributedMessageRegistersSystemSessionLocator() {
+        let controller = EngineController()
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+        XCTAssertNotNil(
+            controller.sessionUUID(for: .composed(network: "network", channel: "server")),
+            "system session must be registered in sessionByLocator so real events fold into it")
+    }
 }
 #else
 @testable import HexChatAppleShell

@@ -138,6 +138,7 @@ final class EngineController {
         sessions.append(placeholder)
         sessions = sessions.sorted(by: sessionSort)
         systemSessionUUIDStorage = placeholder.id
+        sessionByLocator[.composed(network: "network", channel: "server")] = placeholder.id
         return placeholder.id
     }
 
