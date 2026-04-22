@@ -7,7 +7,7 @@ struct ChatSession: Identifiable, Hashable {
     var network: String
     var channel: String
     var isActive: Bool
-    var composedKey: String?
+    var composedKey: String
 
     init(
         id: UUID = UUID(),
@@ -20,7 +20,7 @@ struct ChatSession: Identifiable, Hashable {
         self.network = network
         self.channel = channel
         self.isActive = isActive
-        self.composedKey = composedKey
+        self.composedKey = composedKey ?? "\(network.lowercased())::\(channel.lowercased())"
     }
 
     var isChannel: Bool {
@@ -160,10 +160,12 @@ final class EngineController {
 
     private var callbackUserdata: UnsafeMutableRawPointer?
 
+    // TODO: remove in Phase 1 Task 10 — use `SessionLocator` + `sessionUUID(for:)` instead.
     static func sessionID(network: String, channel: String) -> String {
         "\(network.lowercased())::\(channel.lowercased())"
     }
 
+    // TODO: remove in Phase 1 Task 10 — use `SessionLocator.runtime(id:)` instead.
     static func runtimeSessionID(_ sessionID: UInt64) -> String {
         "sess:\(sessionID)"
     }
@@ -180,7 +182,7 @@ final class EngineController {
         else {
             return Self.composedKey(for: .composed(network: "network", channel: "server"))
         }
-        return session.composedKey ?? Self.composedKey(for: .composed(network: session.network, channel: session.channel))
+        return session.composedKey
     }
 
     var visibleMessages: [ChatMessage] {
@@ -449,12 +451,20 @@ final class EngineController {
 
     @discardableResult
     private func upsertSession(locator: SessionLocator, network: String, channel: String) -> UUID {
+        let targetLocator: SessionLocator
+        switch locator {
+        case .runtime:
+            targetLocator = locator
+        case .composed:
+            targetLocator = .composed(network: network, channel: channel)
+        }
+
         if let existing = sessionByLocator[locator],
            let idx = sessions.firstIndex(where: { $0.id == existing }) {
             sessions[idx].network = network
             sessions[idx].channel = channel
-            sessions[idx].composedKey = Self.composedKey(for: locator)
-            reregisterLocators(for: sessions[idx])
+            sessions[idx].composedKey = Self.composedKey(for: targetLocator)
+            registerLocator(targetLocator, for: sessions[idx])
             sessions = sessions.sorted(by: sessionSort)
             return existing
         }
@@ -462,10 +472,10 @@ final class EngineController {
             network: network,
             channel: channel,
             isActive: false,
-            composedKey: Self.composedKey(for: locator)
+            composedKey: Self.composedKey(for: targetLocator)
         )
         sessions.append(new)
-        sessionByLocator[locator] = new.id
+        sessionByLocator[targetLocator] = new.id
         sessions = sessions.sorted(by: sessionSort)
         if selectedSessionID == nil { selectedSessionID = new.id }
         return new.id
@@ -475,14 +485,9 @@ final class EngineController {
         sessionByLocator = sessionByLocator.filter { $0.value != session.id }
     }
 
-    private func reregisterLocators(for session: ChatSession) {
+    private func registerLocator(_ locator: SessionLocator, for session: ChatSession) {
         deregisterLocators(for: session)
-        guard let key = session.composedKey else { return }
-        if key.hasPrefix("sess:"), let num = UInt64(key.dropFirst("sess:".count)) {
-            sessionByLocator[.runtime(id: num)] = session.id
-        } else {
-            sessionByLocator[.composed(network: session.network, channel: session.channel)] = session.id
-        }
+        sessionByLocator[locator] = session.id
     }
 
     private func handleUserlistEvent(_ event: RuntimeEvent) {

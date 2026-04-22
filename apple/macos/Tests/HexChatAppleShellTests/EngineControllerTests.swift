@@ -309,7 +309,8 @@ final class EngineControllerTests: XCTestCase {
     func testChatSessionIDIsUUID() {
         let session = ChatSession(network: "Libera", channel: "#a", isActive: false)
         let _: UUID = session.id  // compile-time type assertion
-        XCTAssertNotNil(session.id)
+        let another = ChatSession(network: "Libera", channel: "#b", isActive: false)
+        XCTAssertNotEqual(session.id, another.id, "default UUIDs must be distinct")
     }
 }
 #else
