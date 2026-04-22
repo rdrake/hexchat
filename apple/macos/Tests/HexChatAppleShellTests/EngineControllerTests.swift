@@ -390,6 +390,19 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertFalse(controller.usersBySession.isEmpty)
     }
 
+    func testApplyForTestPropagatesConnectionIdentity() {
+        // Until Task 8, the engine doesn't *use* connectionID/selfNick, but the
+        // helpers must accept them so Task 8 has somewhere to land.
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE,
+            network: "Libera", channel: "#a",
+            sessionID: 0,
+            connectionID: 99, selfNick: "alice"
+        )
+        XCTAssertFalse(controller.sessions.isEmpty)
+    }
+
     func testUserlistUpdateOverwritesAwayFlag() {
         let controller = EngineController()
         controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")

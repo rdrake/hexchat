@@ -350,7 +350,9 @@ final class EngineController {
         host: String? = nil,
         isMe: Bool = false,
         isAway: Bool = false,
-        sessionID: UInt64 = 0
+        sessionID: UInt64 = 0,
+        connectionID: UInt64 = 0,
+        selfNick: String? = nil
     ) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_USERLIST,
@@ -365,7 +367,9 @@ final class EngineController {
             account: account,
             host: host,
             isMe: isMe,
-            isAway: isAway
+            isAway: isAway,
+            connectionID: connectionID,
+            selfNick: selfNick
         )
         handleUserlistEvent(event)
     }
@@ -374,7 +378,9 @@ final class EngineController {
         action: hc_apple_userlist_action,
         network: String?,
         channel: String?,
-        nick: String?
+        nick: String?,
+        connectionID: UInt64 = 0,
+        selfNick: String? = nil
     ) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_USERLIST,
@@ -389,7 +395,9 @@ final class EngineController {
             account: nil,
             host: nil,
             isMe: false,
-            isAway: false
+            isAway: false,
+            connectionID: connectionID,
+            selfNick: selfNick
         )
         handleUserlistEvent(event)
     }
@@ -398,7 +406,14 @@ final class EngineController {
         systemSessionUUID()
     }
 
-    func applySessionForTest(action: hc_apple_session_action, network: String, channel: String, sessionID: UInt64 = 0) {
+    func applySessionForTest(
+        action: hc_apple_session_action,
+        network: String,
+        channel: String,
+        sessionID: UInt64 = 0,
+        connectionID: UInt64 = 0,
+        selfNick: String? = nil
+    ) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_SESSION,
             text: nil,
@@ -412,7 +427,9 @@ final class EngineController {
             account: nil,
             host: nil,
             isMe: false,
-            isAway: false
+            isAway: false,
+            connectionID: connectionID,
+            selfNick: selfNick
         )
         handleSessionEvent(event)
     }
@@ -429,11 +446,19 @@ final class EngineController {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_LIFECYCLE, text: nil, phase: phase,
             code: 0, sessionID: 0, network: nil, channel: nil, nick: nil,
-            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            connectionID: 0, selfNick: nil)
         handleRuntimeEvent(event)
     }
 
-    func applyLogLineForTest(network: String, channel: String, text: String, sessionID: UInt64 = 0) {
+    func applyLogLineForTest(
+        network: String,
+        channel: String,
+        text: String,
+        sessionID: UInt64 = 0,
+        connectionID: UInt64 = 0,
+        selfNick: String? = nil
+    ) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_LOG_LINE,
             text: text,
@@ -447,7 +472,9 @@ final class EngineController {
             account: nil,
             host: nil,
             isMe: false,
-            isAway: false
+            isAway: false,
+            connectionID: connectionID,
+            selfNick: selfNick
         )
         handleRuntimeEvent(event)
     }
@@ -723,6 +750,8 @@ fileprivate struct RuntimeEvent {
     let host: String?
     let isMe: Bool
     let isAway: Bool
+    let connectionID: UInt64
+    let selfNick: String?
 
     var userlistAction: hc_apple_userlist_action {
         hc_apple_userlist_action(rawValue: UInt32(code))
@@ -759,6 +788,7 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
     let copiedNick = raw.nick.map { String(cString: $0) }
     let copiedAccount = raw.account.map { String(cString: $0) }
     let copiedHost = raw.host.map { String(cString: $0) }
+    let copiedSelfNick = raw.self_nick.map { String(cString: $0) }
     let prefix: Character? = raw.mode_prefix == 0 ? nil : Character(UnicodeScalar(raw.mode_prefix))
 
     return RuntimeEvent(
@@ -774,7 +804,9 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
         account: copiedAccount,
         host: copiedHost,
         isMe: raw.is_me != 0,
-        isAway: raw.is_away != 0
+        isAway: raw.is_away != 0,
+        connectionID: raw.connection_id,
+        selfNick: copiedSelfNick
     )
 }
 
