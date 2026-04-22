@@ -65,7 +65,7 @@ Each phase is independently shippable. The app remains fully functional between 
 | # | Phase | Scope | Risk | Plan doc |
 |---|-------|-------|------|----------|
 | 1 | **UUID normalization** ✅ | Introduce `SessionLocator` enum + `ChatSession.uuid`; migrate `usersBySession`, `ChatMessage.sessionID`, `selectedSessionID`, `activeSessionID` to UUID. | Low | **this doc** |
-| 2 | ChatUser struct + metadata | Replace raw `[String]` nicks in `usersBySession` with a `ChatUser` struct (nick, modePrefix, account?, hostmask?, isMe, isAway). Thread the C-side account/hostname/away fields through `hc_apple_event`. | Low–med | future |
+| 2 | **ChatUser struct + metadata** ✅ | Replace raw `[String]` nicks in `usersBySession` with a `ChatUser` struct (nick, modePrefix, account?, hostmask?, isMe, isAway). Thread the C-side account/hostname/away fields through `hc_apple_event`. | Low–med | [docs/plans/2026-04-22-data-model-phase-2-chatuser.md](2026-04-22-data-model-phase-2-chatuser.md) |
 | 3 | Network / Connection split | Introduce persistable `Network` + runtime `Connection` (self-nick, capabilities, endpoint, away). | Low–med | future |
 | 4 | User dedup via ChannelMembership | Per-connection `User` + `ChannelMembership` junction. Nick/account/away mutate one record, not N. | Med | future |
 | 5 | Message structuring | Typed `MessageKind` with structured fields; new `hc_apple_event_kind` variants on the C side for JOIN/PART/QUIT/KICK/MODE/NICK. | Med | future |
