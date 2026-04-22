@@ -150,8 +150,12 @@ final class EngineControllerTests: XCTestCase {
     func testVisibleSessionIDFallbackWhenNoSessions() {
         let controller = EngineController()
         XCTAssertTrue(controller.sessions.isEmpty)
-        // With no sessions, visibleSessionID must still return a non-empty id.
-        XCTAssertFalse(controller.visibleSessionID.isEmpty)
+        // With no sessions, visibleSessionID must return the specific synthetic fallback id.
+        XCTAssertEqual(
+            controller.visibleSessionID,
+            EngineController.sessionID(network: "network", channel: "server"),
+            "fresh controller with no sessions must fall back to the synthetic network::server id"
+        )
         // And visibleMessages must simply be empty, not crash.
         XCTAssertTrue(controller.visibleMessages.isEmpty)
         XCTAssertTrue(controller.visibleUsers.isEmpty)
@@ -168,6 +172,10 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.visibleSessionID, a, "selected takes precedence over active")
         controller.selectedSessionID = nil
         XCTAssertEqual(controller.visibleSessionID, b, "active chosen when selected is nil")
+        controller.activeSessionID = nil
+        // both selected and active are now nil — should fall back to sessions.first
+        // sessions are sorted so #a comes first alphabetically.
+        XCTAssertEqual(controller.visibleSessionID, a, "first session used when both selected and active are nil")
     }
 }
 #else
