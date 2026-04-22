@@ -97,21 +97,27 @@ void
 userlist_set_account (struct session *sess, char *nick, char *account)
 {
 	struct User *user;
+	gboolean changed = FALSE;
 
 	user = userlist_find (sess, nick);
 	if (user)
 	{
 		if (strcmp (account, "*") == 0)
 		{
-			g_clear_pointer (&user->account, g_free);
+			if (user->account != NULL)
+			{
+				g_clear_pointer (&user->account, g_free);
+				changed = TRUE;
+			}
 		} else if (g_strcmp0 (user->account, account))
 		{
 			g_free (user->account);
 			user->account = g_strdup (account);
+			changed = TRUE;
 		}
 
-		/* gui doesnt currently reflect login status, maybe later
-		fe_userlist_rehash (sess, user); */
+		if (changed)
+			fe_userlist_rehash (sess, user);
 	}
 }
 
