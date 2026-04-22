@@ -37,6 +37,8 @@ hc_apple_runtime_emit_event (hc_apple_event_kind kind, const char *text,
 	event.host = NULL;
 	event.is_me = 0;
 	event.is_away = 0;
+	event.connection_id = 0;
+	event.self_nick = NULL;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
@@ -64,6 +66,8 @@ hc_apple_runtime_emit_event_with_context (hc_apple_event_kind kind, const char *
 	event.host = NULL;
 	event.is_me = 0;
 	event.is_away = 0;
+	event.connection_id = 0;
+	event.self_nick = NULL;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
@@ -133,6 +137,8 @@ hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
 	event.host = host;
 	event.is_me = is_me;
 	event.is_away = is_away;
+	event.connection_id = 0;
+	event.self_nick = NULL;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
@@ -160,6 +166,8 @@ hc_apple_runtime_emit_session (hc_apple_session_action action,
 	event.host = NULL;
 	event.is_me = 0;
 	event.is_away = 0;
+	event.connection_id = 0;
+	event.self_nick = NULL;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 

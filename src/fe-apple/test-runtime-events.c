@@ -56,11 +56,10 @@ runtime_event_cb (const hc_apple_event *event, void *userdata)
 		    strcmp (event->network, "runtime-net") == 0 &&
 		    strcmp (event->channel, "#runtime") == 0 &&
 		    strcmp (event->nick, "runtime-user") == 0 &&
-		    event->mode_prefix == 0 &&
-		    event->account == NULL &&
-		    event->host == NULL &&
-		    event->is_me == 0 &&
-		    event->is_away == 0)
+		    event->mode_prefix == 0 && event->account == NULL && event->host == NULL &&
+		    event->is_me == 0 && event->is_away == 0 &&
+		    event->connection_id == 0 &&           /* new: defaults to 0 */
+		    event->self_nick == NULL)              /* new: defaults to NULL */
 		{
 			state->saw_userlist_insert = TRUE;
 		}

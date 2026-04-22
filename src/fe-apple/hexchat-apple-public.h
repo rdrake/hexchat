@@ -66,6 +66,9 @@ typedef struct
 	const char *host;
 	uint8_t is_me;
 	uint8_t is_away;
+	/* Phase 3: connection identity. Zero/NULL when no server context. */
+	uint64_t connection_id;
+	const char *self_nick;
 } hc_apple_event;
 
 typedef void (*hc_apple_event_cb) (const hc_apple_event *event, void *userdata);
