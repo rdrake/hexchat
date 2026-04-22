@@ -642,18 +642,6 @@ final class EngineController {
 }
 
 enum NickPrefix {
-    static let characters: Set<Character> = ["~", "&", "@", "%", "+"]
-
-    static func strip(_ nick: String) -> String {
-        guard let first = nick.first, characters.contains(first) else { return nick }
-        return String(nick.dropFirst())
-    }
-
-    static func badge(_ nick: String) -> Character? {
-        guard let first = nick.first, characters.contains(first) else { return nil }
-        return first
-    }
-
     static func rank(_ prefix: Character?) -> Int {
         switch prefix {
         case "~": return 0
