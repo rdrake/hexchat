@@ -88,6 +88,17 @@ struct HexChatAppleTests {
         #expect(runtime.stopCalls == 1)
         #expect(controller.isRunning == false)
     }
+
+    @MainActor
+    @Test func runtimeEventsAppendToLogs() {
+        let runtime = MockRuntimeClient(startResult: true, emitReadyOnStart: false)
+        let controller = BasicRuntimeController(runtime: runtime)
+
+        controller.start()
+        runtime.emit(kind: HC_APPLE_EVENT_LOG_LINE, text: "runtime line")
+
+        #expect(controller.logs == ["runtime line"])
+    }
 }
 
 final class MockRuntimeClient: RuntimeClient {
@@ -128,5 +139,9 @@ final class MockRuntimeClient: RuntimeClient {
     func postCommand(_ command: String) -> Bool {
         postedCommands.append(command)
         return postResult
+    }
+
+    func emit(kind: hc_apple_event_kind, text: String?, phase: hc_apple_lifecycle_phase = HC_APPLE_LIFECYCLE_STARTING) {
+        onEvent?(RuntimeEvent(kind: kind, text: text, phase: phase))
     }
 }

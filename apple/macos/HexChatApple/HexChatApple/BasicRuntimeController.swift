@@ -66,17 +66,39 @@ final class BasicRuntimeController {
     }
 
     private func handleRuntimeEvent(_ event: RuntimeEvent) {
-        guard event.kind == HC_APPLE_EVENT_LIFECYCLE else {
+        if event.kind == HC_APPLE_EVENT_LIFECYCLE {
+            switch event.phase {
+            case HC_APPLE_LIFECYCLE_READY:
+                isRunning = true
+            case HC_APPLE_LIFECYCLE_STOPPED:
+                isRunning = false
+            default:
+                break
+            }
+
+            if let text = event.text, !text.isEmpty {
+                appendLog("[\(phaseName(event.phase))] \(text)")
+            }
             return
         }
 
-        switch event.phase {
+        if let text = event.text, !text.isEmpty {
+            appendLog(text)
+        }
+    }
+
+    private func phaseName(_ phase: hc_apple_lifecycle_phase) -> String {
+        switch phase {
+        case HC_APPLE_LIFECYCLE_STARTING:
+            return "STARTING"
         case HC_APPLE_LIFECYCLE_READY:
-            isRunning = true
+            return "READY"
+        case HC_APPLE_LIFECYCLE_STOPPING:
+            return "STOPPING"
         case HC_APPLE_LIFECYCLE_STOPPED:
-            isRunning = false
+            return "STOPPED"
         default:
-            break
+            return "UNKNOWN"
         }
     }
 
