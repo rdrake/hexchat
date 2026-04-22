@@ -41,7 +41,7 @@
 #include "../common/outbound.h"
 #include "../common/util.h"
 #include "../common/fe.h"
-#include "../common/servlist.h"
+#include "../common/server.h"
 #include "apple-callback-log.h"
 #include "apple-runtime.h"
 
@@ -64,17 +64,12 @@ send_command (char *cmd)
 static const char *
 hc_apple_session_network (const session *sess)
 {
+	const char *name;
+
 	if (!sess || !sess->server)
 		return "network";
-	if (sess->server->network)
-	{
-		ircnet *net = (ircnet *)sess->server->network;
-		if (net->name && net->name[0])
-			return net->name;
-	}
-	if (sess->server->servername[0])
-		return sess->server->servername;
-	return "network";
+	name = server_get_network (sess->server, TRUE);
+	return (name && name[0]) ? name : "network";
 }
 
 static const char *
