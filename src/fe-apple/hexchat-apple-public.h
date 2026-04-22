@@ -82,7 +82,9 @@ int hc_apple_runtime_post_command_for_session (const char *command,
 void hc_apple_runtime_emit_log_line_for_session (const char *text,
                                                  const char *network,
                                                  const char *channel,
-                                                 uint64_t session_id);
+                                                 uint64_t session_id,
+                                                 uint64_t connection_id,
+                                                 const char *self_nick);
 void hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
                                      const char *network,
                                      const char *channel,
@@ -92,9 +94,13 @@ void hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
                                      const char *host,
                                      uint8_t is_me,
                                      uint8_t is_away,
-                                     uint64_t session_id);
+                                     uint64_t session_id,
+                                     uint64_t connection_id,
+                                     const char *self_nick);
 void hc_apple_runtime_emit_session (hc_apple_session_action action,
                                     const char *network,
                                     const char *channel,
-                                    uint64_t session_id);
+                                    uint64_t session_id,
+                                    uint64_t connection_id,
+                                    const char *self_nick);
 void hc_apple_runtime_stop (void);

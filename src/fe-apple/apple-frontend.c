@@ -134,7 +134,9 @@ hc_apple_emit_session_upsert (const session *sess)
 	hc_apple_runtime_emit_session (HC_APPLE_SESSION_UPSERT,
 	                               hc_apple_session_network (sess),
 	                               hc_apple_session_channel (sess),
-	                               hc_apple_session_runtime_id (sess));
+	                               hc_apple_session_runtime_id (sess),
+	                               0,          /* connection_id — Task 6 */
+	                               NULL);      /* self_nick */
 }
 
 static void
@@ -143,7 +145,9 @@ hc_apple_emit_session_activate (const session *sess)
 	hc_apple_runtime_emit_session (HC_APPLE_SESSION_ACTIVATE,
 	                               hc_apple_session_network (sess),
 	                               hc_apple_session_channel (sess),
-	                               hc_apple_session_runtime_id (sess));
+	                               hc_apple_session_runtime_id (sess),
+	                               0,          /* connection_id — Task 6 */
+	                               NULL);      /* self_nick */
 }
 
 static void
@@ -152,7 +156,9 @@ hc_apple_emit_session_remove (const session *sess)
 	hc_apple_runtime_emit_session (HC_APPLE_SESSION_REMOVE,
 	                               hc_apple_session_network (sess),
 	                               hc_apple_session_channel (sess),
-	                               hc_apple_session_runtime_id (sess));
+	                               hc_apple_session_runtime_id (sess),
+	                               0,          /* connection_id — Task 6 */
+	                               NULL);      /* self_nick */
 }
 
 static void
@@ -161,7 +167,9 @@ hc_apple_emit_log_line_for_session (const session *sess, const char *text)
 	hc_apple_runtime_emit_log_line_for_session (text,
 	                                            hc_apple_session_network (sess),
 	                                            hc_apple_session_channel (sess),
-	                                            hc_apple_session_runtime_id (sess));
+	                                            hc_apple_session_runtime_id (sess),
+	                                            0,          /* connection_id — Task 6 */
+	                                            NULL);      /* self_nick */
 }
 
 static gboolean
@@ -927,7 +935,9 @@ fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel)
 	                                newuser->hostname,
 	                                newuser->me ? 1 : 0,
 	                                newuser->away ? 1 : 0,
-	                                hc_apple_session_runtime_id (sess));
+	                                hc_apple_session_runtime_id (sess),
+	                                0,          /* connection_id — Task 6 */
+	                                NULL);      /* self_nick */
 }
 int
 fe_userlist_remove (struct session *sess, struct User *user)
@@ -943,7 +953,9 @@ fe_userlist_remove (struct session *sess, struct User *user)
 	                                user->hostname,
 	                                user->me ? 1 : 0,
 	                                user->away ? 1 : 0,
-	                                hc_apple_session_runtime_id (sess));
+	                                hc_apple_session_runtime_id (sess),
+	                                0,          /* connection_id — Task 6 */
+	                                NULL);      /* self_nick */
 	return 0;
 }
 void
@@ -960,7 +972,9 @@ fe_userlist_rehash (struct session *sess, struct User *user)
 	                                user->hostname,
 	                                user->me ? 1 : 0,
 	                                user->away ? 1 : 0,
-	                                hc_apple_session_runtime_id (sess));
+	                                hc_apple_session_runtime_id (sess),
+	                                0,          /* connection_id — Task 6 */
+	                                NULL);      /* self_nick */
 }
 void
 fe_userlist_numbers (struct session *sess)
@@ -979,7 +993,9 @@ fe_userlist_clear (struct session *sess)
 	                                NULL,
 	                                0,
 	                                0,
-	                                hc_apple_session_runtime_id (sess));
+	                                hc_apple_session_runtime_id (sess),
+	                                0,          /* connection_id — Task 6 */
+	                                NULL);      /* self_nick */
 }
 void
 fe_userlist_set_selected (struct session *sess)
@@ -1218,7 +1234,9 @@ fe_userlist_update (session *sess, struct User *user)
 	                                user->hostname,
 	                                user->me ? 1 : 0,
 	                                user->away ? 1 : 0,
-	                                hc_apple_session_runtime_id (sess));
+	                                hc_apple_session_runtime_id (sess),
+	                                0,          /* connection_id — Task 6 */
+	                                NULL);      /* self_nick */
 }
 void
 fe_open_chan_list (server *serv, char *filter, int do_refresh)

@@ -42,35 +42,6 @@ hc_apple_runtime_emit_event (hc_apple_event_kind kind, const char *text,
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
-static void
-hc_apple_runtime_emit_event_with_context (hc_apple_event_kind kind, const char *text,
-                                          hc_apple_lifecycle_phase lifecycle_phase, int code,
-                                          const char *network, const char *channel, const char *nick,
-                                          uint64_t session_id)
-{
-	hc_apple_event event;
-
-	if (!hc_apple_runtime.callback)
-		return;
-
-	event.kind = kind;
-	event.text = text;
-	event.lifecycle_phase = lifecycle_phase;
-	event.code = code;
-	event.session_id = session_id;
-	event.network = network;
-	event.channel = channel;
-	event.nick = nick;
-	event.mode_prefix = 0;
-	event.account = NULL;
-	event.host = NULL;
-	event.is_me = 0;
-	event.is_away = 0;
-	event.connection_id = 0;
-	event.self_nick = NULL;
-	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
-}
-
 void
 hc_apple_runtime_emit_log_line (const char *text)
 {
@@ -85,14 +56,34 @@ void
 hc_apple_runtime_emit_log_line_for_session (const char *text,
                                             const char *network,
                                             const char *channel,
-                                            uint64_t session_id)
+                                            uint64_t session_id,
+                                            uint64_t connection_id,
+                                            const char *self_nick)
 {
+	hc_apple_event event;
+
 	if (!text)
 		return;
 
-	hc_apple_runtime_emit_event_with_context (HC_APPLE_EVENT_LOG_LINE, text,
-	                                          HC_APPLE_LIFECYCLE_STARTING, 0,
-	                                          network, channel, NULL, session_id);
+	if (!hc_apple_runtime.callback)
+		return;
+
+	event.kind = HC_APPLE_EVENT_LOG_LINE;
+	event.text = text;
+	event.lifecycle_phase = HC_APPLE_LIFECYCLE_STARTING;
+	event.code = 0;
+	event.session_id = session_id;
+	event.network = network;
+	event.channel = channel;
+	event.nick = NULL;
+	event.mode_prefix = 0;
+	event.account = NULL;
+	event.host = NULL;
+	event.is_me = 0;
+	event.is_away = 0;
+	event.connection_id = connection_id;
+	event.self_nick = self_nick;
+	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
 void
@@ -117,7 +108,9 @@ hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
                                 const char *host,
                                 uint8_t is_me,
                                 uint8_t is_away,
-                                uint64_t session_id)
+                                uint64_t session_id,
+                                uint64_t connection_id,
+                                const char *self_nick)
 {
 	hc_apple_event event;
 
@@ -137,8 +130,8 @@ hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
 	event.host = host;
 	event.is_me = is_me;
 	event.is_away = is_away;
-	event.connection_id = 0;
-	event.self_nick = NULL;
+	event.connection_id = connection_id;
+	event.self_nick = self_nick;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
@@ -146,7 +139,9 @@ void
 hc_apple_runtime_emit_session (hc_apple_session_action action,
                                const char *network,
                                const char *channel,
-                               uint64_t session_id)
+                               uint64_t session_id,
+                               uint64_t connection_id,
+                               const char *self_nick)
 {
 	hc_apple_event event;
 
@@ -166,8 +161,8 @@ hc_apple_runtime_emit_session (hc_apple_session_action action,
 	event.host = NULL;
 	event.is_me = 0;
 	event.is_away = 0;
-	event.connection_id = 0;
-	event.self_nick = NULL;
+	event.connection_id = connection_id;
+	event.self_nick = self_nick;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
