@@ -88,6 +88,18 @@ struct ChatUser: Identifiable, Hashable {
     var id: String { nick.lowercased() }
 }
 
+struct Network: Identifiable, Hashable {
+    let id: UUID
+    var displayName: String
+}
+
+struct Connection: Identifiable, Hashable {
+    let id: UUID
+    let networkID: UUID
+    var serverName: String
+    var selfNick: String?
+}
+
 enum ChatMessageClassifier {
     static func classify(raw: String, fallback: ChatMessageKind = .message) -> ChatMessageKind {
         if raw.hasPrefix("[STARTING]") || raw.hasPrefix("[READY]") || raw.hasPrefix("[STOPPING]") || raw.hasPrefix("[STOPPED]") {

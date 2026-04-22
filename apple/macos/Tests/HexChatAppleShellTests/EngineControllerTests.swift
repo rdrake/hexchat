@@ -570,6 +570,24 @@ final class EngineControllerTests: XCTestCase {
             nick: "alice", isMe: false)
         XCTAssertFalse(controller.visibleUsers.first?.isMe ?? true)
     }
+
+    func testNetworkCarriesStableIDAndDisplayName() {
+        var network = Network(id: UUID(), displayName: "AfterNET")
+        let originalID = network.id
+        network.displayName = "renamed"
+        XCTAssertEqual(network.id, originalID, "Network.id is stable across displayName mutations")
+    }
+
+    func testConnectionCarriesNetworkFKAndSelfNick() {
+        let networkID = UUID()
+        var connection = Connection(
+            id: UUID(), networkID: networkID,
+            serverName: "irc.afternet.org", selfNick: "alice")
+        XCTAssertEqual(connection.networkID, networkID)
+        XCTAssertEqual(connection.selfNick, "alice")
+        connection.selfNick = "alice_"
+        XCTAssertEqual(connection.selfNick, "alice_", "selfNick is mutable")
+    }
 }
 #else
 @testable import HexChatAppleShell
