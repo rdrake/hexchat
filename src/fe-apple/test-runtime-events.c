@@ -14,6 +14,7 @@ typedef struct
 	gboolean saw_userlist_event;
 	gboolean saw_userlist_insert;
 	gboolean saw_userlist_metadata;
+	gboolean saw_connection_identity;
 	gboolean saw_session_event;
 	gboolean saw_session_activate;
 	gboolean saw_scoped_log_event;
@@ -68,9 +69,11 @@ runtime_event_cb (const hc_apple_event *event, void *userdata)
 		    event->mode_prefix == '@' &&
 		    event->account && strcmp (event->account, "meta-acct") == 0 &&
 		    event->host && strcmp (event->host, "meta.example") == 0 &&
-		    event->is_me == 1 &&
-		    event->is_away == 1)
+		    event->is_me == 1 && event->is_away == 1 &&
+		    event->connection_id == 99 &&
+		    event->self_nick && strcmp (event->self_nick, "runtime-self") == 0)
 		{
+			state->saw_connection_identity = TRUE;
 			state->saw_userlist_metadata = TRUE;
 		}
 	}
@@ -156,7 +159,7 @@ test_runtime_events_lifecycle_and_command_path (void)
 	                                "runtime-user", 0, NULL, NULL, 0, 0, 42, 0, NULL);
 	hc_apple_runtime_emit_userlist (HC_APPLE_USERLIST_UPDATE, "runtime-net", "#runtime",
 	                                "meta-user", '@', "meta-acct", "meta.example",
-	                                1, 1, 42, 0, NULL);
+	                                1, 1, 42, 99, "runtime-self");
 	hc_apple_runtime_emit_session (HC_APPLE_SESSION_ACTIVATE, "runtime-net", "#runtime", 42, 0, NULL);
 	hc_apple_runtime_stop ();
 
@@ -175,6 +178,7 @@ test_runtime_events_lifecycle_and_command_path (void)
 	g_assert_true (state.saw_userlist_event);
 	g_assert_true (state.saw_userlist_insert);
 	g_assert_true (state.saw_userlist_metadata);
+	g_assert_true (state.saw_connection_identity);
 	g_assert_true (state.saw_session_event);
 	g_assert_true (state.saw_session_activate);
 	g_assert_true (state.saw_scoped_log_event);
