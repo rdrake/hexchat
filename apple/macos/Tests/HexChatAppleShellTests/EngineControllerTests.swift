@@ -340,6 +340,25 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertFalse(user.isMe)
         XCTAssertFalse(user.isAway)
     }
+
+    func testApplyUserlistForTestPropagatesMetadataToRuntimeEvent() {
+        // Until Task 5, the engine doesn't read these fields, but the helper signature
+        // must accept them so Task 5 has somewhere to land.
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "Libera",
+            channel: "#a",
+            nick: "alice",
+            modePrefix: "@",
+            account: "alice_acct",
+            host: "alice.example",
+            isMe: false,
+            isAway: true
+        )
+        XCTAssertFalse(controller.usersBySession.isEmpty)
+    }
 }
 #else
 @testable import HexChatAppleShell

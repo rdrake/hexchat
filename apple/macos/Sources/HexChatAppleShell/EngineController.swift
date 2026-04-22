@@ -320,7 +320,18 @@ final class EngineController {
         }
     }
 
-    func applyUserlistForTest(action: hc_apple_userlist_action, network: String, channel: String, nick: String?, sessionID: UInt64 = 0) {
+    func applyUserlistForTest(
+        action: hc_apple_userlist_action,
+        network: String,
+        channel: String,
+        nick: String?,
+        modePrefix: Character? = nil,
+        account: String? = nil,
+        host: String? = nil,
+        isMe: Bool = false,
+        isAway: Bool = false,
+        sessionID: UInt64 = 0
+    ) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_USERLIST,
             text: nil,
@@ -329,7 +340,12 @@ final class EngineController {
             sessionID: sessionID,
             network: network,
             channel: channel,
-            nick: nick
+            nick: nick,
+            modePrefix: modePrefix,
+            account: account,
+            host: host,
+            isMe: isMe,
+            isAway: isAway
         )
         handleUserlistEvent(event)
     }
@@ -343,7 +359,12 @@ final class EngineController {
             sessionID: sessionID,
             network: network,
             channel: channel,
-            nick: nil
+            nick: nil,
+            modePrefix: nil,
+            account: nil,
+            host: nil,
+            isMe: false,
+            isAway: false
         )
         handleSessionEvent(event)
     }
@@ -359,7 +380,8 @@ final class EngineController {
     func applyLifecycleForTest(phase: hc_apple_lifecycle_phase) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_LIFECYCLE, text: nil, phase: phase,
-            code: 0, sessionID: 0, network: nil, channel: nil, nick: nil)
+            code: 0, sessionID: 0, network: nil, channel: nil, nick: nil,
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false)
         handleRuntimeEvent(event)
     }
 
@@ -372,7 +394,12 @@ final class EngineController {
             sessionID: sessionID,
             network: network,
             channel: channel,
-            nick: nil
+            nick: nil,
+            modePrefix: nil,
+            account: nil,
+            host: nil,
+            isMe: false,
+            isAway: false
         )
         handleRuntimeEvent(event)
     }
@@ -611,6 +638,11 @@ fileprivate struct RuntimeEvent {
     let network: String?
     let channel: String?
     let nick: String?
+    let modePrefix: Character?
+    let account: String?
+    let host: String?
+    let isMe: Bool
+    let isAway: Bool
 
     var userlistAction: hc_apple_userlist_action {
         hc_apple_userlist_action(rawValue: UInt32(code))
@@ -645,6 +677,9 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
     let copiedNetwork = raw.network.map { String(cString: $0) }
     let copiedChannel = raw.channel.map { String(cString: $0) }
     let copiedNick = raw.nick.map { String(cString: $0) }
+    let copiedAccount = raw.account.map { String(cString: $0) }
+    let copiedHost = raw.host.map { String(cString: $0) }
+    let prefix: Character? = raw.mode_prefix == 0 ? nil : Character(UnicodeScalar(raw.mode_prefix))
 
     return RuntimeEvent(
         kind: raw.kind,
@@ -654,7 +689,12 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
         sessionID: raw.session_id,
         network: copiedNetwork,
         channel: copiedChannel,
-        nick: copiedNick
+        nick: copiedNick,
+        modePrefix: prefix,
+        account: copiedAccount,
+        host: copiedHost,
+        isMe: raw.is_me != 0,
+        isAway: raw.is_away != 0
     )
 }
 
