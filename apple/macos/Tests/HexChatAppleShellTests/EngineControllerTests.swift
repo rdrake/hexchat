@@ -389,6 +389,187 @@ final class EngineControllerTests: XCTestCase {
         )
         XCTAssertFalse(controller.usersBySession.isEmpty)
     }
+
+    func testUserlistUpdateOverwritesAwayFlag() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
+            nick: "alice", modePrefix: "@", isAway: false)
+        XCTAssertEqual(controller.visibleUsers.first?.isAway, false)
+
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
+            nick: "alice", modePrefix: "@", isAway: true)
+        XCTAssertEqual(controller.visibleUsers.count, 1, "UPDATE must not duplicate the user")
+        XCTAssertEqual(controller.visibleUsers.first?.isAway, true, "UPDATE overwrites the prior record with fresh state")
+    }
+
+    func testUserlistUpdatePopulatesAccountAndHost() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
+            nick: "alice")
+        XCTAssertNil(controller.visibleUsers.first?.account)
+        XCTAssertNil(controller.visibleUsers.first?.host)
+
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
+            nick: "alice", account: "alice_acct", host: "alice.example")
+        XCTAssertEqual(controller.visibleUsers.first?.account, "alice_acct")
+        XCTAssertEqual(controller.visibleUsers.first?.host, "alice.example")
+    }
+
+    func testUserlistUpdateClearsAccountToNil() {
+        // The crux of overwrite-vs-merge: a logout (account=nil from the C side)
+        // must clear the previously-non-nil account. A merge would silently retain
+        // the stale value.
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
+            nick: "alice", account: "alice_acct")
+        XCTAssertEqual(controller.visibleUsers.first?.account, "alice_acct")
+
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
+            nick: "alice", account: nil)
+        XCTAssertNil(controller.visibleUsers.first?.account, "logout / account-clear must overwrite, not merge")
+    }
+
+    func testUserlistInsertCarriesIsMe() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
+            nick: "me", isMe: true)
+        XCTAssertTrue(controller.visibleUsers.first?.isMe ?? false)
+    }
+
+    func testUserlistRemoveByNickIsCaseInsensitive() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
+            nick: "Alice", modePrefix: "@")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_REMOVE, network: "Libera", channel: "#a",
+            nick: "ALICE")
+        XCTAssertTrue(controller.visibleUsers.isEmpty)
+    }
+
+    func testUserlistEmptyNickIsIgnored() {
+        // The C side should never emit an empty nick on INSERT/UPDATE/REMOVE, but
+        // a defensive guard keeps a malformed event from corrupting the roster.
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
+            nick: "")
+        XCTAssertTrue(controller.visibleUsers.isEmpty)
+
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
+            nick: "alice")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_REMOVE, network: "Libera", channel: "#a",
+            nick: "")
+        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["alice"], "empty REMOVE must not delete real users")
+    }
+
+    func testUserlistFallsBackToSystemSessionWhenNetworkOrChannelMissing() {
+        // C events with NULL network/channel land in the synthetic system session
+        // (same fallback path as unattributable log lines).
+        let controller = EngineController()
+        controller.applyUserlistRawForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: nil,
+            channel: nil,
+            nick: "alice"
+        )
+        let systemUUID = controller.sessionUUID(for: .composed(network: "network", channel: "server"))
+        XCTAssertNotNil(systemUUID, "system session must be registered as the fallback target")
+        XCTAssertEqual(controller.usersBySession[systemUUID!]?.map(\.nick), ["alice"])
+    }
+
+    func testUnattributedMessageAndUserlistShareSystemSession() {
+        // Phase-1 latent bug regression: appendMessage(without event) and
+        // userlist-with-NULL-network must converge on the SAME system session.
+        // Order: userlist first, then message.
+        let controller = EngineController()
+        controller.applyUserlistRawForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: nil, channel: nil, nick: "alice")
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+
+        let systemSessions = controller.sessions.filter {
+            $0.locator == .composed(network: "network", channel: "server")
+        }
+        XCTAssertEqual(systemSessions.count, 1, "must converge on a single system session, not duplicate")
+        let systemUUID = systemSessions[0].id
+        XCTAssertEqual(controller.messages.last?.sessionID, systemUUID)
+        XCTAssertEqual(controller.usersBySession[systemUUID]?.map(\.nick), ["alice"])
+    }
+
+    func testUnattributedMessageBeforeUserlistAlsoConverges() {
+        // Reverse-order variant: message first creates the system session via
+        // systemSessionUUID(); a subsequent userlist-with-NULL-network must
+        // reuse that same session, not create a second one.
+        let controller = EngineController()
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+        controller.applyUserlistRawForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: nil, channel: nil, nick: "alice")
+
+        let systemSessions = controller.sessions.filter {
+            $0.locator == .composed(network: "network", channel: "server")
+        }
+        XCTAssertEqual(systemSessions.count, 1, "reverse order must also converge")
+        let systemUUID = systemSessions[0].id
+        XCTAssertEqual(controller.messages.last?.sessionID, systemUUID)
+        XCTAssertEqual(controller.usersBySession[systemUUID]?.map(\.nick), ["alice"])
+    }
+
+    func testSystemSessionUUIDReusesExistingLocatorRegistration() {
+        // Direct mechanism test for the Step 3a fix: after a userlist event creates
+        // the system-locator session via upsertSession (without touching
+        // systemSessionUUIDStorage), a direct call to systemSessionUUID() must
+        // return the SAME UUID, not create a duplicate.
+        let controller = EngineController()
+        controller.applyUserlistRawForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: nil, channel: nil, nick: "alice")
+        let upsertedUUID = controller.sessionUUID(for: .composed(network: "network", channel: "server"))!
+        XCTAssertEqual(
+            controller.systemSessionUUIDForTest(), upsertedUUID,
+            "systemSessionUUID() must reuse the existing sessionByLocator entry")
+        XCTAssertEqual(
+            controller.sessions.filter { $0.locator == .composed(network: "network", channel: "server") }.count,
+            1,
+            "no duplicate system session was created"
+        )
+    }
+
+    func testUserlistUpdateFlipsIsMe() {
+        // Theoretical: should never happen in practice (isMe is a stable property of
+        // the local connection's own User), but the model must not trap on the flip.
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
+            nick: "alice", isMe: false)
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
+            nick: "alice", isMe: true)
+        XCTAssertEqual(controller.visibleUsers.count, 1)
+        XCTAssertTrue(controller.visibleUsers.first?.isMe ?? false)
+
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
+            nick: "alice", isMe: false)
+        XCTAssertFalse(controller.visibleUsers.first?.isMe ?? true)
+    }
 }
 #else
 @testable import HexChatAppleShell

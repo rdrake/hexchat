@@ -353,6 +353,34 @@ final class EngineController {
         handleUserlistEvent(event)
     }
 
+    func applyUserlistRawForTest(
+        action: hc_apple_userlist_action,
+        network: String?,
+        channel: String?,
+        nick: String?
+    ) {
+        let event = RuntimeEvent(
+            kind: HC_APPLE_EVENT_USERLIST,
+            text: nil,
+            phase: HC_APPLE_LIFECYCLE_STARTING,
+            code: Int32(action.rawValue),
+            sessionID: 0,
+            network: network,
+            channel: channel,
+            nick: nick,
+            modePrefix: nil,
+            account: nil,
+            host: nil,
+            isMe: false,
+            isAway: false
+        )
+        handleUserlistEvent(event)
+    }
+
+    func systemSessionUUIDForTest() -> UUID {
+        systemSessionUUID()
+    }
+
     func applySessionForTest(action: hc_apple_session_action, network: String, channel: String, sessionID: UInt64 = 0) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_SESSION,
