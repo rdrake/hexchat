@@ -128,6 +128,24 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertFalse(controller.messages.contains(where: { $0.sessionID == serverSession && $0.raw == "<alice> hi" }))
         XCTAssertFalse(controller.messages.contains(where: { $0.sessionID == channelSession && $0.raw == "-server notice-" }))
     }
+
+    func testSessionLocatorRoundTripsComposedAndRuntimeKeys() {
+        let composed = SessionLocator.composed(network: "Libera", channel: "#a")
+        XCTAssertEqual(
+            composed,
+            SessionLocator.composed(network: "libera", channel: "#A"),
+            "composed locator equality must be case-insensitive on network/channel"
+        )
+
+        let runtime = SessionLocator.runtime(id: 42)
+        XCTAssertNotEqual(runtime, SessionLocator.runtime(id: 43))
+        XCTAssertNotEqual(runtime, composed)
+
+        // Hash parity: equal values must share a hash bucket.
+        var seen: Set<SessionLocator> = []
+        seen.insert(composed)
+        XCTAssertTrue(seen.contains(SessionLocator.composed(network: "LIBERA", channel: "#A")))
+    }
 }
 #else
 @testable import HexChatAppleShell

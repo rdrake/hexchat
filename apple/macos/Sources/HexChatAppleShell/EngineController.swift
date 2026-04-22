@@ -67,6 +67,35 @@ enum ChatMessageClassifier {
     }
 }
 
+enum SessionLocator: Hashable {
+    case composed(network: String, channel: String)
+    case runtime(id: UInt64)
+
+    static func == (lhs: SessionLocator, rhs: SessionLocator) -> Bool {
+        switch (lhs, rhs) {
+        case (.composed(let an, let ac), .composed(let bn, let bc)):
+            return an.caseInsensitiveCompare(bn) == .orderedSame
+                && ac.caseInsensitiveCompare(bc) == .orderedSame
+        case (.runtime(let a), .runtime(let b)):
+            return a == b
+        default:
+            return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .composed(let n, let c):
+            hasher.combine(0)
+            hasher.combine(n.lowercased())
+            hasher.combine(c.lowercased())
+        case .runtime(let id):
+            hasher.combine(1)
+            hasher.combine(id)
+        }
+    }
+}
+
 @Observable
 final class EngineController {
     var isRunning = false
