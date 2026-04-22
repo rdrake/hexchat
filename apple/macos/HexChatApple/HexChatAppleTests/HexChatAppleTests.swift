@@ -19,12 +19,11 @@ struct HexChatAppleTests {
     }
 
     @MainActor
-    @Test func successfulSendEchoesPostsAndClearsInput() async {
+    @Test func successfulSendEchoesPostsAndClearsInput() {
         let runtime = MockRuntimeClient(startResult: true, emitReadyOnStart: true)
         let controller = BasicRuntimeController(runtime: runtime)
 
         controller.start()
-        await Task.yield()
 
         controller.commandInput = "  /join #hexchat  "
         controller.sendCurrentCommand()
@@ -36,28 +35,26 @@ struct HexChatAppleTests {
     }
 
     @MainActor
-    @Test func sendFailureAppendsFailureLine() async {
+    @Test func sendFailureAppendsFailureLine() {
         let runtime = MockRuntimeClient(startResult: true, emitReadyOnStart: true, postResult: false)
         let controller = BasicRuntimeController(runtime: runtime)
 
         controller.start()
-        await Task.yield()
 
         controller.commandInput = "/join #hexchat"
         controller.sendCurrentCommand()
 
         #expect(runtime.postedCommands == ["/join #hexchat"])
         #expect(controller.logs == ["> /join #hexchat", "! failed to send command"])
-        #expect(controller.commandInput.isEmpty)
+        #expect(controller.commandInput == "/join #hexchat")
     }
 
     @MainActor
-    @Test func whitespaceCommandIsIgnored() async {
+    @Test func whitespaceCommandIsIgnored() {
         let runtime = MockRuntimeClient(startResult: true, emitReadyOnStart: true)
         let controller = BasicRuntimeController(runtime: runtime)
 
         controller.start()
-        await Task.yield()
 
         controller.commandInput = "  \n\t  "
         controller.sendCurrentCommand()
@@ -76,6 +73,20 @@ struct HexChatAppleTests {
         controller.appendLog("three")
 
         #expect(controller.logs == ["two", "three"])
+    }
+
+    @MainActor
+    @Test func stopTransitionsRunningState() {
+        let runtime = MockRuntimeClient(startResult: true, emitReadyOnStart: true)
+        let controller = BasicRuntimeController(runtime: runtime)
+
+        controller.start()
+        #expect(controller.isRunning == true)
+
+        controller.stop()
+
+        #expect(runtime.stopCalls == 1)
+        #expect(controller.isRunning == false)
     }
 }
 

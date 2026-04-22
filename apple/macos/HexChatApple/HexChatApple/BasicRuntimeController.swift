@@ -25,9 +25,7 @@ final class BasicRuntimeController {
         }
 
         let started = runtime.start(noAuto: true, skipPlugins: true) { [weak self] event in
-            Task { @MainActor in
-                self?.handleRuntimeEvent(event)
-            }
+            self?.handleRuntimeEvent(event)
         }
 
         if !started {
@@ -57,6 +55,7 @@ final class BasicRuntimeController {
         let posted = runtime.postCommand(command)
         if !posted {
             appendLog("! failed to send command")
+            return
         }
         commandInput = ""
     }
