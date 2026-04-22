@@ -377,6 +377,12 @@ final class EngineController {
     // `activeSessionID ?? selectedSessionID ?? visibleSessionID` chain. `visibleSessionID`
     // is user-facing (it prefers selected over active); message routing is engine-facing
     // (it prefers active — the session the engine last activated).
+    //
+    // Safety: `activeSessionID`/`selectedSessionID` always reference a session currently
+    // in `sessions`. Each engine event is dispatched as its own `Task { @MainActor }` block,
+    // so a LOG_LINE cannot interleave with `HC_APPLE_SESSION_REMOVE` mid-handler. The REMOVE
+    // path updates these UUIDs before `sessions.removeAll` runs, so by the next event tick
+    // both invariants are re-established.
     private func resolveMessageSessionID(event: RuntimeEvent?) -> UUID {
         if let event, let resolved = resolveEventSessionID(event) { return resolved }
         if let act = activeSessionID { return act }
@@ -409,6 +415,7 @@ final class EngineController {
                 usersBySession[removed.uuid] = nil
                 deregisterLocators(for: removed)
                 if selectedSessionID == removed.uuid { selectedSessionID = nil }
+                // Evaluated against the still-intact `sessions` array, before the removeAll call below.
                 if activeSessionID == removed.uuid {
                     activeSessionID = sessions.first(where: { $0.uuid != removed.uuid })?.uuid
                 }
@@ -546,7 +553,7 @@ final class EngineController {
         return nick
     }
 
-    func numericRuntimeSessionID(forSelection uuid: UUID) -> UInt64 {
+    internal func numericRuntimeSessionID(forSelection uuid: UUID) -> UInt64 {
         for (locator, sessionUUID) in sessionByLocator where sessionUUID == uuid {
             if case .runtime(let n) = locator { return n }
         }

@@ -171,7 +171,6 @@ final class EngineControllerTests: XCTestCase {
         let a = EngineController.sessionID(network: "AfterNET", channel: "#a")
         let b = EngineController.sessionID(network: "AfterNET", channel: "#b")
         let aUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#a"))!
-        let bUUID = controller.sessionUUID(for: .composed(network: "AfterNET", channel: "#b"))!
         controller.selectedSessionID = aUUID
         XCTAssertEqual(controller.visibleSessionID, a, "selected takes precedence over active")
         controller.selectedSessionID = nil
@@ -180,7 +179,6 @@ final class EngineControllerTests: XCTestCase {
         // both selected and active are now nil — should fall back to sessions.first
         // sessions are sorted so #a comes first alphabetically.
         XCTAssertEqual(controller.visibleSessionID, a, "first session used when both selected and active are nil")
-        _ = bUUID  // suppress unused warning
     }
 
     func testChatSessionCarriesStableUUIDAcrossMutations() {
