@@ -1,4 +1,4 @@
-@testable import HexChat
+@testable import HexChatApple
 import AppleAdapterBridge
 import Testing
 

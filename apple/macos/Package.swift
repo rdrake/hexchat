@@ -6,7 +6,7 @@ let adapterLibDir = "../../builddir/src/fe-apple"
 let package = Package(
     name: "HexChatApple",
     platforms: [
-        .macOS(.v14),
+        .macOS("26.0"),
     ],
     products: [
         .executable(name: "HexChatAppleShell", targets: ["HexChatAppleShell"]),
