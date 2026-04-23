@@ -1121,6 +1121,29 @@ final class EngineControllerTests: XCTestCase {
         let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
         XCTAssertTrue(controller.membershipsBySession[sessionUUID, default: []].isEmpty)
     }
+
+    func testSameNickOnTwoConnectionsAreDistinctUsers() {
+        let controller = EngineController()
+        // Same configured network name, two distinct server-IDs → two Connections.
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "AfterNET", channel: "#a", nick: "alice",
+            sessionID: 0, connectionID: 1, selfNick: "me1",
+            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "AfterNET", channel: "#a", nick: "alice",
+            sessionID: 0, connectionID: 2, selfNick: "me2",
+            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+
+        let conn1 = controller.connectionsByServerID[1]!
+        let conn2 = controller.connectionsByServerID[2]!
+        let alice1 = controller.usersByConnectionAndNick[UserKey(connectionID: conn1, nick: "alice")]!
+        let alice2 = controller.usersByConnectionAndNick[UserKey(connectionID: conn2, nick: "alice")]!
+        XCTAssertNotEqual(alice1, alice2,
+            "Two connections to same-named network must dedup users separately")
+        XCTAssertEqual(controller.users.count, 2)
+    }
 }
 #else
 @testable import HexChatAppleShell
