@@ -1201,6 +1201,142 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertTrue(controller.usersByConnectionAndNick.isEmpty)
         XCTAssertTrue(controller.membershipsBySession.isEmpty)
     }
+
+    // MARK: - Fan-out correctness + non-fan-out isolation
+
+    func testAwayUpdateOnOneChannelFansOutToAllChannelsOfSameUser() {
+        let controller = EngineController()
+        for channel in ["#a", "#b", "#c"] {
+            controller.applyUserlistForTest(
+                action: HC_APPLE_USERLIST_INSERT,
+                network: "Libera", channel: channel, nick: "alice",
+                sessionID: 0, connectionID: 1, selfNick: "me",
+                account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        }
+        // Single UPDATE on one channel; fan-out must hit the other two.
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_UPDATE,
+            network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 0, connectionID: 1, selfNick: "me",
+            account: nil, host: nil, isMe: false, isAway: true, modePrefix: nil)
+
+        let connID = controller.connectionsByServerID[1]!
+        let userID = controller.usersByConnectionAndNick[UserKey(connectionID: connID, nick: "alice")]!
+        XCTAssertEqual(controller.users[userID]?.isAway, true)
+        // Projection reflects the same isAway across every channel.
+        for channel in ["#a", "#b", "#c"] {
+            let sessionUUID = controller.sessionUUID(
+                for: .composed(connectionID: connID, channel: channel))!
+            XCTAssertEqual(controller.usersBySession[sessionUUID]?.first?.isAway, true,
+                           "\(channel) projection must reflect User.isAway = true")
+        }
+        XCTAssertEqual(controller.users.count, 1, "single User record for fan-out")
+    }
+
+    func testAccountUpdateOnOneChannelFansOutToAllChannels() {
+        let controller = EngineController()
+        for channel in ["#a", "#b"] {
+            controller.applyUserlistForTest(
+                action: HC_APPLE_USERLIST_INSERT,
+                network: "Libera", channel: channel, nick: "alice",
+                sessionID: 0, connectionID: 1, selfNick: "me",
+                account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        }
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_UPDATE,
+            network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 0, connectionID: 1, selfNick: "me",
+            account: "alice!authname", host: nil, isMe: false, isAway: false, modePrefix: nil)
+
+        let connID = controller.connectionsByServerID[1]!
+        for channel in ["#a", "#b"] {
+            let sessionUUID = controller.sessionUUID(
+                for: .composed(connectionID: connID, channel: channel))!
+            XCTAssertEqual(controller.usersBySession[sessionUUID]?.first?.account, "alice!authname")
+        }
+    }
+
+    func testModePrefixIsMembershipLocalAndDoesNotFanOut() {
+        // modePrefix lives on ChannelMembership, not User. An op in #a is NOT an op in #b.
+        let controller = EngineController()
+        for (channel, prefix) in [("#a", "@" as Character?), ("#b", nil)] {
+            controller.applyUserlistForTest(
+                action: HC_APPLE_USERLIST_INSERT,
+                network: "Libera", channel: channel, nick: "alice",
+                sessionID: 0, connectionID: 1, selfNick: "me",
+                account: nil, host: nil, isMe: false, isAway: false, modePrefix: prefix)
+        }
+        let connID = controller.connectionsByServerID[1]!
+        let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
+        let bUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#b"))!
+        XCTAssertEqual(controller.usersBySession[aUUID]?.first?.modePrefix, "@")
+        XCTAssertNil(controller.usersBySession[bUUID]?.first?.modePrefix,
+                     "mode prefix in #a must not bleed into #b")
+
+        // Flip #a op → voice. #b must remain unprefixed.
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_UPDATE,
+            network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 0, connectionID: 1, selfNick: "me",
+            account: nil, host: nil, isMe: false, isAway: false, modePrefix: "+")
+        XCTAssertEqual(controller.usersBySession[aUUID]?.first?.modePrefix, "+")
+        XCTAssertNil(controller.usersBySession[bUUID]?.first?.modePrefix,
+                     "mode change in #a must remain isolated to #a")
+    }
+
+    func testRemoveInOneChannelLeavesOtherChannelMembershipIntact() {
+        let controller = EngineController()
+        for channel in ["#a", "#b"] {
+            controller.applyUserlistForTest(
+                action: HC_APPLE_USERLIST_INSERT,
+                network: "Libera", channel: channel, nick: "alice",
+                sessionID: 0, connectionID: 1, selfNick: "me",
+                account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        }
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_REMOVE,
+            network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 0, connectionID: 1, selfNick: "me",
+            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+
+        let connID = controller.connectionsByServerID[1]!
+        let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
+        let bUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#b"))!
+        XCTAssertTrue(controller.membershipsBySession[aUUID, default: []].isEmpty,
+                      "#a membership dropped")
+        XCTAssertEqual(controller.membershipsBySession[bUUID]?.count, 1,
+                       "#b membership must remain")
+        // User record itself remains — still in #b.
+        let userID = controller.usersByConnectionAndNick[UserKey(connectionID: connID, nick: "alice")]
+        XCTAssertNotNil(userID, "User record survives a single-channel REMOVE")
+    }
+
+    func testClearInOneChannelLeavesOtherChannelMembershipsIntact() {
+        let controller = EngineController()
+        for channel in ["#a", "#b"] {
+            for nick in ["alice", "bob"] {
+                controller.applyUserlistForTest(
+                    action: HC_APPLE_USERLIST_INSERT,
+                    network: "Libera", channel: channel, nick: nick,
+                    sessionID: 0, connectionID: 1, selfNick: "me",
+                    account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            }
+        }
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_CLEAR,
+            network: "Libera", channel: "#a", nick: "",
+            sessionID: 0, connectionID: 1, selfNick: "me",
+            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+
+        let connID = controller.connectionsByServerID[1]!
+        let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
+        let bUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#b"))!
+        XCTAssertTrue(controller.membershipsBySession[aUUID, default: []].isEmpty,
+                      "#a memberships cleared")
+        XCTAssertEqual(controller.membershipsBySession[bUUID]?.count, 2,
+                       "#b memberships untouched by a CLEAR on #a")
+        XCTAssertEqual(controller.users.count, 2, "Users persist across a single-channel CLEAR")
+    }
 }
 #else
 @testable import HexChatAppleShell
