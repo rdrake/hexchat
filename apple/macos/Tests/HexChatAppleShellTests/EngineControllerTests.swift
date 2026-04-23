@@ -1160,6 +1160,45 @@ final class EngineControllerTests: XCTestCase {
             "Two connections to same-named network must dedup users separately")
         XCTAssertEqual(controller.users.count, 2)
     }
+
+    func testSessionRemoveDropsMembershipsForThatSession() {
+        let controller = EngineController()
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 1, connectionID: 1, selfNick: "me",
+            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
+        XCTAssertEqual(controller.membershipsBySession[sessionUUID]?.count, 1)
+
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_REMOVE,
+            network: "Libera", channel: "#a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+
+        XCTAssertNil(
+            controller.membershipsBySession[sessionUUID],
+            "memberships entry cleared on session removal")
+        // User record itself remains — session-remove is not user-remove.
+    }
+
+    func testLifecycleStoppedClearsUsersAndMemberships() {
+        let controller = EngineController()
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 1, connectionID: 1, selfNick: "me",
+            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        XCTAssertFalse(controller.users.isEmpty)
+        XCTAssertFalse(controller.usersByConnectionAndNick.isEmpty)
+        XCTAssertFalse(controller.membershipsBySession.isEmpty)
+
+        controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
+
+        XCTAssertTrue(controller.users.isEmpty)
+        XCTAssertTrue(controller.usersByConnectionAndNick.isEmpty)
+        XCTAssertTrue(controller.membershipsBySession.isEmpty)
+    }
 }
 #else
 @testable import HexChatAppleShell
