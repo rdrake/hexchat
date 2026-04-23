@@ -840,8 +840,13 @@ final class EngineController {
             guard !nick.isEmpty else { return }
             let key = nick.lowercased()
             usersBySession[uuid, default: []].removeAll { $0.id == key }
+            if let sessionConnection = sessions.first(where: { $0.id == uuid })?.connectionID,
+               let userID = usersByConnectionAndNick[UserKey(connectionID: sessionConnection, nick: nick)] {
+                removeMembership(sessionID: uuid, userID: userID)
+            }
         case HC_APPLE_USERLIST_CLEAR:
             usersBySession[uuid] = []
+            membershipsBySession[uuid] = []
         default:
             break
         }
@@ -850,6 +855,7 @@ final class EngineController {
     }
 
     private func upsertChatUser(from event: RuntimeEvent, nick: String, inSession uuid: UUID) {
+        // Legacy usersBySession dual-write — read path migrates in Task 5.
         let candidate = ChatUser(
             nick: nick,
             modePrefix: event.modePrefix,
@@ -865,6 +871,14 @@ final class EngineController {
             roster.append(candidate)
         }
         usersBySession[uuid] = roster
+
+        // New storage: dedup User per (connection, nick); set membership per session.
+        guard let sessionConnection = sessions.first(where: { $0.id == uuid })?.connectionID else { return }
+        let userID = upsertUser(
+            connectionID: sessionConnection, nick: nick,
+            account: event.account, hostmask: event.host,
+            isMe: event.isMe, isAway: event.isAway)
+        setMembership(sessionID: uuid, userID: userID, modePrefix: event.modePrefix)
     }
 
     private func sessionSort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {

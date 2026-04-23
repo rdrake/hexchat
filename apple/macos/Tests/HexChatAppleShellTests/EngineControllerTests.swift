@@ -1060,6 +1060,66 @@ final class EngineControllerTests: XCTestCase {
         controller.removeMembershipForTest(sessionID: UUID(), userID: userID)
         // no crash, no assertion needed beyond reaching this line
     }
+
+    func testUserlistInsertPopulatesMembershipAndUser() {
+        let controller = EngineController()
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "Libera", channel: "#a", nick: "alice",
+            modePrefix: "@",
+            account: "alice!acct",
+            host: "alice@host",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        // New storage populated.
+        let connUUID = controller.connectionsByServerID[1]!
+        let userUUID = controller.usersByConnectionAndNick[UserKey(connectionID: connUUID, nick: "alice")]
+        XCTAssertNotNil(userUUID, "USERLIST_INSERT must create User")
+        XCTAssertEqual(controller.users[userUUID!]?.account, "alice!acct")
+        let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
+        XCTAssertEqual(controller.membershipsBySession[sessionUUID]?.count, 1)
+        XCTAssertEqual(controller.membershipsBySession[sessionUUID]?.first?.modePrefix, "@")
+        // Legacy storage still populated (dual-write).
+        XCTAssertEqual(controller.usersBySession[sessionUUID]?.map(\.nick), ["alice"])
+    }
+
+    func testUserlistRemoveDropsMembershipButLeavesUser() {
+        let controller = EngineController()
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        let connUUID = controller.connectionsByServerID[1]!
+        let userUUID = controller.usersByConnectionAndNick[UserKey(connectionID: connUUID, nick: "alice")]!
+
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_REMOVE,
+            network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+
+        let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
+        XCTAssertTrue(
+            controller.membershipsBySession[sessionUUID, default: []].isEmpty,
+            "membership removed")
+        XCTAssertNotNil(
+            controller.users[userUUID],
+            "User record remains for potential re-join / other channel memberships")
+    }
+
+    func testUserlistClearDropsAllMembershipsForSession() {
+        let controller = EngineController()
+        for nick in ["alice", "bob"] {
+            controller.applyUserlistForTest(
+                action: HC_APPLE_USERLIST_INSERT,
+                network: "Libera", channel: "#a", nick: nick,
+                sessionID: 1, connectionID: 1, selfNick: "me")
+        }
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_CLEAR,
+            network: "Libera", channel: "#a", nick: "",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
+        XCTAssertTrue(controller.membershipsBySession[sessionUUID, default: []].isEmpty)
+    }
 }
 #else
 @testable import HexChatAppleShell
