@@ -960,6 +960,82 @@ final class EngineControllerTests: XCTestCase {
         let otherConn = UserKey(connectionID: UUID(), nick: "alice")
         XCTAssertNotEqual(a, otherConn, "different connections must yield distinct keys")
     }
+
+    func testUpsertUserRegistersByConnectionAndNick() {
+        let controller = EngineController()
+        let connID = UUID()
+        let userID = controller.upsertUserForTest(
+            connectionID: connID, nick: "alice",
+            account: nil, hostmask: nil, isMe: false, isAway: false)
+        XCTAssertEqual(controller.users[userID]?.nick, "alice")
+        XCTAssertEqual(
+            controller.usersByConnectionAndNick[UserKey(connectionID: connID, nick: "ALICE")],
+            userID, "lookup must be case-insensitive")
+    }
+
+    func testUpsertUserRefreshesMetadataWithoutCreatingDuplicate() {
+        let controller = EngineController()
+        let connID = UUID()
+        let first = controller.upsertUserForTest(
+            connectionID: connID, nick: "alice",
+            account: nil, hostmask: nil, isMe: false, isAway: false)
+        let second = controller.upsertUserForTest(
+            connectionID: connID, nick: "alice",
+            account: "alice!account", hostmask: "alice@host",
+            isMe: false, isAway: true)
+        XCTAssertEqual(first, second, "same (connection, nick) must resolve to same User UUID")
+        XCTAssertEqual(controller.users[first]?.account, "alice!account")
+        XCTAssertEqual(controller.users[first]?.hostmask, "alice@host")
+        XCTAssertTrue(controller.users[first]?.isAway == true)
+    }
+
+    func testUpsertUserClearsAccountToNilOnSubsequentCall() {
+        // Parallels Phase 2's testUserlistUpdateClearsAccountToNil: a later event with
+        // account: nil must drop the previously-set account, not merge-preserve it.
+        let controller = EngineController()
+        let connID = UUID()
+        let userID = controller.upsertUserForTest(
+            connectionID: connID, nick: "alice",
+            account: "alice!acct", hostmask: "alice@host",
+            isMe: false, isAway: false)
+        _ = controller.upsertUserForTest(
+            connectionID: connID, nick: "alice",
+            account: nil, hostmask: nil,
+            isMe: false, isAway: false)
+        XCTAssertNil(
+            controller.users[userID]?.account,
+            "account=nil on update must clear, not preserve")
+        XCTAssertNil(
+            controller.users[userID]?.hostmask,
+            "hostmask=nil on update must clear, not preserve")
+    }
+
+    func testUpsertUserOnDifferentConnectionsAreDistinct() {
+        let controller = EngineController()
+        let a = controller.upsertUserForTest(
+            connectionID: UUID(), nick: "alice",
+            account: nil, hostmask: nil, isMe: false, isAway: false)
+        let b = controller.upsertUserForTest(
+            connectionID: UUID(), nick: "alice",
+            account: nil, hostmask: nil, isMe: false, isAway: false)
+        XCTAssertNotEqual(a, b, "same nick across connections must yield distinct User UUIDs")
+    }
+
+    func testSetMembershipAddsAndUpdatesModePrefix() {
+        let controller = EngineController()
+        let connID = UUID()
+        let sessionID = UUID()
+        let userID = controller.upsertUserForTest(
+            connectionID: connID, nick: "alice",
+            account: nil, hostmask: nil, isMe: false, isAway: false)
+        controller.setMembershipForTest(sessionID: sessionID, userID: userID, modePrefix: "@")
+        XCTAssertEqual(controller.membershipsBySession[sessionID]?.count, 1)
+        XCTAssertEqual(controller.membershipsBySession[sessionID]?.first?.modePrefix, "@")
+        // Second call updates in place.
+        controller.setMembershipForTest(sessionID: sessionID, userID: userID, modePrefix: "+")
+        XCTAssertEqual(controller.membershipsBySession[sessionID]?.count, 1, "no duplicate membership")
+        XCTAssertEqual(controller.membershipsBySession[sessionID]?.first?.modePrefix, "+")
+    }
 }
 #else
 @testable import HexChatAppleShell

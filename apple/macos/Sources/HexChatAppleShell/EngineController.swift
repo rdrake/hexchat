@@ -224,6 +224,65 @@ final class EngineController {
     private(set) var networksByName: [String: UUID] = [:]
     private(set) var connectionsByServerID: [UInt64: UUID] = [:]
 
+    var users: [UUID: User] = [:]
+    private(set) var usersByConnectionAndNick: [UserKey: UUID] = [:]
+    var membershipsBySession: [UUID: [ChannelMembership]] = [:]
+
+    @discardableResult
+    private func upsertUser(
+        connectionID: UUID, nick: String,
+        account: String?, hostmask: String?,
+        isMe: Bool, isAway: Bool
+    ) -> UUID {
+        let key = UserKey(connectionID: connectionID, nick: nick)
+        if let existing = usersByConnectionAndNick[key] {
+            // Direct assignment (no `??` merge): `account = nil` means the account was
+            // explicitly dropped (e.g. services logout / account-notify clear). Phase 3
+            // ChatUser behaves this way; see testUserlistUpdateClearsAccountToNil.
+            users[existing]?.nick = nick
+            users[existing]?.account = account
+            users[existing]?.hostmask = hostmask
+            users[existing]?.isMe = isMe
+            users[existing]?.isAway = isAway
+            return existing
+        }
+        let new = User(
+            id: UUID(), connectionID: connectionID, nick: nick,
+            account: account, hostmask: hostmask, isMe: isMe, isAway: isAway)
+        users[new.id] = new
+        usersByConnectionAndNick[key] = new.id
+        return new.id
+    }
+
+    private func setMembership(sessionID: UUID, userID: UUID, modePrefix: Character?) {
+        var roster = membershipsBySession[sessionID, default: []]
+        if let idx = roster.firstIndex(where: { $0.userID == userID }) {
+            roster[idx].modePrefix = modePrefix
+        } else {
+            roster.append(ChannelMembership(sessionID: sessionID, userID: userID, modePrefix: modePrefix))
+        }
+        membershipsBySession[sessionID] = roster
+    }
+
+    private func removeMembership(sessionID: UUID, userID: UUID) {
+        membershipsBySession[sessionID]?.removeAll { $0.userID == userID }
+    }
+
+    // Test helpers, parallel to the other applyForTest/upsertForTest methods.
+    func upsertUserForTest(
+        connectionID: UUID, nick: String,
+        account: String?, hostmask: String?,
+        isMe: Bool, isAway: Bool
+    ) -> UUID {
+        upsertUser(
+            connectionID: connectionID, nick: nick,
+            account: account, hostmask: hostmask, isMe: isMe, isAway: isAway)
+    }
+
+    func setMembershipForTest(sessionID: UUID, userID: UUID, modePrefix: Character?) {
+        setMembership(sessionID: sessionID, userID: userID, modePrefix: modePrefix)
+    }
+
     enum SystemSession {
         static let networkName = "network"
         static let channel = "server"
