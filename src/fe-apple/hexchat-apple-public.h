@@ -60,13 +60,13 @@ typedef struct
 	const char *network;
 	const char *channel;
 	const char *nick;
-	/* Phase 2: userlist metadata. Zero/NULL for non-userlist events. */
+	/* Userlist metadata. Zero/NULL for non-userlist events. */
 	uint8_t mode_prefix;          /* '@', '+', '%', '&', '~', or 0 */
 	const char *account;
 	const char *host;
 	uint8_t is_me;
 	uint8_t is_away;
-	/* Phase 3: connection identity. Zero/NULL when no server context. */
+	/* Connection identity. Zero/NULL when no server context. */
 	uint64_t connection_id;
 	const char *self_nick;
 } hc_apple_event;

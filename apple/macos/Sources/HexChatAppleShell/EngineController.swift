@@ -662,6 +662,8 @@ final class EngineController {
         if let existing = sessionByLocator[locator],
            let idx = sessions.firstIndex(where: { $0.id == existing }) {
             let oldLocator = sessions[idx].locator
+            let oldConnectionID = sessions[idx].connectionID
+            let oldChannel = sessions[idx].channel
             sessions[idx].connectionID = connectionID
             sessions[idx].channel = channel
             sessions[idx].locator = targetLocator
@@ -669,7 +671,9 @@ final class EngineController {
                 sessionByLocator[oldLocator] = nil
             }
             sessionByLocator[targetLocator] = existing
-            sessions = sessions.sorted(by: sessionSort)
+            if oldConnectionID != connectionID || oldChannel != channel {
+                sessions = sessions.sorted(by: sessionSort)
+            }
             return existing
         }
         let new = ChatSession(

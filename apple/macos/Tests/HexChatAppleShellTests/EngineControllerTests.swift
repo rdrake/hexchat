@@ -765,7 +765,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.connections[first]?.serverName, "sol.libera.chat")
     }
 
-    // MARK: - Task 8 new tests
+    // MARK: - Multi-connection isolation
 
     func testTwoConnectionsToSameNetworkAreDistinct() {
         let controller = EngineController()
@@ -812,7 +812,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(names.sorted(), ["AfterNET", "Libera"])
     }
 
-    // MARK: - Task 9 new tests
+    // MARK: - Lifecycle teardown & system-session invariants
 
     func testLifecycleStoppedClearsNetworksAndConnections() {
         let controller = EngineController()
