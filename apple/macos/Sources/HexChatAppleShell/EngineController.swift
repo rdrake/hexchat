@@ -835,13 +835,12 @@ final class EngineController {
         switch event.userlistAction {
         case HC_APPLE_USERLIST_INSERT, HC_APPLE_USERLIST_UPDATE:
             guard !nick.isEmpty else { return }
-            upsertChatUser(from: event, nick: nick, inSession: uuid)
+            upsertChatUser(from: event, nick: nick, inSession: uuid, connectionID: connectionID)
         case HC_APPLE_USERLIST_REMOVE:
             guard !nick.isEmpty else { return }
             let key = nick.lowercased()
             usersBySession[uuid, default: []].removeAll { $0.id == key }
-            if let sessionConnection = sessions.first(where: { $0.id == uuid })?.connectionID,
-               let userID = usersByConnectionAndNick[UserKey(connectionID: sessionConnection, nick: nick)] {
+            if let userID = usersByConnectionAndNick[UserKey(connectionID: connectionID, nick: nick)] {
                 removeMembership(sessionID: uuid, userID: userID)
             }
         case HC_APPLE_USERLIST_CLEAR:
@@ -854,7 +853,10 @@ final class EngineController {
         usersBySession[uuid, default: []].sort(by: userSort)
     }
 
-    private func upsertChatUser(from event: RuntimeEvent, nick: String, inSession uuid: UUID) {
+    private func upsertChatUser(
+        from event: RuntimeEvent, nick: String,
+        inSession uuid: UUID, connectionID: UUID
+    ) {
         // Legacy usersBySession dual-write — read path migrates in Task 5.
         let candidate = ChatUser(
             nick: nick,
@@ -873,9 +875,8 @@ final class EngineController {
         usersBySession[uuid] = roster
 
         // New storage: dedup User per (connection, nick); set membership per session.
-        guard let sessionConnection = sessions.first(where: { $0.id == uuid })?.connectionID else { return }
         let userID = upsertUser(
-            connectionID: sessionConnection, nick: nick,
+            connectionID: connectionID, nick: nick,
             account: event.account, hostmask: event.host,
             isMe: event.isMe, isAway: event.isAway)
         setMembership(sessionID: uuid, userID: userID, modePrefix: event.modePrefix)

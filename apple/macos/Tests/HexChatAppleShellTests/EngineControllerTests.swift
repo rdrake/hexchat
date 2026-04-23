@@ -1075,6 +1075,7 @@ final class EngineControllerTests: XCTestCase {
         let userUUID = controller.usersByConnectionAndNick[UserKey(connectionID: connUUID, nick: "alice")]
         XCTAssertNotNil(userUUID, "USERLIST_INSERT must create User")
         XCTAssertEqual(controller.users[userUUID!]?.account, "alice!acct")
+        XCTAssertEqual(controller.users[userUUID!]?.hostmask, "alice@host")
         let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
         XCTAssertEqual(controller.membershipsBySession[sessionUUID]?.count, 1)
         XCTAssertEqual(controller.membershipsBySession[sessionUUID]?.first?.modePrefix, "@")
