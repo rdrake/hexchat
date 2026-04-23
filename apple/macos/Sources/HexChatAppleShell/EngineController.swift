@@ -54,13 +54,11 @@ struct ChatMessage: Identifiable {
     let kind: ChatMessageKind
 }
 
-/// A user in a single channel's roster.
-///
-/// `id` is the lowercased `nick` and is **only valid within one channel's roster**:
-/// the same nick across multiple channels yields equal-`id` `ChatUser` records that
-/// nonetheless represent independent rows in `usersBySession`. Phase 4 introduces
-/// per-`Connection` `User` identity backed by a stable UUID and a `ChannelMembership`
-/// junction; until then, do not treat `ChatUser.id` as a cross-channel identifier.
+/// View-facing DTO assembled on demand from `User` + `ChannelMembership` via the
+/// computed `usersBySession` projection. `id` is the lowercased `nick` and is valid
+/// only within one channel's roster (for SwiftUI `ForEach` diffing). Stable cross-
+/// channel identity lives on `User.id` (UUID), looked up through
+/// `usersByConnectionAndNick`.
 struct ChatUser: Identifiable, Hashable {
     var nick: String
     var modePrefix: Character?
@@ -233,7 +231,10 @@ final class EngineController {
             var roster: [ChatUser] = []
             roster.reserveCapacity(memberships.count)
             for m in memberships {
-                guard let user = users[m.userID] else { continue }
+                guard let user = users[m.userID] else {
+                    assertionFailure("membershipsBySession/users drift: userID \(m.userID) missing")
+                    continue
+                }
                 roster.append(
                     ChatUser(
                         nick: user.nick, modePrefix: m.modePrefix,
