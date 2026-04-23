@@ -1179,7 +1179,9 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertNil(
             controller.membershipsBySession[sessionUUID],
             "memberships entry cleared on session removal")
-        // User record itself remains — session-remove is not user-remove.
+        XCTAssertFalse(
+            controller.users.isEmpty,
+            "User record survives session removal — session-remove is not user-remove")
     }
 
     func testLifecycleStoppedClearsUsersAndMemberships() {
