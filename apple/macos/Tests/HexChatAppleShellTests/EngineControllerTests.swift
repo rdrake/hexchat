@@ -987,6 +987,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.users[first]?.account, "alice!account")
         XCTAssertEqual(controller.users[first]?.hostmask, "alice@host")
         XCTAssertTrue(controller.users[first]?.isAway == true)
+        XCTAssertEqual(controller.users.count, 1, "upsert must update in place, not append a second entry")
     }
 
     func testUpsertUserClearsAccountToNilOnSubsequentCall() {
@@ -1035,6 +1036,29 @@ final class EngineControllerTests: XCTestCase {
         controller.setMembershipForTest(sessionID: sessionID, userID: userID, modePrefix: "+")
         XCTAssertEqual(controller.membershipsBySession[sessionID]?.count, 1, "no duplicate membership")
         XCTAssertEqual(controller.membershipsBySession[sessionID]?.first?.modePrefix, "+")
+    }
+
+    func testRemoveMembershipDropsByUserIDAndIsNoOpWhenAbsent() {
+        let controller = EngineController()
+        let connID = UUID()
+        let sessionID = UUID()
+        let userID = controller.upsertUserForTest(
+            connectionID: connID, nick: "alice",
+            account: nil, hostmask: nil, isMe: false, isAway: false)
+        controller.setMembershipForTest(sessionID: sessionID, userID: userID, modePrefix: nil)
+        XCTAssertEqual(controller.membershipsBySession[sessionID]?.count, 1)
+
+        // removeMembership is private; exercise it via a new test helper (add below).
+        controller.removeMembershipForTest(sessionID: sessionID, userID: userID)
+        XCTAssertTrue(controller.membershipsBySession[sessionID, default: []].isEmpty)
+
+        // Second call (no entry) is a silent no-op.
+        controller.removeMembershipForTest(sessionID: sessionID, userID: userID)
+        XCTAssertTrue(controller.membershipsBySession[sessionID, default: []].isEmpty)
+
+        // Removing from a never-seen session is also a silent no-op.
+        controller.removeMembershipForTest(sessionID: UUID(), userID: userID)
+        // no crash, no assertion needed beyond reaching this line
     }
 }
 #else

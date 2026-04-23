@@ -224,9 +224,9 @@ final class EngineController {
     private(set) var networksByName: [String: UUID] = [:]
     private(set) var connectionsByServerID: [UInt64: UUID] = [:]
 
-    var users: [UUID: User] = [:]
+    private(set) var users: [UUID: User] = [:]
     private(set) var usersByConnectionAndNick: [UserKey: UUID] = [:]
-    var membershipsBySession: [UUID: [ChannelMembership]] = [:]
+    private(set) var membershipsBySession: [UUID: [ChannelMembership]] = [:]
 
     @discardableResult
     private func upsertUser(
@@ -239,6 +239,8 @@ final class EngineController {
             // Direct assignment (no `??` merge): `account = nil` means the account was
             // explicitly dropped (e.g. services logout / account-notify clear). Phase 3
             // ChatUser behaves this way; see testUserlistUpdateClearsAccountToNil.
+            // Refresh stored nick to match the incoming event's casing. True renames
+            // (different UserKey) fall through to the create branch; Phase 5 owns them.
             users[existing]?.nick = nick
             users[existing]?.account = account
             users[existing]?.hostmask = hostmask
@@ -281,6 +283,10 @@ final class EngineController {
 
     func setMembershipForTest(sessionID: UUID, userID: UUID, modePrefix: Character?) {
         setMembership(sessionID: sessionID, userID: userID, modePrefix: modePrefix)
+    }
+
+    func removeMembershipForTest(sessionID: UUID, userID: UUID) {
+        removeMembership(sessionID: sessionID, userID: userID)
     }
 
     enum SystemSession {
