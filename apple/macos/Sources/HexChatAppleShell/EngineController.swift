@@ -36,11 +36,23 @@ struct NetworkSection: Identifiable {
     let sessions: [ChatSession]
 }
 
+/// Pairs the nick string from an originating IRC event with the optional stable
+/// `User.id` UUID resolved via the `usersByConnectionAndNick` index. `userID` is
+/// `nil` when the nick has not yet been seen on the connection — for example, a
+/// typed JOIN arriving before its USERLIST_INSERT companion. The nick string
+/// preserves the casing used in the originating IRC event.
 struct MessageAuthor: Hashable {
     let nick: String
     let userID: UUID?
 }
 
+/// The typed payload carried by `ChatMessage`. Free-text cases (`.message`,
+/// `.notice`, `.action`, `.command`, `.error`, `.lifecycle`) carry the displayable
+/// body via the `body` computed property. Structured cases (`.join`, `.part`,
+/// `.quit`, `.kick`, `.nickChange`, `.modeChange`) carry parameters and have no
+/// free-form body — `body` returns `nil` for these. `.action` is included for
+/// forward compatibility: Phase 5 does not emit it; Phase 7 will once typed
+/// PRIVMSG/ACTION arrives.
 enum ChatMessageKind: Hashable {
     case message(body: String)
     case notice(body: String)
@@ -83,7 +95,7 @@ struct ChatMessage: Identifiable {
         case .message(let b), .notice(let b), .action(let b),
             .command(let b), .error(let b), .lifecycle(_, let b):
             return b
-        default:
+        case .join, .part, .quit, .kick, .nickChange, .modeChange:
             return nil
         }
     }

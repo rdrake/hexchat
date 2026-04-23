@@ -1340,17 +1340,15 @@ final class EngineControllerTests: XCTestCase {
 
     // MARK: - Phase 5 — message structuring
 
-    func testMessageAuthorIsNilByDefaultAndCarriesNickAndOptionalUserID() {
-        let connID = UUID()
-        let userID = UUID()
-        let nilAuthor: MessageAuthor? = nil
-        XCTAssertNil(nilAuthor)
+    func testMessageAuthorCarriesNickAndOptionalUserID() {
         let bare = MessageAuthor(nick: "alice", userID: nil)
         XCTAssertEqual(bare.nick, "alice")
         XCTAssertNil(bare.userID)
-        let resolved = MessageAuthor(nick: "alice", userID: userID)
-        XCTAssertEqual(resolved.userID, userID)
-        _ = connID  // silences unused
+        let resolved = MessageAuthor(nick: "alice", userID: UUID())
+        XCTAssertNotNil(resolved.userID)
+        // ChatMessage.author defaults to nil when the constructor omits it.
+        let m = ChatMessage(sessionID: UUID(), raw: "x", kind: .join)
+        XCTAssertNil(m.author)
     }
 
     func testChatMessageKindHoldsTypedPayloads() {
@@ -1379,9 +1377,13 @@ final class EngineControllerTests: XCTestCase {
             author: MessageAuthor(nick: "alice", userID: nil), timestamp: Date())
         XCTAssertNil(j.body, "structured kinds have no free-form body")
         XCTAssertEqual(j.author?.nick, "alice")
+        let l = ChatMessage(
+            sessionID: UUID(), raw: "[READY] up", kind: .lifecycle(phase: "READY", body: "up"),
+            author: nil, timestamp: Date())
+        XCTAssertEqual(l.body, "up", "lifecycle body extracts the second associated value")
     }
 
-    func testChatMessageTimestampDefaultsToConstructorArgument() {
+    func testChatMessageTimestampReflectsConstructorArgument() {
         let t = Date(timeIntervalSince1970: 1_700_000_000)
         let m = ChatMessage(
             sessionID: UUID(), raw: "x", kind: .error(body: "x"),
