@@ -435,7 +435,7 @@ final class EngineControllerTests: XCTestCase {
         controller.appendUnattributedForTest(raw: "! system error", kind: .error)
         let systemConn = controller.systemConnectionUUIDForTest()
         XCTAssertNotNil(
-            controller.sessionUUID(for: .composed(connectionID: systemConn, channel: "server")),
+            controller.sessionUUID(for: .composed(connectionID: systemConn, channel: EngineController.SystemSession.channel)),
             "system session must be registered in sessionByLocator so real events fold into it")
     }
 
@@ -507,7 +507,10 @@ final class EngineControllerTests: XCTestCase {
             sessionID: 0,
             connectionID: 99, selfNick: "alice"
         )
-        XCTAssertFalse(controller.sessions.isEmpty)
+        let connectionID = controller.connectionsByServerID[99]
+        XCTAssertNotNil(connectionID, "connectionID must register in connectionsByServerID")
+        XCTAssertEqual(controller.connections[connectionID!]?.selfNick, "alice")
+        XCTAssertEqual(controller.connections[connectionID!]?.serverName, "Libera")
     }
 
     func testUserlistUpdateOverwritesAwayFlag() {
@@ -622,7 +625,7 @@ final class EngineControllerTests: XCTestCase {
             action: HC_APPLE_USERLIST_INSERT,
             network: nil, channel: nil, nick: "alice")
         let systemConn = controller.systemConnectionUUIDForTest()
-        let systemUUID = controller.sessionUUID(for: .composed(connectionID: systemConn, channel: "server"))
+        let systemUUID = controller.sessionUUID(for: .composed(connectionID: systemConn, channel: EngineController.SystemSession.channel))
         XCTAssertNotNil(systemUUID, "system session must be registered as the fallback target")
         XCTAssertEqual(controller.usersBySession[systemUUID!]?.map(\.nick), ["alice"])
     }
@@ -639,7 +642,7 @@ final class EngineControllerTests: XCTestCase {
 
         let systemConn = controller.systemConnectionUUIDForTest()
         let systemSessions = controller.sessions.filter {
-            $0.locator == .composed(connectionID: systemConn, channel: "server")
+            $0.locator == .composed(connectionID: systemConn, channel: EngineController.SystemSession.channel)
         }
         XCTAssertEqual(systemSessions.count, 1, "must converge on a single system session, not duplicate")
         let systemUUID = systemSessions[0].id
@@ -659,7 +662,7 @@ final class EngineControllerTests: XCTestCase {
 
         let systemConn = controller.systemConnectionUUIDForTest()
         let systemSessions = controller.sessions.filter {
-            $0.locator == .composed(connectionID: systemConn, channel: "server")
+            $0.locator == .composed(connectionID: systemConn, channel: EngineController.SystemSession.channel)
         }
         XCTAssertEqual(systemSessions.count, 1, "reverse order must also converge")
         let systemUUID = systemSessions[0].id
@@ -677,13 +680,13 @@ final class EngineControllerTests: XCTestCase {
             network: nil, channel: nil, nick: "alice")
         let systemConn = controller.systemConnectionUUIDForTest()
         let upsertedUUID = controller.sessionUUID(for:
-            .composed(connectionID: systemConn, channel: "server"))!
+            .composed(connectionID: systemConn, channel: EngineController.SystemSession.channel))!
         XCTAssertEqual(
             controller.systemSessionUUIDForTest(), upsertedUUID,
             "systemSessionUUID() must reuse the existing sessionByLocator entry")
         XCTAssertEqual(
             controller.sessions.filter {
-                $0.locator == .composed(connectionID: systemConn, channel: "server")
+                $0.locator == .composed(connectionID: systemConn, channel: EngineController.SystemSession.channel)
             }.count,
             1,
             "no duplicate system session was created"
@@ -860,12 +863,15 @@ final class EngineControllerTests: XCTestCase {
         let controller = EngineController()
         controller.appendUnattributedForTest(raw: "! system error", kind: .error)
 
-        let systemNetworkID = controller.networksByName["network"]
+        let systemNetworkID = controller.networksByName[EngineController.SystemSession.networkName]
         XCTAssertNotNil(systemNetworkID)
         let systemConnectionID = controller.systemConnectionUUIDForTest()
         XCTAssertEqual(controller.connections[systemConnectionID]?.networkID, systemNetworkID)
         XCTAssertEqual(
-            controller.networks.values.filter { $0.displayName == "network" }.count, 1,
+            controller.networks.values.filter {
+                $0.displayName == EngineController.SystemSession.networkName
+            }.count,
+            1,
             "exactly one system Network")
     }
 

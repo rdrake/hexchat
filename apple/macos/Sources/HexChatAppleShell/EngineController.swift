@@ -185,7 +185,7 @@ final class EngineController {
     private(set) var networksByName: [String: UUID] = [:]
     private(set) var connectionsByServerID: [UInt64: UUID] = [:]
 
-    private enum SystemSession {
+    enum SystemSession {
         static let networkName = "network"
         static let channel = "server"
     }
@@ -193,20 +193,11 @@ final class EngineController {
     @ObservationIgnored
     private var systemSessionUUIDStorage: UUID?
     @ObservationIgnored
-    private var systemNetworkUUIDStorage: UUID?
-    @ObservationIgnored
     private var systemConnectionUUIDStorage: UUID?
-
-    private func systemNetworkUUID() -> UUID {
-        if let cached = systemNetworkUUIDStorage { return cached }
-        let id = upsertNetwork(name: SystemSession.networkName)
-        systemNetworkUUIDStorage = id
-        return id
-    }
 
     private func systemConnectionUUID() -> UUID {
         if let cached = systemConnectionUUIDStorage { return cached }
-        let networkID = systemNetworkUUID()
+        let networkID = upsertNetwork(name: SystemSession.networkName)
         let new = Connection(
             id: UUID(), networkID: networkID,
             serverName: SystemSession.networkName, selfNick: nil)
@@ -275,31 +266,33 @@ final class EngineController {
     var visibleSessionTitle: String {
         guard let uuid = visibleSessionUUID,
               let session = sessions.first(where: { $0.id == uuid }),
-              let connection = connections[session.connectionID],
-              let network = networks[connection.networkID]
+              let name = networkDisplayName(for: session.connectionID)
         else {
             return "No Session"
         }
-        return "\(network.displayName) • \(session.channel)"
+        return "\(name) • \(session.channel)"
     }
 
     var networkSections: [NetworkSection] {
+        // Dropped orphans: sessions whose Connection has been cleared (LIFECYCLE_STOPPED window).
+        // Inner sort is unneeded — `sessions` is kept sorted by `sessionSort` on every mutation.
         let grouped = Dictionary(grouping: sessions) { session -> UUID? in
             connections[session.connectionID]?.networkID
         }
-        // Orphan sessions (connectionID not in connections) are intentionally dropped here.
-        // In normal operation this is unreachable — upsertSession runs after registerConnection
-        // (or falls back to systemConnectionUUID). Retained as defense for LIFECYCLE_STOPPED's
-        // inter-statement window where connections = [:] is set before the system session is
-        // removed from `sessions`.
         let ordered = grouped.keys
             .compactMap { $0 }
             .compactMap { networks[$0] }
             .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         return ordered.map { network in
-            let rows = (grouped[network.id] ?? []).sorted(by: sessionSort)
-            return NetworkSection(id: network.id.uuidString, name: network.displayName, sessions: rows)
+            NetworkSection(
+                id: network.id.uuidString,
+                name: network.displayName,
+                sessions: grouped[network.id] ?? [])
         }
+    }
+
+    private func networkDisplayName(for connectionID: UUID) -> String? {
+        connections[connectionID].flatMap { networks[$0.networkID]?.displayName }
     }
 
     func start() {
@@ -563,7 +556,6 @@ final class EngineController {
                 }
                 systemSessionUUIDStorage = nil
                 systemConnectionUUIDStorage = nil
-                systemNetworkUUIDStorage = nil
             }
         case HC_APPLE_EVENT_COMMAND:
             if event.code != 0 {
@@ -707,8 +699,12 @@ final class EngineController {
         serverID: UInt64, networkID: UUID, serverName: String, selfNick: String?
     ) -> UUID {
         if let existing = connectionsByServerID[serverID] {
-            connections[existing]?.serverName = serverName
-            if let nick = selfNick { connections[existing]?.selfNick = nick }
+            if connections[existing]?.serverName != serverName {
+                connections[existing]?.serverName = serverName
+            }
+            if let nick = selfNick, connections[existing]?.selfNick != nick {
+                connections[existing]?.selfNick = nick
+            }
             return existing
         }
         let new = Connection(
@@ -764,8 +760,8 @@ final class EngineController {
     }
 
     private func sessionSort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {
-        let lhsName = connections[lhs.connectionID].flatMap { networks[$0.networkID]?.displayName } ?? ""
-        let rhsName = connections[rhs.connectionID].flatMap { networks[$0.networkID]?.displayName } ?? ""
+        let lhsName = networkDisplayName(for: lhs.connectionID) ?? ""
+        let rhsName = networkDisplayName(for: rhs.connectionID) ?? ""
         if lhsName != rhsName {
             return lhsName.localizedStandardCompare(rhsName) == .orderedAscending
         }
