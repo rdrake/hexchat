@@ -1390,6 +1390,32 @@ final class EngineControllerTests: XCTestCase {
             author: nil, timestamp: t)
         XCTAssertEqual(m.timestamp, t)
     }
+
+    func testResolveAuthorReturnsNickWithNilUserIDWhenUserAbsent() {
+        let controller = EngineController()
+        let connID = UUID()
+        let author = controller.resolveAuthor(connectionID: connID, nick: "alice")
+        XCTAssertEqual(author.nick, "alice")
+        XCTAssertNil(author.userID, "no User exists yet → userID is nil")
+    }
+
+    func testResolveAuthorFindsUserIDWhenUserPresent() {
+        let controller = EngineController()
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "Libera", channel: "#a", nick: "alice",
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        let connID = controller.connectionsByServerID[1]!
+        let userID = controller.usersByConnectionAndNick[UserKey(connectionID: connID, nick: "alice")]!
+        let author = controller.resolveAuthor(connectionID: connID, nick: "alice")
+        XCTAssertEqual(author.userID, userID)
+        // Case-insensitive: lookups go through UserKey which lowercases.
+        let upper = controller.resolveAuthor(connectionID: connID, nick: "ALICE")
+        XCTAssertEqual(upper.userID, userID)
+        // Original nick casing is preserved on the author.
+        XCTAssertEqual(upper.nick, "ALICE")
+    }
 }
 #else
 @testable import HexChatAppleShell

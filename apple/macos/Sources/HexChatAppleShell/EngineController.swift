@@ -334,6 +334,11 @@ final class EngineController {
         membershipsBySession[sessionID]?.removeAll { $0.userID == userID }
     }
 
+    func resolveAuthor(connectionID: UUID, nick: String) -> MessageAuthor {
+        let userID = usersByConnectionAndNick[UserKey(connectionID: connectionID, nick: nick)]
+        return MessageAuthor(nick: nick, userID: userID)
+    }
+
     // Test helpers, parallel to the other applyForTest/upsertForTest methods.
     func upsertUserForTest(
         connectionID: UUID, nick: String,
