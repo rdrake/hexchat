@@ -1079,7 +1079,7 @@ final class EngineControllerTests: XCTestCase {
         let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
         XCTAssertEqual(controller.membershipsBySession[sessionUUID]?.count, 1)
         XCTAssertEqual(controller.membershipsBySession[sessionUUID]?.first?.modePrefix, "@")
-        // Legacy storage still populated (dual-write).
+        // Computed projection confirms read path works end-to-end.
         XCTAssertEqual(controller.usersBySession[sessionUUID]?.map(\.nick), ["alice"])
     }
 
@@ -1120,6 +1120,22 @@ final class EngineControllerTests: XCTestCase {
             sessionID: 1, connectionID: 1, selfNick: "me")
         let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
         XCTAssertTrue(controller.membershipsBySession[sessionUUID, default: []].isEmpty)
+    }
+
+    func testUsersBySessionProjectionPreservesUserSortOrder() {
+        let controller = EngineController()
+        for (nick, prefix) in [("bob", "+" as Character?), ("alice", "@"), ("carol", nil)] {
+            controller.applyUserlistForTest(
+                action: HC_APPLE_USERLIST_INSERT,
+                network: "Libera", channel: "#a", nick: nick,
+                sessionID: 1, connectionID: 1, selfNick: "me",
+                account: nil, host: nil, isMe: false, isAway: false, modePrefix: prefix)
+        }
+        let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
+        XCTAssertEqual(
+            controller.usersBySession[sessionUUID]?.map(\.nick),
+            ["alice", "bob", "carol"],
+            "@ op outranks + voice; unprefixed sorted by nick")
     }
 
     func testSameNickOnTwoConnectionsAreDistinctUsers() {

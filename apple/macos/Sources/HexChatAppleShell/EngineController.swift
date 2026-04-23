@@ -211,7 +211,6 @@ final class EngineController {
     var isRunning = false
     var messages: [ChatMessage] = []
     var sessions: [ChatSession] = []
-    var usersBySession: [UUID: [ChatUser]] = [:]
     var input = ""
 
     var selectedSessionID: UUID?
@@ -227,6 +226,25 @@ final class EngineController {
     private(set) var users: [UUID: User] = [:]
     private(set) var usersByConnectionAndNick: [UserKey: UUID] = [:]
     private(set) var membershipsBySession: [UUID: [ChannelMembership]] = [:]
+
+    var usersBySession: [UUID: [ChatUser]] {
+        var out: [UUID: [ChatUser]] = [:]
+        for (sessionID, memberships) in membershipsBySession {
+            var roster: [ChatUser] = []
+            roster.reserveCapacity(memberships.count)
+            for m in memberships {
+                guard let user = users[m.userID] else { continue }
+                roster.append(
+                    ChatUser(
+                        nick: user.nick, modePrefix: m.modePrefix,
+                        account: user.account, host: user.hostmask,
+                        isMe: user.isMe, isAway: user.isAway))
+            }
+            roster.sort(by: userSort)
+            out[sessionID] = roster
+        }
+        return out
+    }
 
     @discardableResult
     private func upsertUser(
@@ -649,12 +667,14 @@ final class EngineController {
                 isRunning = true
             } else if event.phase == HC_APPLE_LIFECYCLE_STOPPED {
                 isRunning = false
-                usersBySession = [:]
                 sessionByLocator = [:]
                 networks = [:]
                 connections = [:]
                 networksByName = [:]
                 connectionsByServerID = [:]
+                membershipsBySession = [:]
+                users = [:]
+                usersByConnectionAndNick = [:]
                 if let old = systemSessionUUIDStorage {
                     sessions.removeAll { $0.id == old }
                 }
@@ -730,7 +750,7 @@ final class EngineController {
         case HC_APPLE_SESSION_REMOVE:
             if let uuid = sessionByLocator[locator],
                let removed = sessions.first(where: { $0.id == uuid }) {
-                usersBySession[uuid] = nil
+                membershipsBySession[uuid] = nil
                 sessionByLocator[removed.locator] = nil
                 if selectedSessionID == uuid { selectedSessionID = nil }
                 // Evaluated against the still-intact `sessions` array, before the removeAll call below.
@@ -829,57 +849,27 @@ final class EngineController {
         let locator: SessionLocator = event.sessionID > 0
             ? .runtime(id: event.sessionID)
             : .composed(connectionID: connectionID, channel: channel)
-        let uuid = upsertSession(locator: locator, connectionID: connectionID, channel: channel)
+        let sessionID = upsertSession(locator: locator, connectionID: connectionID, channel: channel)
         let nick = event.nick ?? ""
 
         switch event.userlistAction {
         case HC_APPLE_USERLIST_INSERT, HC_APPLE_USERLIST_UPDATE:
             guard !nick.isEmpty else { return }
-            upsertChatUser(from: event, nick: nick, inSession: uuid, connectionID: connectionID)
+            let userID = upsertUser(
+                connectionID: connectionID, nick: nick,
+                account: event.account, hostmask: event.host,
+                isMe: event.isMe, isAway: event.isAway)
+            setMembership(sessionID: sessionID, userID: userID, modePrefix: event.modePrefix)
         case HC_APPLE_USERLIST_REMOVE:
-            guard !nick.isEmpty else { return }
-            let key = nick.lowercased()
-            usersBySession[uuid, default: []].removeAll { $0.id == key }
-            if let userID = usersByConnectionAndNick[UserKey(connectionID: connectionID, nick: nick)] {
-                removeMembership(sessionID: uuid, userID: userID)
-            }
+            guard !nick.isEmpty,
+                  let userID = usersByConnectionAndNick[UserKey(connectionID: connectionID, nick: nick)]
+            else { return }
+            removeMembership(sessionID: sessionID, userID: userID)
         case HC_APPLE_USERLIST_CLEAR:
-            usersBySession[uuid] = []
-            membershipsBySession[uuid] = []
+            membershipsBySession[sessionID] = []
         default:
             break
         }
-
-        usersBySession[uuid, default: []].sort(by: userSort)
-    }
-
-    private func upsertChatUser(
-        from event: RuntimeEvent, nick: String,
-        inSession uuid: UUID, connectionID: UUID
-    ) {
-        // Legacy usersBySession dual-write — read path migrates in Task 5.
-        let candidate = ChatUser(
-            nick: nick,
-            modePrefix: event.modePrefix,
-            account: event.account,
-            host: event.host,
-            isMe: event.isMe,
-            isAway: event.isAway
-        )
-        var roster = usersBySession[uuid, default: []]
-        if let idx = roster.firstIndex(where: { $0.id == candidate.id }) {
-            roster[idx] = candidate
-        } else {
-            roster.append(candidate)
-        }
-        usersBySession[uuid] = roster
-
-        // New storage: dedup User per (connection, nick); set membership per session.
-        let userID = upsertUser(
-            connectionID: connectionID, nick: nick,
-            account: event.account, hostmask: event.host,
-            isMe: event.isMe, isAway: event.isAway)
-        setMembership(sessionID: uuid, userID: userID, modePrefix: event.modePrefix)
     }
 
     private func sessionSort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {
