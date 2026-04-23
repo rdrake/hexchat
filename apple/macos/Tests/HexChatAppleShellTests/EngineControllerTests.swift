@@ -955,7 +955,7 @@ final class EngineControllerTests: XCTestCase {
         let a = UserKey(connectionID: connID, nick: "Alice")
         let b = UserKey(connectionID: connID, nick: "ALICE")
         XCTAssertEqual(a, b, "UserKey equality must be case-insensitive on nick")
-        var seen: Set<UserKey> = [a]
+        let seen: Set<UserKey> = [a]
         XCTAssertTrue(seen.contains(b), "UserKey hash parity")
         let otherConn = UserKey(connectionID: UUID(), nick: "alice")
         XCTAssertNotEqual(a, otherConn, "different connections must yield distinct keys")

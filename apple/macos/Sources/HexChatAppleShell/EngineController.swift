@@ -108,6 +108,9 @@ struct User: Identifiable, Hashable {
     var hostmask: String?
     var isMe: Bool
     var isAway: Bool
+
+    static func == (lhs: User, rhs: User) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 struct ChannelMembership: Identifiable, Hashable {
@@ -116,6 +119,14 @@ struct ChannelMembership: Identifiable, Hashable {
     var modePrefix: Character?
 
     var id: String { "\(sessionID.uuidString)::\(userID.uuidString)" }
+
+    static func == (lhs: ChannelMembership, rhs: ChannelMembership) -> Bool {
+        lhs.sessionID == rhs.sessionID && lhs.userID == rhs.userID
+    }
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(sessionID)
+        hasher.combine(userID)
+    }
 }
 
 struct UserKey: Hashable {
