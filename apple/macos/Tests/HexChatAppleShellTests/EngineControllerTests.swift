@@ -78,10 +78,10 @@ final class EngineControllerTests: XCTestCase {
     }
 
     func testMessageClassifier() {
-        XCTAssertEqual(ChatMessageClassifier.classify(raw: "! failed"), .error)
-        XCTAssertEqual(ChatMessageClassifier.classify(raw: "> /join #a"), .command)
-        XCTAssertEqual(ChatMessageClassifier.classify(raw: "[READY] ready"), .lifecycle)
-        XCTAssertEqual(ChatMessageClassifier.classify(raw: "-notice-"), .notice)
+        XCTAssertEqual(ChatMessageClassifier.classify(raw: "! failed"), .error(body: "failed"))
+        XCTAssertEqual(ChatMessageClassifier.classify(raw: "> /join #a"), .command(body: "/join #a"))
+        XCTAssertEqual(ChatMessageClassifier.classify(raw: "[READY] ready"), .lifecycle(phase: "READY", body: "ready"))
+        XCTAssertEqual(ChatMessageClassifier.classify(raw: "-notice-"), .notice(body: "notice-"))
         XCTAssertEqual(ChatMessageClassifier.classify(raw: "nick has joined #a"), .join)
     }
 
@@ -363,7 +363,7 @@ final class EngineControllerTests: XCTestCase {
         // Before any session exists, route a manually-crafted unattributable message through appendMessage.
         // The message must still land with *some* non-nil UUID (the synthetic system session).
         let controller = EngineController()
-        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error(body: "system error"))
         XCTAssertFalse(controller.messages.isEmpty)
         XCTAssertFalse(controller.sessions.isEmpty)
         XCTAssertEqual(controller.messages.last?.sessionID, controller.sessions.first?.id)
@@ -432,7 +432,7 @@ final class EngineControllerTests: XCTestCase {
 
     func testUnattributedMessageRegistersSystemSessionLocator() {
         let controller = EngineController()
-        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error(body: "system error"))
         let systemConn = controller.systemConnectionUUIDForTest()
         XCTAssertNotNil(
             controller.sessionUUID(for: .composed(connectionID: systemConn, channel: EngineController.SystemSession.channel)),
@@ -638,7 +638,7 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistRawForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: nil, channel: nil, nick: "alice")
-        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error(body: "system error"))
 
         let systemConn = controller.systemConnectionUUIDForTest()
         let systemSessions = controller.sessions.filter {
@@ -655,7 +655,7 @@ final class EngineControllerTests: XCTestCase {
         // systemSessionUUID(); a subsequent userlist-with-NULL-network must
         // reuse that same session, not create a second one.
         let controller = EngineController()
-        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error(body: "system error"))
         controller.applyUserlistRawForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: nil, channel: nil, nick: "alice")
@@ -852,7 +852,7 @@ final class EngineControllerTests: XCTestCase {
     func testSystemConnectionIsNotRegisteredByServerID() {
         let controller = EngineController()
         // Trigger system-session creation.
-        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error(body: "system error"))
         XCTAssertFalse(controller.connections.isEmpty, "system connection must be created")
         XCTAssertTrue(
             controller.connectionsByServerID.isEmpty,
@@ -861,7 +861,7 @@ final class EngineControllerTests: XCTestCase {
 
     func testSystemSessionHasSystemConnectionAndNetwork() {
         let controller = EngineController()
-        controller.appendUnattributedForTest(raw: "! system error", kind: .error)
+        controller.appendUnattributedForTest(raw: "! system error", kind: .error(body: "system error"))
 
         let systemNetworkID = controller.networksByName[EngineController.SystemSession.networkName]
         XCTAssertNotNil(systemNetworkID)
@@ -1336,6 +1336,57 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.membershipsBySession[bUUID]?.count, 2,
                        "#b memberships untouched by a CLEAR on #a")
         XCTAssertEqual(controller.users.count, 2, "Users persist across a single-channel CLEAR")
+    }
+
+    // MARK: - Phase 5 — message structuring
+
+    func testMessageAuthorIsNilByDefaultAndCarriesNickAndOptionalUserID() {
+        let connID = UUID()
+        let userID = UUID()
+        let nilAuthor: MessageAuthor? = nil
+        XCTAssertNil(nilAuthor)
+        let bare = MessageAuthor(nick: "alice", userID: nil)
+        XCTAssertEqual(bare.nick, "alice")
+        XCTAssertNil(bare.userID)
+        let resolved = MessageAuthor(nick: "alice", userID: userID)
+        XCTAssertEqual(resolved.userID, userID)
+        _ = connID  // silences unused
+    }
+
+    func testChatMessageKindHoldsTypedPayloads() {
+        let join: ChatMessageKind = .join
+        let part: ChatMessageKind = .part(reason: "later")
+        let kick: ChatMessageKind = .kick(target: "bob", reason: "spam")
+        let nick: ChatMessageKind = .nickChange(from: "alice", to: "alice_")
+        let mode: ChatMessageKind = .modeChange(modes: "+o", args: "alice")
+        let priv: ChatMessageKind = .message(body: "hi")
+        XCTAssertEqual(join, .join)
+        XCTAssertEqual(part, .part(reason: "later"))
+        XCTAssertNotEqual(part, .part(reason: nil))
+        XCTAssertEqual(kick, .kick(target: "bob", reason: "spam"))
+        XCTAssertEqual(nick, .nickChange(from: "alice", to: "alice_"))
+        XCTAssertEqual(mode, .modeChange(modes: "+o", args: "alice"))
+        XCTAssertEqual(priv, .message(body: "hi"))
+    }
+
+    func testChatMessageBodyComputedFromKindForFreeTextCases() {
+        let m = ChatMessage(
+            sessionID: UUID(), raw: "hi", kind: .message(body: "hi"),
+            author: nil, timestamp: Date())
+        XCTAssertEqual(m.body, "hi")
+        let j = ChatMessage(
+            sessionID: UUID(), raw: "* alice has joined #a", kind: .join,
+            author: MessageAuthor(nick: "alice", userID: nil), timestamp: Date())
+        XCTAssertNil(j.body, "structured kinds have no free-form body")
+        XCTAssertEqual(j.author?.nick, "alice")
+    }
+
+    func testChatMessageTimestampDefaultsToConstructorArgument() {
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        let m = ChatMessage(
+            sessionID: UUID(), raw: "x", kind: .error(body: "x"),
+            author: nil, timestamp: t)
+        XCTAssertEqual(m.timestamp, t)
     }
 }
 #else

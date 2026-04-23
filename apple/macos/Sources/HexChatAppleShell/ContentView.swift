@@ -178,9 +178,13 @@ struct ContentView: View {
         switch kind {
         case .message: return "MSG"
         case .notice: return "NTC"
+        case .action: return "ACT"
         case .join: return "JOIN"
         case .part: return "PART"
         case .quit: return "QUIT"
+        case .kick: return "KICK"
+        case .nickChange: return "NICK"
+        case .modeChange: return "MODE"
         case .command: return "CMD"
         case .error: return "ERR"
         case .lifecycle: return "LIFE"
@@ -191,9 +195,11 @@ struct ContentView: View {
         switch kind {
         case .error: return Color(red: 0.72, green: 0.19, blue: 0.16)
         case .join: return Color(red: 0.17, green: 0.55, blue: 0.25)
-        case .part, .quit: return Color(red: 0.82, green: 0.46, blue: 0.14)
+        case .part, .quit, .kick: return Color(red: 0.82, green: 0.46, blue: 0.14)
+        case .nickChange, .modeChange: return Color(red: 0.82, green: 0.46, blue: 0.14)
         case .command: return Color(red: 0.18, green: 0.42, blue: 0.66)
         case .notice, .lifecycle: return Color(red: 0.44, green: 0.46, blue: 0.49)
+        case .action: return Color(red: 0.44, green: 0.46, blue: 0.49)
         case .message: return Color(red: 0.30, green: 0.33, blue: 0.36)
         }
     }

@@ -36,15 +36,24 @@ struct NetworkSection: Identifiable {
     let sessions: [ChatSession]
 }
 
-enum ChatMessageKind: String {
-    case message
-    case notice
+struct MessageAuthor: Hashable {
+    let nick: String
+    let userID: UUID?
+}
+
+enum ChatMessageKind: Hashable {
+    case message(body: String)
+    case notice(body: String)
+    case action(body: String)
+    case command(body: String)
+    case error(body: String)
+    case lifecycle(phase: String, body: String)
     case join
-    case part
-    case quit
-    case command
-    case error
-    case lifecycle
+    case part(reason: String?)
+    case quit(reason: String?)
+    case kick(target: String, reason: String?)
+    case nickChange(from: String, to: String)
+    case modeChange(modes: String, args: String?)
 }
 
 struct ChatMessage: Identifiable {
@@ -52,6 +61,32 @@ struct ChatMessage: Identifiable {
     let sessionID: UUID
     let raw: String
     let kind: ChatMessageKind
+    let author: MessageAuthor?
+    let timestamp: Date
+
+    init(
+        sessionID: UUID,
+        raw: String,
+        kind: ChatMessageKind,
+        author: MessageAuthor? = nil,
+        timestamp: Date = Date()
+    ) {
+        self.sessionID = sessionID
+        self.raw = raw
+        self.kind = kind
+        self.author = author
+        self.timestamp = timestamp
+    }
+
+    var body: String? {
+        switch kind {
+        case .message(let b), .notice(let b), .action(let b),
+            .command(let b), .error(let b), .lifecycle(_, let b):
+            return b
+        default:
+            return nil
+        }
+    }
 }
 
 /// View-facing DTO assembled on demand from `User` + `ChannelMembership` via the
@@ -138,32 +173,30 @@ struct UserKey: Hashable {
 }
 
 enum ChatMessageClassifier {
-    static func classify(raw: String, fallback: ChatMessageKind = .message) -> ChatMessageKind {
-        if raw.hasPrefix("[STARTING]") || raw.hasPrefix("[READY]") || raw.hasPrefix("[STOPPING]") || raw.hasPrefix("[STOPPED]") {
-            return .lifecycle
+    static func classify(raw: String, fallback: ChatMessageKind = .message(body: "")) -> ChatMessageKind {
+        let isLifecycle =
+            raw.hasPrefix("[STARTING]") || raw.hasPrefix("[READY]")
+            || raw.hasPrefix("[STOPPING]") || raw.hasPrefix("[STOPPED]")
+        if isLifecycle {
+            // Body is the raw line minus the leading `[PHASE] ` token.
+            let phase = raw.prefix(while: { $0 != "]" }).dropFirst()  // "[STARTING" → "STARTING"
+            let body = raw.drop(while: { $0 != "]" }).dropFirst().drop(while: { $0 == " " })
+            return .lifecycle(phase: String(phase), body: String(body))
         }
-        if raw.hasPrefix("!") {
-            return .error
-        }
-        if raw.hasPrefix(">") {
-            return .command
-        }
-
+        if raw.hasPrefix("!") { return .error(body: String(raw.dropFirst().drop(while: { $0 == " " }))) }
+        if raw.hasPrefix(">") { return .command(body: String(raw.dropFirst().drop(while: { $0 == " " }))) }
         let lower = raw.lowercased()
-        if lower.contains(" has joined") || lower.contains(" joined ") {
-            return .join
+        if lower.contains(" has joined") || lower.contains(" joined ") { return .join }
+        if lower.contains(" has left") || lower.contains(" left ") { return .part(reason: nil) }
+        if lower.contains(" quit") { return .quit(reason: nil) }
+        if raw.hasPrefix("-") { return .notice(body: String(raw.dropFirst().drop(while: { $0 == " " }))) }
+        // Default body for the message case is the raw text.
+        switch fallback {
+        case .message:
+            return .message(body: raw)
+        default:
+            return fallback
         }
-        if lower.contains(" has left") || lower.contains(" left ") {
-            return .part
-        }
-        if lower.contains(" quit") {
-            return .quit
-        }
-        if raw.hasPrefix("-") {
-            return .notice
-        }
-
-        return fallback
     }
 }
 
@@ -427,7 +460,7 @@ final class EngineController {
         withUnsafePointer(to: config) { configPtr in
             let started = hc_apple_runtime_start(configPtr, engineEventCallback, callbackUserdata)
             if started == 0 {
-                appendMessage(raw: "! runtime start failed", kind: .error)
+                appendMessage(raw: "! runtime start failed", kind: .error(body: "runtime start failed"))
             }
         }
     }
@@ -454,7 +487,7 @@ final class EngineController {
             guard let uuid = selectedSessionID else { return 0 }
             return numericRuntimeSessionID(forSelection: uuid)
         }()
-        appendMessage(raw: "> \(trimmed)", kind: .command)
+        appendMessage(raw: "> \(trimmed)", kind: .command(body: trimmed))
         trimmed.withCString { cString in
             let code: Int32
             if targetSessionID > 0 {
@@ -463,7 +496,7 @@ final class EngineController {
                 code = hc_apple_runtime_post_command(cString)
             }
             if code == 0 {
-                appendMessage(raw: "! failed to post command", kind: .error)
+                appendMessage(raw: "! failed to post command", kind: .error(body: "failed to post command"))
             }
         }
     }
@@ -662,7 +695,7 @@ final class EngineController {
             }
         case HC_APPLE_EVENT_LIFECYCLE:
             if let text = event.text {
-                appendMessage(raw: "[\(event.phase.name)] \(text)", kind: .lifecycle)
+                appendMessage(raw: "[\(event.phase.name)] \(text)", kind: .lifecycle(phase: event.phase.name, body: text))
             }
             if event.phase == HC_APPLE_LIFECYCLE_READY {
                 isRunning = true
@@ -685,7 +718,8 @@ final class EngineController {
         case HC_APPLE_EVENT_COMMAND:
             if event.code != 0 {
                 let commandText = event.text ?? ""
-                appendMessage(raw: "! command rejected (\(event.code)): \(commandText)", kind: .error)
+                let errorBody = "command rejected (\(event.code)): \(commandText)"
+                appendMessage(raw: "! \(errorBody)", kind: .error(body: errorBody))
             }
         case HC_APPLE_EVENT_USERLIST:
             handleUserlistEvent(event)
