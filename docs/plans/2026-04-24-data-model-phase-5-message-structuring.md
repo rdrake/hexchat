@@ -4,7 +4,9 @@
 
 **Goal:** Replace heuristic text-classification of channel/server membership lines (`alice has joined #a`) in the Apple shell with a typed `ChatMessageKind` carrying structured fields (`.join`, `.part(reason:)`, `.quit(reason:)`, `.kick(target:reason:)`, `.nickChange(from:to:)`, `.modeChange(modes:args:)`), driven by new typed `hc_apple_event_kind` variants emitted from the C side via a single new `fe_text_event` callback short-circuit at `text_emit`. Author identity is now first-class on every message: `MessageAuthor { nick: String, userID: UUID? }` resolves through Phase 4's `usersByConnectionAndNick` index.
 
-**Architecture:** One new core callback `fe_text_event(sess, xp_te_index, args, nargs, timestamp) -> int` runs at the top of `src/common/text.c:text_emit` immediately after `plugin_emit_print` and before the alert/sound/display switch. Frontends that handle a given `XP_TE_*` event return 1 to short-circuit the text formatter (skipping `display_event` for that frontend); fe-gtk and fe-text always return 0 so their behaviour is unchanged. The Apple frontend dispatches recognized `XP_TE_*` codes (JOIN/UJOIN, PART/UPART, PARTREASON/UPARTREASON, QUIT, KICK/UKICK, CHANGENICK, CHANMODEGEN, RAWMODES) to three new typed events: `HC_APPLE_EVENT_MEMBERSHIP_CHANGE`, `HC_APPLE_EVENT_NICK_CHANGE`, `HC_APPLE_EVENT_MODE_CHANGE`. `inbound_quit`/`inbound_nick` already fan out per-session in core, so the Swift consumer appends one typed `ChatMessage` per arriving event without re-implementing fan-out. Swift `ChatMessageKind` becomes an associated-value enum; `ChatMessage` gains `author: MessageAuthor?` + `body: String?` + `timestamp: Date`, and `raw` stays as the back-compat back-fill render. The `ChatMessageClassifier` keeps its prefix-style branches (lifecycle/`!`/`>`/`-`) for synthetic apple-runtime lines but loses the join/part/quit text heuristics — those paths can no longer fire in production because the typed-event short-circuit suppresses the corresponding `display_event`.
+**Architecture:** One new core callback `fe_text_event(sess, xp_te_index, args, nargs, timestamp) -> int` runs in `src/common/text.c:text_emit` **after `plugin_emit_print` returns 0, after the post-plugin tab-state restoration, and after the `is_session(sess)` guard** — i.e. immediately before the alert/sound/display switch. Frontends that handle a given `XP_TE_*` event return 1 to short-circuit the text formatter (skipping `display_event` for that frontend); fe-gtk and fe-text always return 0 so their behaviour is unchanged. The Apple frontend dispatches recognized `XP_TE_*` codes (JOIN/UJOIN, PART/UPART, PARTREASON/UPARTREASON, QUIT, KICK/UKICK, CHANGENICK/UCHANGENICK, CHANMODEGEN — *not* RAWMODES; see "Mode-change dedup" below) to three new typed events: `HC_APPLE_EVENT_MEMBERSHIP_CHANGE`, `HC_APPLE_EVENT_NICK_CHANGE`, `HC_APPLE_EVENT_MODE_CHANGE`. The `time_t timestamp` parameter from `text_emit` is threaded end-to-end through the new emit functions and the `hc_apple_event` struct so the Swift `ChatMessage.timestamp` reflects producer time instead of `Date()` synthesis. `inbound_quit`/`inbound_nick` already fan out per-session in core, so the Swift consumer appends one typed `ChatMessage` per arriving event without re-implementing fan-out. Swift `ChatMessageKind` becomes an associated-value enum; `ChatMessage` gains `author: MessageAuthor?` + `body: String?` + `timestamp: Date`, and `raw` stays as the back-compat back-fill render. The `ChatMessageClassifier` keeps its prefix-style branches (lifecycle/`!`/`>`/`-`) for synthetic apple-runtime lines but loses the join/part/quit text heuristics in Task 9 — those paths can no longer fire in production because the typed-event short-circuit suppresses the corresponding `display_event`.
+
+**Mode-change dedup (RAWMODES vs CHANMODEGEN):** `src/common/modes.c` emits `XP_TE_RAWMODES` *and* one `XP_TE_CHANMODEGEN` per mode flag when `prefs.hex_irc_raw_modes` is TRUE. Intercepting both would double-count the same MODE message. Phase 5 intercepts **only `CHANMODEGEN`** (the typed per-mode form). `RAWMODES` falls through to `display_event` as a regular `LOG_LINE` (the user-visible "raw line" the pref opts in to), classified as `.message(body:)` on the Swift side. If a future phase wants typed raw modes too, it picks one as canonical and silences the other.
 
 **Tech Stack:** C (HexChat core, fe-apple producer + fe-gtk/fe-text stub), Swift 5.10+, SwiftUI Observation framework, Foundation (`Date`, `UUID`), XCTest, GLib / GTest (for `test-runtime-events.c`), Meson build, swift-format. No new external dependencies.
 
@@ -131,9 +133,12 @@ The relevant `XP_TE_*` constants and their args (from `src/common/textevents.in`
 | `XP_TE_QUIT`        | nick, reason, host, *(unused)*                   | `inbound.c:1022/1027` (`inbound_quit`) |
 | `XP_TE_KICK`        | kicker, kicked, channel, reason                  | `inbound.c:940` (`inbound_kick`)       |
 | `XP_TE_UKICK`       | self-nick, channel, kicker, reason               | `inbound.c:788` (`inbound_ukick`)      |
-| `XP_TE_CHANGENICK`  | old-nick, new-nick, *(unused)*, *(unused)*       | `inbound.c:606` (`inbound_nick`)       |
-| `XP_TE_CHANMODEGEN` | actor, sign, mode-char, target, *(unused)*       | `modes.c:567/572`                      |
-| `XP_TE_RAWMODES`    | actor, mode-string, *(unused)*, *(unused)*       | `modes.c:718`                          |
+| `XP_TE_CHANGENICK`  | old-nick, new-nick, *(unused)*, *(unused)*       | `inbound.c:606` (`inbound_nick`, other-user case) |
+| `XP_TE_UCHANGENICK` | self-nick (old), new-nick, *(unused)*, *(unused)* | `inbound.c:602` (`inbound_nick`, self case)       |
+| `XP_TE_CHANMODEGEN` | actor, sign-string, mode-char, `"channel arg"` (or `"channel"` when no arg) | `modes.c:567/572` |
+| `XP_TE_RAWMODES`    | actor, mode-string-with-args, *(unused)*, *(unused)* | `modes.c:718` (only when `prefs.hex_irc_raw_modes && !numeric_324`) |
+
+**CHANMODEGEN arg shape** (verified at `modes.c:566-573`): `args[3]` is composed by `g_strdup_printf ("%s %s", chan, arg)` when the mode has an arg, else just `chan`. So Apple-side dispatch must split on the first space: head = channel (already known via `sess->channel`, ignore), tail = mode arg (may be empty). The mode itself is a 2-char string assembled from `args[1]` (sign, "+" or "-") and `args[2]` (single mode char like "o").
 
 **Important:** `inbound_quit` (line 1011) and `inbound_nick` already iterate `sess_list` and emit one `XP_TE_QUIT` / `XP_TE_CHANGENICK` *per session* the user appears in. The Swift consumer therefore receives one typed event per session and must NOT re-fan-out — that would double-print. Tests assert this: a multi-channel quit produces N events arriving on N sessions, not 1 event with internal fan-out.
 
@@ -158,21 +163,22 @@ The relevant `XP_TE_*` constants and their args (from `src/common/textevents.in`
 3. `ChatMessage` carries `author: MessageAuthor?`, `body: String?` (computed from `kind` for free-text cases, `nil` for typed structured cases), `timestamp: Date` (set by the producer; defaults to `Date()` for Swift-synthesized messages). `raw: String` is preserved for back-compat / fallback rendering.
 4. `EngineController.resolveAuthor(connectionID:nick:)` resolves an author's `userID` via `usersByConnectionAndNick`; returns `MessageAuthor(nick: nick, userID: nil)` when no `User` exists yet.
 5. `hc_apple_event_kind` adds three variants: `HC_APPLE_EVENT_MEMBERSHIP_CHANGE = 5`, `HC_APPLE_EVENT_NICK_CHANGE = 6`, `HC_APPLE_EVENT_MODE_CHANGE = 7`. `hc_apple_membership_action` enum: `JOIN = 0 / PART = 1 / QUIT = 2 / KICK = 3`.
-6. `hc_apple_event` struct gains: `hc_apple_membership_action membership_action;`, `const char *target_nick;` (KICK target / NICK new-nick), `const char *reason;`, `const char *modes;`, `const char *modes_args;`. All zero/NULL for non-applicable kinds.
-7. `hc_apple_runtime_emit_membership_change`, `_emit_nick_change`, `_emit_mode_change` exist in `apple-runtime.h`/`.c` and synthesize correctly-shaped events.
-8. `fe_text_event(session *sess, int xp_te_index, char **args, int nargs, time_t timestamp) -> int` is declared in `src/common/fe.h`, called from `src/common/text.c:text_emit` immediately after `plugin_emit_print` returns 0; nonzero return short-circuits `text_emit`.
-9. `fe-gtk` and `fe-text` provide `fe_text_event` stubs returning 0. `fe-apple` implements `fe_text_event` to dispatch JOIN/UJOIN, PART/UPART/PARTREASON/UPARTREASON, QUIT, KICK/UKICK, CHANGENICK, CHANMODEGEN, RAWMODES to typed emits and return 1; all other indices return 0.
+6. `hc_apple_event` struct gains: `hc_apple_membership_action membership_action;`, `const char *target_nick;` (KICK target / NICK new-nick), `const char *reason;`, `const char *modes;`, `const char *modes_args;`, `int64_t timestamp_seconds;` (producer-side `time_t` widened to int64; 0 means "no timestamp / use receiver clock"). All zero/NULL for non-applicable kinds.
+7. `hc_apple_runtime_emit_membership_change`, `_emit_nick_change`, `_emit_mode_change` exist in `apple-runtime.h`/`.c`, take a `time_t timestamp` parameter, and synthesize correctly-shaped events with `timestamp_seconds` populated.
+8. `fe_text_event(session *sess, int xp_te_index, char **args, int nargs, time_t timestamp) -> int` is declared in `src/common/fe.h`, called from `src/common/text.c:text_emit` after `plugin_emit_print` returns 0, after the post-plugin tab-state restoration block, and after the `is_session(sess)` guard — i.e. immediately before the alert/sound/display switch on `index`. Nonzero return short-circuits `text_emit`.
+9. `fe-gtk` and `fe-text` provide `fe_text_event` stubs returning 0. `fe-apple` implements `fe_text_event` to dispatch JOIN/UJOIN, PART/UPART/PARTREASON/UPARTREASON, QUIT, KICK/UKICK, CHANGENICK/UCHANGENICK, CHANMODEGEN to typed emits (passing the producer `timestamp` through) and return 1; all other indices — including `XP_TE_RAWMODES` — return 0.
 10. Swift `handleRuntimeEvent` dispatches `HC_APPLE_EVENT_MEMBERSHIP_CHANGE` / `_NICK_CHANGE` / `_MODE_CHANGE` to dedicated handlers that append a typed `ChatMessage` with the correct `kind` and resolved `author`.
 11. `ChatMessageClassifier` no longer matches `" has joined" / " has left" / " quit"` — those branches are deleted because the typed path replaces them. Lifecycle/`!`/`>`/`-` prefix branches remain (apple-runtime synthetic lines still use them).
 12. **Multi-channel QUIT test passes:** alice in `#a` and `#b` on the same connection, when `XP_TE_QUIT` fires for alice (which `inbound_quit` does once per session in core), produces one `.quit` `ChatMessage` in `#a` and one in `#b` — no extra fan-out on Swift side.
 13. **NICK change fan-out test passes:** alice → alice_ in two channels produces one `.nickChange(from:"alice", to:"alice_")` per channel.
 14. **Author userID resolution test passes:** when a `.join` arrives for a nick that's already in a `User` record (because a prior `USERLIST_INSERT` populated it), `author.userID` is the matching UUID; when no `User` exists yet, `author.userID == nil` and only `author.nick` is set.
-15. **C-side end-to-end test passes (`test-runtime-events.c`):** a synthetic call to `hc_apple_runtime_emit_membership_change` produces an event at the callback with the expected `kind`, `membership_action`, `nick`, `target_nick`, and `reason` fields.
-16. **`fe_text_event` short-circuit test passes (`test-runtime-events.c` extension):** invoking `text_emit (XP_TE_JOIN, sess, "nick", "#chan", "ip", "acct", 0)` (under the apple-frontend) results in (a) `display_event` NOT firing for that index, and (b) one `HC_APPLE_EVENT_MEMBERSHIP_CHANGE` event arriving with `membership_action == JOIN`.
-17. All Phase 1–4 tests (77 baseline) still pass. New Phase 5 tests cover typed kind dispatch, author resolution, multi-channel QUIT/NICK, mode-change forwarding, and classifier retirement.
-18. `swift build`, `swift test`, `swift-format lint -r Sources Tests` all pass (zero diagnostics or one matching established pattern).
-19. `meson compile -C builddir` and `meson test -C builddir` (specifically `fe-apple-runtime-events`) all pass.
-20. `docs/plans/2026-04-21-data-model-migration.md` roadmap table marks Phase 5 as ✅ with a link to this plan doc.
+15. **Producer timestamp test passes:** when a typed event arrives with `timestamp_seconds != 0`, the resulting `ChatMessage.timestamp` equals `Date(timeIntervalSince1970:)` of that value (within 1 ms tolerance). When `timestamp_seconds == 0`, `ChatMessage.timestamp` is set to the current `Date()` at handle time.
+16. **C-side typed-emit test passes (`test-runtime-events.c`):** a synthetic call to `hc_apple_runtime_emit_membership_change` produces an event at the callback with the expected `kind`, `membership_action`, `nick`, `target_nick`, `reason`, and `timestamp_seconds` fields. Same coverage for `_emit_nick_change` and `_emit_mode_change`.
+17. **`fe_text_event` apple-frontend dispatch test passes (`test-runtime-events.c` extension):** directly invoking `fe_text_event (sess, XP_TE_JOIN, args, PDIWORDS-1, 1700000000)` against the apple-frontend implementation (with a hand-built session structure that satisfies `hc_apple_session_*` helpers) emits one `HC_APPLE_EVENT_MEMBERSHIP_CHANGE` with `membership_action == JOIN` and `timestamp_seconds == 1700000000`. (We deliberately do NOT invoke `text_emit` from the unit test — see Task 6 Step 2 for the rationale; the full `text_emit → fe_text_event → typed event` path is exercised via the manual smoke step in Task 10.)
+18. All Phase 1–4 tests (77 baseline) still pass. New Phase 5 tests cover typed kind dispatch, author resolution, multi-channel QUIT/NICK, mode-change forwarding, classifier retirement, and named-arg ordering for the new test helpers (regression guard against the Phase 4 helper-arg-order bug).
+19. `swift build`, `swift test`, `swift-format lint -r Sources Tests` all pass (zero diagnostics or one matching established pattern).
+20. `meson compile -C builddir` and `meson test -C builddir` (specifically `fe-apple-runtime-events`) all pass.
+21. `docs/plans/2026-04-21-data-model-migration.md` roadmap table marks Phase 5 as ✅ with a link to this plan doc.
 
 ---
 
@@ -336,26 +342,37 @@ struct ChatMessage: Identifiable {
 | `appendMessage(raw: "! cmd rejected: ...", kind: .error)`         | `appendMessage(raw: ..., kind: .error(body: "cmd rejected: ..."))`  |
 | `appendMessage(raw: "> trimmed", kind: .command)`                 | `appendMessage(raw: ..., kind: .command(body: trimmed))`            |
 
-The classifier's return value is now `ChatMessageKind` (associated-value); update its body to construct cases with the relevant text:
+The classifier's return value is now `ChatMessageKind` (associated-value). Keep its existing branch shape — the heuristic JOIN/PART/QUIT branches stay until Task 9 retires them; Task 1 only adapts to the new enum case constructors. **Do not delete the heuristics in Task 1** — Task 9 owns that change so the test churn is local. Construct cases with the matching text:
 
 ```swift
 enum ChatMessageClassifier {
-    static func classify(raw: String) -> ChatMessageKind {
+    static func classify(raw: String, fallback: ChatMessageKind = .message(body: "")) -> ChatMessageKind {
         if raw.hasPrefix("[STARTING]") || raw.hasPrefix("[READY]")
             || raw.hasPrefix("[STOPPING]") || raw.hasPrefix("[STOPPED]") {
             // Body is the raw line minus the leading `[PHASE] ` token.
-            let phase = raw.prefix { $0 != "]" }.dropFirst()  // "[STARTING" → "STARTING"
-            let body = raw.drop { $0 != "]" }.dropFirst().drop(while: { $0 == " " })
+            let phase = raw.prefix(while: { $0 != "]" }).dropFirst()  // "[STARTING" → "STARTING"
+            let body = raw.drop(while: { $0 != "]" }).dropFirst().drop(while: { $0 == " " })
             return .lifecycle(phase: String(phase), body: String(body))
         }
         if raw.hasPrefix("!") { return .error(body: String(raw.dropFirst().drop(while: { $0 == " " }))) }
         if raw.hasPrefix(">") { return .command(body: String(raw.dropFirst().drop(while: { $0 == " " }))) }
+        let lower = raw.lowercased()
+        if lower.contains(" has joined") || lower.contains(" joined ") { return .join }
+        if lower.contains(" has left") || lower.contains(" left ") { return .part(reason: nil) }
+        if lower.contains(" quit") { return .quit(reason: nil) }
         if raw.hasPrefix("-") { return .notice(body: String(raw.dropFirst().drop(while: { $0 == " " }))) }
-        // Heuristic JOIN/PART/QUIT branches REMOVED — typed events handle those in Task 6/8.
-        return .message(body: raw)
+        // Default body for the message case is the raw text.
+        switch fallback {
+        case .message:
+            return .message(body: raw)
+        default:
+            return fallback
+        }
     }
 }
 ```
+
+(The `fallback` parameter is preserved because existing callers pass it; Task 9 will drop it when retiring the heuristics.)
 
 In `appendMessage`, callers may also want to pass `event` so timestamp/author defaults can be derived. Defer richer wiring to Task 8 — for Step 4, just keep the existing `appendMessage(raw:, kind:, event:)` signature and pass `author: nil, timestamp: Date()` defaults.
 
@@ -523,6 +540,8 @@ typedef struct
     const char *reason;            /* PART/QUIT/KICK reason */
     const char *modes;             /* MODE_CHANGE: mode characters (e.g. "+o-v") */
     const char *modes_args;        /* MODE_CHANGE: args (e.g. "alice bob"); NULL if none */
+    /* Producer-side time_t widened to int64. 0 means "use receiver clock". */
+    int64_t timestamp_seconds;
 } hc_apple_event;
 ```
 
@@ -553,6 +572,9 @@ fileprivate struct RuntimeEvent {
     let reason: String?
     let modes: String?
     let modesArgs: String?
+    /// Producer-side `time_t` widened to int64. 0 means "no producer timestamp;
+    /// the consumer uses Date() at handle time."
+    let timestampSeconds: Int64
 
     var userlistAction: hc_apple_userlist_action {
         hc_apple_userlist_action(rawValue: UInt32(code))
@@ -600,7 +622,8 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
         targetNick: copiedTarget,
         reason: copiedReason,
         modes: copiedModes,
-        modesArgs: copiedModesArgs
+        modesArgs: copiedModesArgs,
+        timestampSeconds: raw.timestamp_seconds
     )
 }
 ```
@@ -614,7 +637,8 @@ membershipAction: HC_APPLE_MEMBERSHIP_JOIN,  // ignored when kind != MEMBERSHIP_
 targetNick: nil,
 reason: nil,
 modes: nil,
-modesArgs: nil
+modesArgs: nil,
+timestampSeconds: 0   // 0 → consumer falls back to Date()
 ```
 
 **Step 3: Build C + Swift.**
@@ -667,14 +691,16 @@ void hc_apple_runtime_emit_membership_change (hc_apple_membership_action action,
                                               const char *host,
                                               uint64_t session_id,
                                               uint64_t connection_id,
-                                              const char *self_nick);
+                                              const char *self_nick,
+                                              time_t timestamp);
 void hc_apple_runtime_emit_nick_change (const char *network,
                                         const char *channel,
                                         const char *nick,
                                         const char *target_nick,
                                         uint64_t session_id,
                                         uint64_t connection_id,
-                                        const char *self_nick);
+                                        const char *self_nick,
+                                        time_t timestamp);
 void hc_apple_runtime_emit_mode_change (const char *network,
                                         const char *channel,
                                         const char *nick,
@@ -682,8 +708,11 @@ void hc_apple_runtime_emit_mode_change (const char *network,
                                         const char *modes_args,
                                         uint64_t session_id,
                                         uint64_t connection_id,
-                                        const char *self_nick);
+                                        const char *self_nick,
+                                        time_t timestamp);
 ```
+
+(`time_t` is included via `<time.h>`; add the include to `hexchat-apple-public.h` if not already present.)
 
 **Step 2: Implement in `apple-runtime.c`.** Mirror the existing `hc_apple_runtime_emit_session` body — zero-init the event struct, set the relevant fields, dispatch to the registered callback. Place after the existing `hc_apple_runtime_emit_session`:
 
@@ -699,7 +728,8 @@ hc_apple_runtime_emit_membership_change (hc_apple_membership_action action,
                                          const char *host,
                                          uint64_t session_id,
                                          uint64_t connection_id,
-                                         const char *self_nick)
+                                         const char *self_nick,
+                                         time_t timestamp)
 {
     hc_apple_event event = {0};
     event.kind = HC_APPLE_EVENT_MEMBERSHIP_CHANGE;
@@ -714,6 +744,7 @@ hc_apple_runtime_emit_membership_change (hc_apple_membership_action action,
     event.session_id = session_id;
     event.connection_id = connection_id;
     event.self_nick = self_nick;
+    event.timestamp_seconds = (int64_t)timestamp;
     hc_apple_runtime_dispatch (&event);
 }
 
@@ -724,7 +755,8 @@ hc_apple_runtime_emit_nick_change (const char *network,
                                    const char *target_nick,
                                    uint64_t session_id,
                                    uint64_t connection_id,
-                                   const char *self_nick)
+                                   const char *self_nick,
+                                   time_t timestamp)
 {
     hc_apple_event event = {0};
     event.kind = HC_APPLE_EVENT_NICK_CHANGE;
@@ -735,6 +767,7 @@ hc_apple_runtime_emit_nick_change (const char *network,
     event.session_id = session_id;
     event.connection_id = connection_id;
     event.self_nick = self_nick;
+    event.timestamp_seconds = (int64_t)timestamp;
     hc_apple_runtime_dispatch (&event);
 }
 
@@ -746,7 +779,8 @@ hc_apple_runtime_emit_mode_change (const char *network,
                                    const char *modes_args,
                                    uint64_t session_id,
                                    uint64_t connection_id,
-                                   const char *self_nick)
+                                   const char *self_nick,
+                                   time_t timestamp)
 {
     hc_apple_event event = {0};
     event.kind = HC_APPLE_EVENT_MODE_CHANGE;
@@ -758,6 +792,7 @@ hc_apple_runtime_emit_mode_change (const char *network,
     event.session_id = session_id;
     event.connection_id = connection_id;
     event.self_nick = self_nick;
+    event.timestamp_seconds = (int64_t)timestamp;
     hc_apple_runtime_dispatch (&event);
 }
 ```
@@ -820,17 +855,30 @@ In `test_runtime_events_lifecycle_and_command_path`, after the existing `hc_appl
 ```c
 hc_apple_runtime_emit_membership_change (
     HC_APPLE_MEMBERSHIP_JOIN, "runtime-net", "#runtime", "join-user",
-    NULL, NULL, NULL, NULL, 42, 0, NULL);
+    NULL, NULL, NULL, NULL, 42, 0, NULL, 1700000000);
 hc_apple_runtime_emit_membership_change (
     HC_APPLE_MEMBERSHIP_KICK, "runtime-net", "#runtime", "kicker",
-    "victim", "reason-text", NULL, NULL, 42, 0, NULL);
+    "victim", "reason-text", NULL, NULL, 42, 0, NULL, 0);
 hc_apple_runtime_emit_nick_change (
-    "runtime-net", "#runtime", "old-nick", "new-nick", 42, 0, NULL);
+    "runtime-net", "#runtime", "old-nick", "new-nick", 42, 0, NULL, 0);
 hc_apple_runtime_emit_mode_change (
-    "runtime-net", "#runtime", "actor", "+o-v", "alice bob", 42, 0, NULL);
+    "runtime-net", "#runtime", "actor", "+o-v", "alice bob", 42, 0, NULL, 0);
 ```
 
-And add four `g_assert_true (state.saw_*)` calls at the end.
+The JOIN call uses `1700000000` to verify producer-time threading. Extend the JOIN detection in `runtime_event_cb`:
+
+```c
+if (event->membership_action == HC_APPLE_MEMBERSHIP_JOIN &&
+    event->nick && strcmp (event->nick, "join-user") == 0 &&
+    event->channel && strcmp (event->channel, "#runtime") == 0 &&
+    event->target_nick == NULL && event->reason == NULL &&
+    event->timestamp_seconds == 1700000000)
+{
+    state->saw_membership_join = TRUE;
+}
+```
+
+Add four `g_assert_true (state.saw_*)` calls at the end (`saw_membership_join`, `saw_membership_kick`, `saw_nick_change`, `saw_mode_change`).
 
 **Step 4: Build & test.**
 
@@ -863,6 +911,26 @@ git commit -m "fe-apple: emit typed membership/nick/mode events from runtime"
 - Modify: `src/fe-gtk/fe-gtk.c` (or wherever fe-gtk implements its other `fe_*` callbacks — find via `grep -l "^fe_set_topic" src/fe-gtk/*.c`).
 - Modify: `src/fe-text/fe-text.c`.
 - Modify: `src/fe-apple/apple-frontend.c` (stub returning 0).
+- Modify: `src/fe-apple/test-runtime-events.c` (failing C test asserting the apple stub returns 0 for an arbitrary index, *before* Task 6 implements the dispatch).
+
+**Step 0: Write the failing C test (TDD discipline for the C side).** Append to `test-runtime-events.c`:
+
+```c
+static void
+test_apple_fe_text_event_stub_returns_zero (void)
+{
+    /* In Task 5, fe_text_event in apple-frontend.c is a stub that returns 0
+     * for every index. Task 6 replaces this with a real dispatch table that
+     * returns 1 for the recognized XP_TE_* codes. Pinning the stub behaviour
+     * here lets Task 6's dispatch tests prove the stub was actually replaced. */
+    char *args[PDIWORDS];
+    for (int i = 0; i < PDIWORDS; i++) args[i] = (char *)"";
+    /* No session is required to exercise the stub; null is fine. */
+    g_assert_cmpint (fe_text_event (NULL, /* arbitrary index */ 0, args, PDIWORDS, 0), ==, 0);
+}
+```
+
+Register in `main()`. Run: expected PASS once Task 5's stub lands. Task 6 will then *delete* this test (or invert it) when the dispatch table starts returning 1 for known codes.
 
 **Step 1: Declare in `fe.h`.** Add near the other text-related callbacks (around `fe_print_text`):
 
@@ -875,10 +943,13 @@ int fe_text_event (struct session *sess, int xp_te_index,
                    char **args, int nargs, time_t timestamp);
 ```
 
-**Step 2: Wire `text_emit`.** In `src/common/text.c:text_emit` (around line 2089), insert immediately after the `plugin_emit_print` early-return:
+**Step 2: Wire `text_emit`.** Placement is critical: the hook MUST run **after** `plugin_emit_print` (so plugins still see every event), **after** the post-plugin tab-state restoration block (so an Apple short-circuit doesn't strand `sess->tab_state` at `plugin_state`), and **after** the `is_session(sess)` guard (so we never call into the frontend with a freed session — a plugin's `/close` may have invalidated it). That places the call at the seam between the safety checks and the alert/sound/display switch on `index` (`text.c` ~line 2099/2101).
+
+In `src/common/text.c:text_emit`, between the existing `if (!is_session (sess)) return;` (~line 2098–2099) and the `switch (index)` (~line 2101), insert:
 
 ```c
-    if (plugin_emit_print (sess, word, timestamp))
+    /* If a plugin's callback executes "/close", 'sess' may be invalid */
+    if (!is_session (sess))
         return;
 
     /* Phase 5: give the frontend a chance to claim this event for typed
@@ -887,10 +958,11 @@ int fe_text_event (struct session *sess, int xp_te_index,
     if (fe_text_event (sess, index, word + 1, PDIWORDS - 1, timestamp))
         return;
 
-    /* The plugin may have changed the state... (existing comment) */
+    switch (index)
+    /* ...existing alert/sound/display switch... */
 ```
 
-(Verify the exact `plugin_emit_print` site; PDIWORDS-1 corresponds to the maximum number of args the printer slot supports.)
+(Verify the exact line numbers via `grep -n "is_session\\|plugin_emit_print\\|switch (index)" src/common/text.c` before editing — the surrounding code may have shifted since the verified `HEAD=00733cf4`.) PDIWORDS-1 corresponds to the maximum number of args the printer slot supports.
 
 **Step 3: Stubs.**
 
@@ -951,13 +1023,66 @@ git commit -m "core: add fe_text_event short-circuit hook in text_emit"
 
 ### Task 6 — apple-frontend: implement `fe_text_event` dispatch for membership/nick/mode events
 
-**Intent:** Replace the apple-frontend stub from Task 5 with a real dispatch on `xp_te_index`. JOIN / UJOIN, PART / UPART / PARTREASON / UPARTREASON, QUIT, KICK / UKICK route to `hc_apple_runtime_emit_membership_change`. CHANGENICK routes to `hc_apple_runtime_emit_nick_change`. CHANMODEGEN and RAWMODES route to `hc_apple_runtime_emit_mode_change`. All recognized indices return 1 to short-circuit `text_emit`. Unrecognized indices return 0 — the LOG_LINE path handles them as before.
+**Intent:** Replace the apple-frontend stub from Task 5 with a real dispatch on `xp_te_index`. JOIN / UJOIN, PART / UPART / PARTREASON / UPARTREASON, QUIT, KICK / UKICK route to `hc_apple_runtime_emit_membership_change`. CHANGENICK and UCHANGENICK route to `hc_apple_runtime_emit_nick_change`. CHANMODEGEN routes to `hc_apple_runtime_emit_mode_change`. RAWMODES is **not** intercepted (see "Mode-change dedup" in the Architecture section). All recognized indices return 1 to short-circuit `text_emit`. Unrecognized indices return 0 — the LOG_LINE path handles them as before.
 
 **Files:**
 - Modify: `src/fe-apple/apple-frontend.c`.
-- Add a new test in `src/fe-apple/test-runtime-events.c` for end-to-end short-circuit verification (or a new test file `test-text-event-dispatch.c` if cleaner).
+- Modify: `src/fe-apple/test-runtime-events.c` (replace the Task 5 "stub returns 0" test with a real dispatch test).
 
-**Step 1: Implement the dispatch.** Replace the Task 5 stub:
+**Step 1: Write the failing C test before touching the dispatch.** Replace the Task 5 stub-baseline test with one that asserts the real dispatch:
+
+```c
+static void
+test_apple_fe_text_event_dispatches_join (void)
+{
+    runtime_events_state state = { .phase_positions = { -1, -1, -1, -1 } };
+    hc_apple_runtime_config config = {
+        .config_dir = g_get_tmp_dir (), .no_auto = 1, .skip_plugins = 1,
+    };
+    g_assert_true (hc_apple_runtime_start (&config, runtime_event_cb, &state));
+
+    /* Build a minimal session that satisfies hc_apple_session_runtime_id /
+     * _connection_id / _self_nick. networkname/nick are char* in the real
+     * struct definitions; cast away const for the test fixtures. */
+    server fake_serv = {0};
+    fake_serv.id = 7;
+    fake_serv.networkname = (char *)"unit-net";
+    /* server.nick is a fixed-size char[NICKLEN]; copy into it. */
+    g_strlcpy (fake_serv.nick, "unit-self", sizeof fake_serv.nick);
+    session fake_sess = {0};
+    fake_sess.server = &fake_serv;
+    g_strlcpy (fake_sess.channel, "#unit", sizeof fake_sess.channel);
+
+    char *args[PDIWORDS] = {0};
+    args[0] = (char *)"unit-user";       /* nick */
+    args[1] = (char *)"#unit";           /* channel */
+    args[2] = (char *)"ip";              /* host */
+    args[3] = (char *)"acct";            /* account */
+
+    int handled = fe_text_event (&fake_sess, XP_TE_JOIN, args, PDIWORDS, 1700000000);
+    g_assert_cmpint (handled, ==, 1);
+    g_assert_true (wait_for_flag (&state.saw_apple_join_dispatch, 3000));
+    /* timestamp_seconds threaded through */
+    g_assert_cmpint (state.last_membership_timestamp, ==, 1700000000);
+
+    hc_apple_runtime_stop ();
+}
+```
+
+Add `saw_apple_join_dispatch` (boolean) and `last_membership_timestamp` (int64) to `runtime_events_state`. In `runtime_event_cb`, set them when a MEMBERSHIP_CHANGE arrives with `nick == "unit-user"` AND `channel == "#unit"`.
+
+Register and run:
+
+```bash
+meson compile -C builddir
+meson test -C builddir fe-apple-runtime-events
+```
+
+Expected: FAIL (the Task 5 stub returns 0 for everything, so `handled == 0` and `saw_apple_join_dispatch` never sets).
+
+> **Why not invoke `text_emit` directly?** The original draft suggested driving `text_emit` from the test with a stack-allocated `session/server` pair. In practice `text_emit` reads `sess->tab_state`, `sess->server->is_away`, `prefs.*`, and several other fields whose layout is fragile — a `{0}` zero-init may compile but crash via `chanopt_is_set`, `text_strip` access, etc. Codex flagged this as unstable. The chosen approach (direct `fe_text_event` call) verifies the dispatch table contract without coupling to `text_emit`'s read set. The full `text_emit → fe_text_event → typed event` flow is exercised manually in Task 10's smoke step.
+
+**Step 2: Implement the dispatch.** Replace the Task 5 stub in `apple-frontend.c`:
 
 ```c
 #include "../common/text.h"     /* for XP_TE_* constants */
@@ -967,110 +1092,126 @@ emit_membership_for_session (hc_apple_membership_action action,
                              const session *sess,
                              const char *nick,
                              const char *target_nick,
-                             const char *reason)
+                             const char *reason,
+                             time_t timestamp)
 {
     if (!sess || !sess->server)
         return;
     hc_apple_runtime_emit_membership_change (
         action,
-        sess->server->networkname,
-        sess->channel,
+        hc_apple_session_network (sess),
+        hc_apple_session_channel (sess),
         nick,
         target_nick,
         reason,
-        NULL,                     /* account/host filled by Phase 7 plumbing */
-        NULL,
-        sess_to_session_id (sess), /* existing helper that maps session* → uint64 */
-        sess->server->id + 1,      /* connection_id; +1 reserves 0 as sentinel — see Phase 3 */
-        sess->server->nick);
+        NULL,                                       /* account: deferred to Phase 7 */
+        NULL,                                       /* host: deferred */
+        hc_apple_session_runtime_id (sess),
+        hc_apple_session_connection_id (sess),
+        hc_apple_session_self_nick (sess),
+        timestamp);
 }
 
 int
 fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, time_t timestamp)
 {
-    (void)nargs; (void)timestamp;
+    (void)nargs;
 
     switch (xp_te_index)
     {
     case XP_TE_JOIN:
         /* args[0] = nick, args[1] = channel, args[2] = ip, args[3] = account */
-        emit_membership_for_session (HC_APPLE_MEMBERSHIP_JOIN, sess, args[0], NULL, NULL);
+        emit_membership_for_session (HC_APPLE_MEMBERSHIP_JOIN, sess, args[0], NULL, NULL, timestamp);
         return 1;
     case XP_TE_UJOIN:
         /* args[0] = self-nick, args[1] = channel, args[2] = ip */
-        emit_membership_for_session (HC_APPLE_MEMBERSHIP_JOIN, sess, args[0], NULL, NULL);
+        emit_membership_for_session (HC_APPLE_MEMBERSHIP_JOIN, sess, args[0], NULL, NULL, timestamp);
         return 1;
 
     case XP_TE_PART:
         /* args[0] = nick, args[1] = host, args[2] = channel */
-        emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, NULL);
+        emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, NULL, timestamp);
         return 1;
     case XP_TE_PARTREASON:
         /* args[0] = nick, args[1] = host, args[2] = channel, args[3] = reason */
-        emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, args[3]);
+        emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, args[3], timestamp);
         return 1;
     case XP_TE_UPART:
         /* args[0] = self-nick, args[1] = host, args[2] = channel */
-        emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, NULL);
+        emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, NULL, timestamp);
         return 1;
     case XP_TE_UPARTREASON:
-        emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, args[3]);
+        emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, args[3], timestamp);
         return 1;
 
     case XP_TE_QUIT:
         /* args[0] = nick, args[1] = reason, args[2] = host */
-        emit_membership_for_session (HC_APPLE_MEMBERSHIP_QUIT, sess, args[0], NULL, args[1]);
+        emit_membership_for_session (HC_APPLE_MEMBERSHIP_QUIT, sess, args[0], NULL, args[1], timestamp);
         return 1;
 
     case XP_TE_KICK:
         /* args[0] = kicker, args[1] = kicked, args[2] = channel, args[3] = reason */
-        emit_membership_for_session (HC_APPLE_MEMBERSHIP_KICK, sess, args[0], args[1], args[3]);
+        emit_membership_for_session (HC_APPLE_MEMBERSHIP_KICK, sess, args[0], args[1], args[3], timestamp);
         return 1;
     case XP_TE_UKICK:
         /* args[0] = self-nick, args[1] = channel, args[2] = kicker, args[3] = reason */
-        emit_membership_for_session (HC_APPLE_MEMBERSHIP_KICK, sess, args[2], args[0], args[3]);
+        emit_membership_for_session (HC_APPLE_MEMBERSHIP_KICK, sess, args[2], args[0], args[3], timestamp);
         return 1;
 
     case XP_TE_CHANGENICK:
         /* args[0] = old-nick, args[1] = new-nick */
+    case XP_TE_UCHANGENICK:
+        /* args[0] = self-nick (old), args[1] = new-nick — same arg layout */
         if (!sess || !sess->server)
             return 1;
         hc_apple_runtime_emit_nick_change (
-            sess->server->networkname, sess->channel,
+            hc_apple_session_network (sess),
+            hc_apple_session_channel (sess),
             args[0], args[1],
-            sess_to_session_id (sess),
-            sess->server->id + 1,
-            sess->server->nick);
+            hc_apple_session_runtime_id (sess),
+            hc_apple_session_connection_id (sess),
+            hc_apple_session_self_nick (sess),
+            timestamp);
         return 1;
 
     case XP_TE_CHANMODEGEN:
-        /* args[0] = actor, args[1] = sign, args[2] = mode-char, args[3] = target */
+    {
+        /* args[0] = actor; args[1] = sign ("+" or "-"); args[2] = mode char ("o");
+         * args[3] = "channel arg" when the mode has an arg, else just "channel".
+         * Strip the leading "channel " prefix from args[3] to recover the mode arg
+         * (or NULL when there is none — args[3] equals sess->channel verbatim). */
         if (!sess || !sess->server)
             return 1;
+        char modes[4];
+        g_snprintf (modes, sizeof modes, "%s%s",
+                    args[1] ? args[1] : "", args[2] ? args[2] : "");
+        const char *mode_arg = NULL;
+        if (args[3] && sess->channel[0])
         {
-            char modes[4];
-            g_snprintf (modes, sizeof modes, "%s%s",
-                        args[1] ? args[1] : "",
-                        args[2] ? args[2] : "");
-            hc_apple_runtime_emit_mode_change (
-                sess->server->networkname, sess->channel,
-                args[0], modes, args[3],
-                sess_to_session_id (sess),
-                sess->server->id + 1,
-                sess->server->nick);
+            size_t prefix_len = strlen (sess->channel);
+            if (strncmp (args[3], sess->channel, prefix_len) == 0
+                && args[3][prefix_len] == ' ')
+            {
+                mode_arg = args[3] + prefix_len + 1;
+            }
+            /* If args[3] equals sess->channel exactly (no arg present), mode_arg
+             * stays NULL — Swift gets .modeChange(modes:"+i", args:nil). */
         }
-        return 1;
-    case XP_TE_RAWMODES:
-        /* args[0] = actor, args[1] = mode-string */
-        if (!sess || !sess->server)
-            return 1;
         hc_apple_runtime_emit_mode_change (
-            sess->server->networkname, sess->channel,
-            args[0], args[1], NULL,
-            sess_to_session_id (sess),
-            sess->server->id + 1,
-            sess->server->nick);
+            hc_apple_session_network (sess),
+            hc_apple_session_channel (sess),
+            args[0], modes, mode_arg,
+            hc_apple_session_runtime_id (sess),
+            hc_apple_session_connection_id (sess),
+            hc_apple_session_self_nick (sess),
+            timestamp);
         return 1;
+    }
+
+    /* XP_TE_RAWMODES: deliberately NOT intercepted. See "Mode-change dedup"
+     * in the architecture section — RAWMODES + CHANMODEGEN both fire for the
+     * same incoming MODE message when prefs.hex_irc_raw_modes is on; we keep
+     * CHANMODEGEN as canonical and let RAWMODES fall through to display_event. */
 
     default:
         return 0;
@@ -1078,67 +1219,15 @@ fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, ti
 }
 ```
 
-> **Note on `sess_to_session_id`:** This helper exists in apple-frontend.c (it's how `hc_apple_emit_log_line_for_session` maps a `session*` to a runtime session id). Find the exact name with `grep -n "session_id" src/fe-apple/apple-frontend.c | head -10`. Use the same conversion the existing emit functions use.
-
-**Step 2: Write a meson-side end-to-end test.** Add to `test-runtime-events.c` (or a sibling file `test-text-event-dispatch.c` registered in `src/fe-apple/meson.build`):
-
-```c
-static void
-test_text_event_dispatch_short_circuits_for_join (void)
-{
-    runtime_events_state state = {
-        .phase_positions = { -1, -1, -1, -1 },
-    };
-    hc_apple_runtime_config config = {
-        .config_dir = g_get_tmp_dir (),
-        .no_auto = 1,
-        .skip_plugins = 1,
-    };
-    g_assert_true (hc_apple_runtime_start (&config, runtime_event_cb, &state));
-
-    /* Build a minimal session for text_emit. apple-frontend's fe_text_event
-     * inspects sess->server->networkname / sess->channel / sess->server->id. */
-    server fake_serv = {0};
-    fake_serv.id = 7;
-    fake_serv.networkname = (char *)"unit-net";
-    fake_serv.nick = (char *)"unit-self";
-    session fake_sess = {0};
-    fake_sess.server = &fake_serv;
-    fake_sess.channel = (char *)"#unit";
-
-    /* Direct call into text_emit to exercise the short-circuit hook. */
-    text_emit (XP_TE_JOIN, &fake_sess, (char *)"unit-user",
-               (char *)"#unit", (char *)"ip", NULL, 0);
-
-    g_assert_true (wait_for_flag (&state.saw_membership_join_via_text_emit, 3000));
-    /* If display_event had fired, an HC_APPLE_EVENT_LOG_LINE would have been
-     * pushed too; assert it did not. */
-    g_assert_false (state.saw_log_line_for_unit_join);
-
-    hc_apple_runtime_stop ();
-}
-```
-
-(Add `saw_membership_join_via_text_emit` and `saw_log_line_for_unit_join` flags + matching detection in `runtime_event_cb`. The membership flag matches `nick == "unit-user"`, `channel == "#unit"`. The log-line negative flag matches any `LOG_LINE` whose text mentions "unit-user".)
-
-Register the new test function in `main()`:
-
-```c
-g_test_add_func ("/fe-apple/runtime/text-event-short-circuit-join",
-                 test_text_event_dispatch_short_circuits_for_join);
-```
-
-If `text_emit` is hard to invoke from the test (linker pulls in too much of core), alternative: invoke `fe_text_event` directly on the apple-frontend's symbol with a fake `session*` — that exercises the dispatch table without the core integration. Trade-off: misses verifying the `text_emit` short-circuit. Prefer the full-stack call if linkable; if not, document the gap in the commit message and add a TODO to the C-side smoke test.
-
 **Step 3: Build + run.**
 
 ```bash
 meson compile -C builddir
-meson test -C builddir   # full suite — make sure fe-gtk + fe-text still link
+meson test -C builddir   # full suite — confirm fe-gtk/fe-text still link with the new fe_text_event signature
 cd apple/macos && swift test
 ```
 
-Expected: PASS. The classifier-based join/part/quit branches still fire for any LOG_LINE strings that don't come from `text_emit` (e.g. apple-runtime synthetic), so 77 baseline still passes; the new typed events arrive as MEMBERSHIP_CHANGE etc but no consumer handler exists yet (Task 8) — they're dropped on the floor by `handleRuntimeEvent`'s `default` arm. That's acceptable for a single commit.
+Expected: PASS. The classifier-based join/part/quit branches still fire for any LOG_LINE strings (apple-runtime synthetic), so 77 baseline still passes; the new typed events arrive as MEMBERSHIP_CHANGE etc but no consumer handler exists yet (Task 7 owns that) — they're dropped on the floor by `handleRuntimeEvent`'s `default` arm.
 
 **Step 4: Commit.**
 
@@ -1265,7 +1354,8 @@ func applyMembershipForTest(
     reason: String? = nil,
     sessionID: UInt64 = 0,
     connectionID: UInt64 = 0,
-    selfNick: String? = nil
+    selfNick: String? = nil,
+    timestampSeconds: Int64 = 0
 ) {
     let event = RuntimeEvent(
         kind: HC_APPLE_EVENT_MEMBERSHIP_CHANGE,
@@ -1287,7 +1377,8 @@ func applyMembershipForTest(
         targetNick: targetNick,
         reason: reason,
         modes: nil,
-        modesArgs: nil
+        modesArgs: nil,
+        timestampSeconds: timestampSeconds
     )
     handleRuntimeEvent(event)
 }
@@ -1339,9 +1430,12 @@ private func handleMembershipChangeEvent(_ event: RuntimeEvent) {
         raw = r.map { "* \(nick) has kicked \(target) (\($0))" } ?? "* \(nick) has kicked \(target)"
     default: raw = ""
     }
+    let timestamp = event.timestampSeconds == 0
+        ? Date()
+        : Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds))
     messages.append(ChatMessage(
         sessionID: sessionID, raw: raw, kind: kind,
-        author: author, timestamp: Date()))
+        author: author, timestamp: timestamp))
 }
 ```
 
@@ -1425,14 +1519,66 @@ func testModeChangeForwardsModesAndArgs() {
     XCTAssertEqual(controller.messages.last?.kind, .modeChange(modes: "+o", args: "alice"))
     XCTAssertEqual(controller.messages.last?.author?.nick, "chanop")
 
-    // Args may be nil for raw modes:
+    // Args may be nil for argless modes (e.g. +i):
     controller.applyModeChangeForTest(
         network: "Libera", channel: "#a", actor: "chanop",
         modes: "+i", args: nil,
         sessionID: 1, connectionID: 1, selfNick: "me")
     XCTAssertEqual(controller.messages.last?.kind, .modeChange(modes: "+i", args: nil))
 }
+
+func testProducerTimestampOverridesDateForTypedMessages() {
+    let controller = EngineController()
+    controller.applyMembershipForTest(
+        action: HC_APPLE_MEMBERSHIP_JOIN,
+        network: "Libera", channel: "#a", nick: "alice",
+        sessionID: 1, connectionID: 1, selfNick: "me",
+        timestampSeconds: 1_700_000_000)
+    let last = controller.messages.last!
+    XCTAssertEqual(last.timestamp.timeIntervalSince1970, 1_700_000_000, accuracy: 0.001,
+                   "producer-side time_t must round-trip into ChatMessage.timestamp")
+
+    // timestampSeconds: 0 → consumer falls back to Date().
+    let before = Date()
+    controller.applyMembershipForTest(
+        action: HC_APPLE_MEMBERSHIP_JOIN,
+        network: "Libera", channel: "#a", nick: "bob",
+        sessionID: 1, connectionID: 1, selfNick: "me",
+        timestampSeconds: 0)
+    let after = Date()
+    let synthetic = controller.messages.last!.timestamp
+    XCTAssertGreaterThanOrEqual(synthetic, before)
+    XCTAssertLessThanOrEqual(synthetic, after)
+}
+
+func testTestHelperNamedArgOrderMatchesDeclaredOrder() {
+    // Phase 4 had a 15-error compile cascade because plan-doc examples used
+    // a different named-arg order than the actual helper signature. Lock the
+    // shape so future re-runs of this plan don't regenerate the bug.
+    let controller = EngineController()
+    // Compile-only smoke: every helper called with the exact arg order the
+    // plan documents. If any helper signature drifts, this stops compiling.
+    controller.applyMembershipForTest(
+        action: HC_APPLE_MEMBERSHIP_KICK,
+        network: "n", channel: "#c", nick: "kicker",
+        targetNick: "victim", reason: "spam",
+        sessionID: 1, connectionID: 1, selfNick: "me",
+        timestampSeconds: 0)
+    controller.applyNickChangeForTest(
+        network: "n", channel: "#c",
+        oldNick: "old", newNick: "new",
+        sessionID: 1, connectionID: 1, selfNick: "me",
+        timestampSeconds: 0)
+    controller.applyModeChangeForTest(
+        network: "n", channel: "#c", actor: "actor",
+        modes: "+o", args: "alice",
+        sessionID: 1, connectionID: 1, selfNick: "me",
+        timestampSeconds: 0)
+    XCTAssertGreaterThanOrEqual(controller.messages.count, 3)
+}
 ```
+
+> **Self-nick coverage:** the apple-frontend dispatch in Task 6 routes both `XP_TE_CHANGENICK` and `XP_TE_UCHANGENICK` through `hc_apple_runtime_emit_nick_change`, so the Swift side sees identical events for self vs other. No additional test needed beyond the existing `testNickChangeAppendsTypedMessageWithResolvedAuthor` — but a smoke step in Task 10 must confirm a self-nick change actually fires the typed event in the running app.
 
 **Step 2: Run.** Expected: compile errors.
 
@@ -1442,7 +1588,8 @@ func testModeChangeForwardsModesAndArgs() {
 func applyNickChangeForTest(
     network: String, channel: String,
     oldNick: String, newNick: String,
-    sessionID: UInt64 = 0, connectionID: UInt64 = 0, selfNick: String? = nil
+    sessionID: UInt64 = 0, connectionID: UInt64 = 0, selfNick: String? = nil,
+    timestampSeconds: Int64 = 0
 ) {
     let event = RuntimeEvent(
         kind: HC_APPLE_EVENT_NICK_CHANGE,
@@ -1452,14 +1599,16 @@ func applyNickChangeForTest(
         isMe: false, isAway: false,
         connectionID: connectionID, selfNick: selfNick,
         membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
-        targetNick: newNick, reason: nil, modes: nil, modesArgs: nil)
+        targetNick: newNick, reason: nil, modes: nil, modesArgs: nil,
+        timestampSeconds: timestampSeconds)
     handleRuntimeEvent(event)
 }
 
 func applyModeChangeForTest(
     network: String, channel: String, actor: String,
     modes: String, args: String?,
-    sessionID: UInt64 = 0, connectionID: UInt64 = 0, selfNick: String? = nil
+    sessionID: UInt64 = 0, connectionID: UInt64 = 0, selfNick: String? = nil,
+    timestampSeconds: Int64 = 0
 ) {
     let event = RuntimeEvent(
         kind: HC_APPLE_EVENT_MODE_CHANGE,
@@ -1469,7 +1618,8 @@ func applyModeChangeForTest(
         isMe: false, isAway: false,
         connectionID: connectionID, selfNick: selfNick,
         membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
-        targetNick: nil, reason: nil, modes: modes, modesArgs: args)
+        targetNick: nil, reason: nil, modes: modes, modesArgs: args,
+        timestampSeconds: timestampSeconds)
     handleRuntimeEvent(event)
 }
 ```
@@ -1497,12 +1647,15 @@ private func handleNickChangeEvent(_ event: RuntimeEvent) {
     let newNick = event.targetNick ?? ""
     guard !oldNick.isEmpty, !newNick.isEmpty else { return }
     let author = resolveAuthor(connectionID: connectionID, nick: oldNick)
+    let timestamp = event.timestampSeconds == 0
+        ? Date()
+        : Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds))
     messages.append(ChatMessage(
         sessionID: sessionID,
         raw: "* \(oldNick) is now known as \(newNick)",
         kind: .nickChange(from: oldNick, to: newNick),
         author: author,
-        timestamp: Date()))
+        timestamp: timestamp))
 }
 
 private func handleModeChangeEvent(_ event: RuntimeEvent) {
@@ -1518,12 +1671,15 @@ private func handleModeChangeEvent(_ event: RuntimeEvent) {
     let author = actor.isEmpty
         ? nil
         : resolveAuthor(connectionID: connectionID, nick: actor)
+    let timestamp = event.timestampSeconds == 0
+        ? Date()
+        : Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds))
     messages.append(ChatMessage(
         sessionID: sessionID,
         raw: "* \(actor) sets mode \(modes)\(event.modesArgs.map { " " + $0 } ?? "")",
         kind: .modeChange(modes: modes, args: event.modesArgs),
         author: author,
-        timestamp: Date()))
+        timestamp: timestamp))
 }
 ```
 
@@ -1670,14 +1826,15 @@ git commit -m "docs: mark phase 5 complete in data model migration plan"
 ## Post-phase checklist
 
 - [ ] All 77 Phase 1–4 tests still green.
-- [ ] New Phase 5 tests green: MessageAuthor + ChatMessageKind shape (4 tests, Task 1); `resolveAuthor` (2, Task 2); MEMBERSHIP_CHANGE — JOIN with author resolution / PART with-and-without reason / KICK target+reason / multi-session QUIT (4, Task 7); NICK_CHANGE single-session and multi-session fan-out (2, Task 8); MODE_CHANGE with-and-without args (1, Task 8); classifier-retirement regression (1, Task 9). Total ~14 new Swift tests.
-- [ ] `meson test -C builddir fe-apple-runtime-events` covers JOIN / KICK / NICK / MODE typed emits and (if linkable) the `text_emit` short-circuit.
+- [ ] New Phase 5 tests green: MessageAuthor + ChatMessageKind shape (4 tests, Task 1); `resolveAuthor` (2, Task 2); MEMBERSHIP_CHANGE — JOIN with author resolution / PART with-and-without reason / KICK target+reason / multi-session QUIT (4, Task 7); NICK_CHANGE single-session and multi-session fan-out (2, Task 8); MODE_CHANGE with-and-without args (1, Task 8); producer timestamp round-trip + Date() fallback (1, Task 8); named-arg ordering regression (1, Task 8); classifier-retirement regression (1, Task 9). Total ~16 new Swift tests.
+- [ ] `meson test -C builddir fe-apple-runtime-events` covers (a) `hc_apple_runtime_emit_membership_change/_nick_change/_mode_change` direct emits with `timestamp_seconds` round-trip (Task 4) and (b) the apple-frontend `fe_text_event` dispatch for `XP_TE_JOIN` (Task 6).
 - [ ] `swift-format lint -r Sources Tests` zero new diagnostics.
-- [ ] No remaining `case .join:` / `case .part:` / `case .quit:` heuristic branches in `ChatMessageClassifier`.
+- [ ] No remaining `" has joined" / " has left" / " quit"` branches in `ChatMessageClassifier`.
 - [ ] No remaining `.kind == .X` flat-enum equality in `Sources` or `Tests` — every kind comparison is associated-value (`if case .X = kind`) or an `XCTAssertEqual(kind, .X(args:))` against a constructed associated-value case.
-- [ ] `hc_apple_event` carries `membership_action`, `target_nick`, `reason`, `modes`, `modes_args`. `hc_apple_event_kind` includes 5/6/7. `hc_apple_membership_action` enum present.
-- [ ] `fe.h` declares `fe_text_event`. fe-gtk and fe-text stub it returning 0. apple-frontend implements dispatch.
-- [ ] `text.c:text_emit` calls `fe_text_event` after `plugin_emit_print` and short-circuits on nonzero return.
+- [ ] `hc_apple_event` carries `membership_action`, `target_nick`, `reason`, `modes`, `modes_args`, `timestamp_seconds`. `hc_apple_event_kind` includes 5/6/7. `hc_apple_membership_action` enum present.
+- [ ] `fe.h` declares `fe_text_event`. fe-gtk and fe-text stub it returning 0. apple-frontend implements dispatch for JOIN/UJOIN, PART/UPART/PARTREASON/UPARTREASON, QUIT, KICK/UKICK, CHANGENICK/UCHANGENICK, CHANMODEGEN. RAWMODES is *not* intercepted (deliberate dedup choice, documented in Architecture).
+- [ ] `text.c:text_emit` calls `fe_text_event` after `plugin_emit_print` AND after the post-plugin tab-state restore AND after the `is_session(sess)` guard, short-circuiting on nonzero return.
+- [ ] Producer `time_t` from `text_emit` round-trips into `ChatMessage.timestamp` (verified by `testProducerTimestampOverridesDateForTypedMessages`).
 - [ ] `docs/plans/2026-04-21-data-model-migration.md` Phase 5 row marked ✅ with link.
 - [ ] Worktree merged / PR opened per the project's finishing-a-development-branch flow.
 
