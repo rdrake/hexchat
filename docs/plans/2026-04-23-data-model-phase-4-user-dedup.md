@@ -78,12 +78,15 @@ The C-side `hc_apple_event` already carries `connection_id`, `self_nick`, `accou
 6. `usersBySession` is removed as stored state and reappears as a **computed** `[UUID: [ChatUser]]` projection assembled from `membershipsBySession` + `users`, sorted by the existing `userSort`.
 7. `visibleUsers: [ChatUser]` continues to return the sorted roster for the visible session — sourcing from the new storage.
 8. **Fan-out test** passes: a user in three channels on the same connection, receiving `USERLIST_UPDATE` with `isAway: true` on one channel, is marked away in all three.
-9. **Dedup test** passes: same nick across two different connections produces two distinct `User` UUIDs (connection-scoped identity).
+9. **Non-fan-out isolation test** passes: `modePrefix` changes on a `ChannelMembership` do **not** bleed across channels — an op in `#a` is not an op in `#b`.
+10. **Session-scoped REMOVE/CLEAR test** passes: removing or clearing a user from one channel leaves other channels' memberships intact, and leaves the `User` record alive.
+11. **Dedup test** passes: same nick across two different connections produces two distinct `User` UUIDs (connection-scoped identity).
+12. **Nil-clears-account test** passes: a later `USERLIST_UPDATE` carrying `account: nil` must null out a previously-set account — do **not** merge-preserve. Parity with the Phase 2 `testUserlistUpdateClearsAccountToNil`.
 10. `LIFECYCLE_STOPPED` clears `users`, `usersByConnectionAndNick`, and `membershipsBySession`, alongside the existing clears.
-11. `HC_APPLE_SESSION_REMOVE` clears memberships for the removed session (parity with the old `usersBySession[uuid] = nil`).
-12. All Phase 1–3 tests (current count: 56) continue to pass. New tests cover fan-out, dedup, removal-leaves-User, lifecycle teardown.
-13. `swift build`, `swift test`, `swift-format lint -r Sources Tests` all pass. Meson build + `meson test -C builddir fe-apple-runtime-events` pass (no C changes, but re-run as smoke).
-14. `docs/plans/2026-04-21-data-model-migration.md` roadmap table marks Phase 4 as ✅ with a link to this plan doc.
+13. `HC_APPLE_SESSION_REMOVE` clears memberships for the removed session (parity with the old `usersBySession[uuid] = nil`).
+14. All Phase 1–3 tests (current count: 56) continue to pass. New tests cover all of the above plus the dual-write transitions.
+15. `swift build`, `swift test`, `swift-format lint -r Sources Tests` all pass. Meson build + `meson test -C builddir fe-apple-runtime-events` pass (no C changes, but re-run as smoke).
+16. `docs/plans/2026-04-21-data-model-migration.md` roadmap table marks Phase 4 as ✅ with a link to this plan doc.
 
 ---
 
@@ -245,6 +248,25 @@ func testUpsertUserRefreshesMetadataWithoutCreatingDuplicate() {
     XCTAssertTrue(controller.users[first]?.isAway == true)
 }
 
+func testUpsertUserClearsAccountToNilOnSubsequentCall() {
+    // Parallels Phase 2's testUserlistUpdateClearsAccountToNil: a later event with
+    // account: nil must drop the previously-set account, not merge-preserve it.
+    let controller = EngineController()
+    let connID = UUID()
+    let userID = controller.upsertUserForTest(
+        connectionID: connID, nick: "alice",
+        account: "alice!acct", hostmask: "alice@host",
+        isMe: false, isAway: false)
+    _ = controller.upsertUserForTest(
+        connectionID: connID, nick: "alice",
+        account: nil, hostmask: nil,
+        isMe: false, isAway: false)
+    XCTAssertNil(controller.users[userID]?.account,
+                 "account=nil on update must clear, not preserve")
+    XCTAssertNil(controller.users[userID]?.hostmask,
+                 "hostmask=nil on update must clear, not preserve")
+}
+
 func testUpsertUserOnDifferentConnectionsAreDistinct() {
     let controller = EngineController()
     let a = controller.upsertUserForTest(
@@ -290,13 +312,13 @@ private func upsertUser(
 ) -> UUID {
     let key = UserKey(connectionID: connectionID, nick: nick)
     if let existing = usersByConnectionAndNick[key] {
-        // Mutate in place; nick casing follows first-seen, matching network naming convention.
-        if let nick = users[existing]?.nick, nick.lowercased() != nick {
-            // noop — same-case already
-        }
-        users[existing]?.account = account ?? users[existing]?.account
-        users[existing]?.hostmask = hostmask ?? users[existing]?.hostmask
-        users[existing]?.isMe = isMe || (users[existing]?.isMe ?? false)
+        // Direct assignment (no `??` merge): `account = nil` means the account was
+        // explicitly dropped (e.g. services logout / account-notify clear). Phase 3
+        // ChatUser behaves this way; see testUserlistUpdateClearsAccountToNil.
+        users[existing]?.nick = nick
+        users[existing]?.account = account
+        users[existing]?.hostmask = hostmask
+        users[existing]?.isMe = isMe
         users[existing]?.isAway = isAway
         return existing
     }
@@ -337,7 +359,7 @@ func setMembershipForTest(sessionID: UUID, userID: UUID, modePrefix: Character?)
 }
 ```
 
-> **Note on the `account`/`hostmask` merge:** the `?? users[existing]?.account` idiom preserves a previously-known value when the current event doesn't carry it (e.g. an away toggle that doesn't re-carry account). Existing Phase 2 behaviour already preserves these across updates — do not regress. Revisit this merge rule if Phase 5 introduces explicit "clear account" semantics.
+> **Note on overwrite semantics:** Phase 2/3 use direct assignment (`account = event.account`) so a `USERLIST_UPDATE` with `account: nil` clears a previously-set account. This is the documented Phase 2 behaviour locked down by `testUserlistUpdateClearsAccountToNil` — a services logout or `account-notify` clear must propagate through. Do **not** introduce a `?? existing` merge rule; if Phase 5 ever wants tri-state ("unknown" vs "explicitly cleared") semantics, it owns that change, including a new bridge field.
 
 **Step 4: Run + lint.**
 
@@ -743,9 +765,12 @@ git commit -am "apple-shell: cover session-remove and lifecycle-stopped clears f
 
 ---
 
-### Task 7 — Fan-out correctness test (the crown jewel)
+### Task 7 — Fan-out correctness + non-fan-out isolation (the crown jewel)
 
-**Intent:** Prove the Phase 4 defining behaviour: one `User` record, N memberships, and a metadata mutation (away, account) on any one channel fans out to all channels.
+**Intent:** Prove the Phase 4 defining behaviour in both directions.
+- **Positive fan-out:** `User` fields (`isAway`, `account`, `hostmask`) mutate once and visibly update every channel the user is in.
+- **Negative isolation:** `ChannelMembership` fields (`modePrefix`) are per-membership and do **not** bleed between channels.
+- **Session-scoped REMOVE/CLEAR:** removing or clearing a user from `#a` must leave `#b` membership intact. This is the other common place where a sloppy implementation accidentally fan-outs when it shouldn't.
 
 **Files:**
 - Modify: `apple/macos/Tests/HexChatAppleShellTests/EngineControllerTests.swift`.
@@ -803,6 +828,88 @@ func testAccountUpdateOnOneChannelFansOutToAllChannels() {
             for: .composed(connectionID: connID, channel: channel))!
         XCTAssertEqual(controller.usersBySession[sessionUUID]?.first?.account, "alice!authname")
     }
+}
+
+func testModePrefixIsMembershipLocalAndDoesNotFanOut() {
+    // modePrefix lives on ChannelMembership, not User. An op in #a is NOT an op in #b.
+    let controller = EngineController()
+    for (channel, prefix) in [("#a", "@" as Character?), ("#b", nil)] {
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "Libera", channel: channel, nick: "alice",
+            sessionID: 0, connectionID: 1, selfNick: "me",
+            account: nil, host: nil, isMe: false, isAway: false, modePrefix: prefix)
+    }
+    let connID = controller.connectionsByServerID[1]!
+    let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
+    let bUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#b"))!
+    XCTAssertEqual(controller.usersBySession[aUUID]?.first?.modePrefix, "@")
+    XCTAssertNil(controller.usersBySession[bUUID]?.first?.modePrefix,
+                 "mode prefix in #a must not bleed into #b")
+
+    // Flip #a op → voice. #b must remain unprefixed.
+    controller.applyUserlistForTest(
+        action: HC_APPLE_USERLIST_UPDATE,
+        network: "Libera", channel: "#a", nick: "alice",
+        sessionID: 0, connectionID: 1, selfNick: "me",
+        account: nil, host: nil, isMe: false, isAway: false, modePrefix: "+")
+    XCTAssertEqual(controller.usersBySession[aUUID]?.first?.modePrefix, "+")
+    XCTAssertNil(controller.usersBySession[bUUID]?.first?.modePrefix,
+                 "mode change in #a must remain isolated to #a")
+}
+
+func testRemoveInOneChannelLeavesOtherChannelMembershipIntact() {
+    let controller = EngineController()
+    for channel in ["#a", "#b"] {
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "Libera", channel: channel, nick: "alice",
+            sessionID: 0, connectionID: 1, selfNick: "me",
+            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+    }
+    controller.applyUserlistForTest(
+        action: HC_APPLE_USERLIST_REMOVE,
+        network: "Libera", channel: "#a", nick: "alice",
+        sessionID: 0, connectionID: 1, selfNick: "me",
+        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+
+    let connID = controller.connectionsByServerID[1]!
+    let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
+    let bUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#b"))!
+    XCTAssertTrue(controller.membershipsBySession[aUUID, default: []].isEmpty,
+                  "#a membership dropped")
+    XCTAssertEqual(controller.membershipsBySession[bUUID]?.count, 1,
+                   "#b membership must remain")
+    // User record itself remains — still in #b.
+    let userID = controller.usersByConnectionAndNick[UserKey(connectionID: connID, nick: "alice")]
+    XCTAssertNotNil(userID, "User record survives a single-channel REMOVE")
+}
+
+func testClearInOneChannelLeavesOtherChannelMembershipsIntact() {
+    let controller = EngineController()
+    for channel in ["#a", "#b"] {
+        for nick in ["alice", "bob"] {
+            controller.applyUserlistForTest(
+                action: HC_APPLE_USERLIST_INSERT,
+                network: "Libera", channel: channel, nick: nick,
+                sessionID: 0, connectionID: 1, selfNick: "me",
+                account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        }
+    }
+    controller.applyUserlistForTest(
+        action: HC_APPLE_USERLIST_CLEAR,
+        network: "Libera", channel: "#a", nick: "",
+        sessionID: 0, connectionID: 1, selfNick: "me",
+        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+
+    let connID = controller.connectionsByServerID[1]!
+    let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
+    let bUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#b"))!
+    XCTAssertTrue(controller.membershipsBySession[aUUID, default: []].isEmpty,
+                  "#a memberships cleared")
+    XCTAssertEqual(controller.membershipsBySession[bUUID]?.count, 2,
+                   "#b memberships untouched by a CLEAR on #a")
+    XCTAssertEqual(controller.users.count, 2, "Users persist across a single-channel CLEAR")
 }
 ```
 
@@ -874,7 +981,7 @@ git commit -m "docs: mark phase 4 complete in data model migration plan"
 ## Post-phase checklist
 
 - [ ] All Phase 1–3 tests still green (56 baseline).
-- [ ] New Phase 4 tests green: types, upsert, dual-write, cross-connection dedup, projection sort, session-remove, lifecycle-stopped, fan-out (away + account).
+- [ ] New Phase 4 tests green: types; upsert (including nil-clears-account); dual-write; cross-connection dedup; projection sort; session-remove; lifecycle-stopped; fan-out (away + account); non-fan-out isolation (mode prefix); session-scoped REMOVE/CLEAR isolation.
 - [ ] `swift-format lint -r Sources Tests` zero diagnostics.
 - [ ] Meson build + `fe-apple-runtime-events` pass.
 - [ ] `usersBySession` is `var usersBySession: [UUID: [ChatUser]] { ... }` (computed, not stored).
