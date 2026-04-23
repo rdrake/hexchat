@@ -334,6 +334,11 @@ final class EngineController {
         membershipsBySession[sessionID]?.removeAll { $0.userID == userID }
     }
 
+    /// Builds a `MessageAuthor` for `(connectionID, nick)`, resolving `userID`
+    /// via the Phase 4 `usersByConnectionAndNick` index. Returns a `nil` userID
+    /// when the nick is not yet tracked on this connection (e.g. a typed JOIN
+    /// that arrives before its USERLIST_INSERT companion). Nick casing is passed
+    /// through unchanged; `UserKey` lowercases internally.
     func resolveAuthor(connectionID: UUID, nick: String) -> MessageAuthor {
         let userID = usersByConnectionAndNick[UserKey(connectionID: connectionID, nick: nick)]
         return MessageAuthor(nick: nick, userID: userID)
