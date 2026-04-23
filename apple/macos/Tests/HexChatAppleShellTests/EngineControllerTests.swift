@@ -1128,8 +1128,8 @@ final class EngineControllerTests: XCTestCase {
             controller.applyUserlistForTest(
                 action: HC_APPLE_USERLIST_INSERT,
                 network: "Libera", channel: "#a", nick: nick,
-                sessionID: 1, connectionID: 1, selfNick: "me",
-                account: nil, host: nil, isMe: false, isAway: false, modePrefix: prefix)
+                modePrefix: prefix, account: nil, host: nil, isMe: false, isAway: false,
+                sessionID: 1, connectionID: 1, selfNick: "me")
         }
         let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
         XCTAssertEqual(
@@ -1144,13 +1144,13 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: "AfterNET", channel: "#a", nick: "alice",
-            sessionID: 0, connectionID: 1, selfNick: "me1",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 0, connectionID: 1, selfNick: "me1")
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: "AfterNET", channel: "#a", nick: "alice",
-            sessionID: 0, connectionID: 2, selfNick: "me2",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 0, connectionID: 2, selfNick: "me2")
 
         let conn1 = controller.connectionsByServerID[1]!
         let conn2 = controller.connectionsByServerID[2]!
@@ -1166,8 +1166,8 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: "Libera", channel: "#a", nick: "alice",
-            sessionID: 1, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 1, connectionID: 1, selfNick: "me")
         let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
         XCTAssertEqual(controller.membershipsBySession[sessionUUID]?.count, 1)
 
@@ -1189,8 +1189,8 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: "Libera", channel: "#a", nick: "alice",
-            sessionID: 1, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 1, connectionID: 1, selfNick: "me")
         XCTAssertFalse(controller.users.isEmpty)
         XCTAssertFalse(controller.usersByConnectionAndNick.isEmpty)
         XCTAssertFalse(controller.membershipsBySession.isEmpty)
@@ -1210,15 +1210,15 @@ final class EngineControllerTests: XCTestCase {
             controller.applyUserlistForTest(
                 action: HC_APPLE_USERLIST_INSERT,
                 network: "Libera", channel: channel, nick: "alice",
-                sessionID: 0, connectionID: 1, selfNick: "me",
-                account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+                modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+                sessionID: 0, connectionID: 1, selfNick: "me")
         }
         // Single UPDATE on one channel; fan-out must hit the other two.
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE,
             network: "Libera", channel: "#a", nick: "alice",
-            sessionID: 0, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: true, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: true,
+            sessionID: 0, connectionID: 1, selfNick: "me")
 
         let connID = controller.connectionsByServerID[1]!
         let userID = controller.usersByConnectionAndNick[UserKey(connectionID: connID, nick: "alice")]!
@@ -1239,14 +1239,14 @@ final class EngineControllerTests: XCTestCase {
             controller.applyUserlistForTest(
                 action: HC_APPLE_USERLIST_INSERT,
                 network: "Libera", channel: channel, nick: "alice",
-                sessionID: 0, connectionID: 1, selfNick: "me",
-                account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+                modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+                sessionID: 0, connectionID: 1, selfNick: "me")
         }
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE,
             network: "Libera", channel: "#a", nick: "alice",
-            sessionID: 0, connectionID: 1, selfNick: "me",
-            account: "alice!authname", host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: "alice!authname", host: nil, isMe: false, isAway: false,
+            sessionID: 0, connectionID: 1, selfNick: "me")
 
         let connID = controller.connectionsByServerID[1]!
         for channel in ["#a", "#b"] {
@@ -1263,8 +1263,8 @@ final class EngineControllerTests: XCTestCase {
             controller.applyUserlistForTest(
                 action: HC_APPLE_USERLIST_INSERT,
                 network: "Libera", channel: channel, nick: "alice",
-                sessionID: 0, connectionID: 1, selfNick: "me",
-                account: nil, host: nil, isMe: false, isAway: false, modePrefix: prefix)
+                modePrefix: prefix, account: nil, host: nil, isMe: false, isAway: false,
+                sessionID: 0, connectionID: 1, selfNick: "me")
         }
         let connID = controller.connectionsByServerID[1]!
         let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
@@ -1277,8 +1277,8 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE,
             network: "Libera", channel: "#a", nick: "alice",
-            sessionID: 0, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: "+")
+            modePrefix: "+", account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 0, connectionID: 1, selfNick: "me")
         XCTAssertEqual(controller.usersBySession[aUUID]?.first?.modePrefix, "+")
         XCTAssertNil(controller.usersBySession[bUUID]?.first?.modePrefix,
                      "mode change in #a must remain isolated to #a")
@@ -1290,14 +1290,14 @@ final class EngineControllerTests: XCTestCase {
             controller.applyUserlistForTest(
                 action: HC_APPLE_USERLIST_INSERT,
                 network: "Libera", channel: channel, nick: "alice",
-                sessionID: 0, connectionID: 1, selfNick: "me",
-                account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+                modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+                sessionID: 0, connectionID: 1, selfNick: "me")
         }
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_REMOVE,
             network: "Libera", channel: "#a", nick: "alice",
-            sessionID: 0, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 0, connectionID: 1, selfNick: "me")
 
         let connID = controller.connectionsByServerID[1]!
         let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
@@ -1318,15 +1318,15 @@ final class EngineControllerTests: XCTestCase {
                 controller.applyUserlistForTest(
                     action: HC_APPLE_USERLIST_INSERT,
                     network: "Libera", channel: channel, nick: nick,
-                    sessionID: 0, connectionID: 1, selfNick: "me",
-                    account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+                    modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+                    sessionID: 0, connectionID: 1, selfNick: "me")
             }
         }
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_CLEAR,
             network: "Libera", channel: "#a", nick: "",
-            sessionID: 0, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 0, connectionID: 1, selfNick: "me")
 
         let connID = controller.connectionsByServerID[1]!
         let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!

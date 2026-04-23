@@ -393,9 +393,8 @@ func testUserlistInsertPopulatesMembershipAndUser() {
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_INSERT,
         network: "Libera", channel: "#a", nick: "alice",
-        sessionID: 1, connectionID: 1, selfNick: "me",
-        account: "alice!acct", host: "alice@host", isMe: false, isAway: false,
-        modePrefix: "@")
+        modePrefix: "@", account: "alice!acct", host: "alice@host", isMe: false, isAway: false,
+        sessionID: 1, connectionID: 1, selfNick: "me")
     // New storage populated.
     let connUUID = controller.connectionsByServerID[1]!
     let userUUID = controller.usersByConnectionAndNick[UserKey(connectionID: connUUID, nick: "alice")]
@@ -413,16 +412,16 @@ func testUserlistRemoveDropsMembershipButLeavesUser() {
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_INSERT,
         network: "Libera", channel: "#a", nick: "alice",
-        sessionID: 1, connectionID: 1, selfNick: "me",
-        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+        sessionID: 1, connectionID: 1, selfNick: "me")
     let connUUID = controller.connectionsByServerID[1]!
     let userUUID = controller.usersByConnectionAndNick[UserKey(connectionID: connUUID, nick: "alice")]!
 
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_REMOVE,
         network: "Libera", channel: "#a", nick: "alice",
-        sessionID: 1, connectionID: 1, selfNick: "me",
-        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+        sessionID: 1, connectionID: 1, selfNick: "me")
 
     let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
     XCTAssertTrue(controller.membershipsBySession[sessionUUID, default: []].isEmpty,
@@ -437,14 +436,14 @@ func testUserlistClearDropsAllMembershipsForSession() {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: "Libera", channel: "#a", nick: nick,
-            sessionID: 1, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 1, connectionID: 1, selfNick: "me")
     }
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_CLEAR,
         network: "Libera", channel: "#a", nick: "",
-        sessionID: 1, connectionID: 1, selfNick: "me",
-        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+        sessionID: 1, connectionID: 1, selfNick: "me")
     let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
     XCTAssertTrue(controller.membershipsBySession[sessionUUID, default: []].isEmpty)
 }
@@ -539,13 +538,13 @@ func testSameNickOnTwoConnectionsAreDistinctUsers() {
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_INSERT,
         network: "AfterNET", channel: "#a", nick: "alice",
-        sessionID: 0, connectionID: 1, selfNick: "me1",
-        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+        sessionID: 0, connectionID: 1, selfNick: "me1")
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_INSERT,
         network: "AfterNET", channel: "#a", nick: "alice",
-        sessionID: 0, connectionID: 2, selfNick: "me2",
-        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+        sessionID: 0, connectionID: 2, selfNick: "me2")
 
     let conn1 = controller.connectionsByServerID[1]!
     let conn2 = controller.connectionsByServerID[2]!
@@ -590,8 +589,8 @@ func testUsersBySessionProjectionPreservesUserSortOrder() {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: "Libera", channel: "#a", nick: nick,
-            sessionID: 1, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: prefix)
+            modePrefix: prefix, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 1, connectionID: 1, selfNick: "me")
     }
     let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
     XCTAssertEqual(controller.usersBySession[sessionUUID]?.map(\.nick),
@@ -720,8 +719,8 @@ func testSessionRemoveDropsMembershipsForThatSession() {
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_INSERT,
         network: "Libera", channel: "#a", nick: "alice",
-        sessionID: 1, connectionID: 1, selfNick: "me",
-        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+        sessionID: 1, connectionID: 1, selfNick: "me")
     let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
     XCTAssertEqual(controller.membershipsBySession[sessionUUID]?.count, 1)
 
@@ -740,8 +739,8 @@ func testLifecycleStoppedClearsUsersAndMemberships() {
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_INSERT,
         network: "Libera", channel: "#a", nick: "alice",
-        sessionID: 1, connectionID: 1, selfNick: "me",
-        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+        sessionID: 1, connectionID: 1, selfNick: "me")
     XCTAssertFalse(controller.users.isEmpty)
     XCTAssertFalse(controller.usersByConnectionAndNick.isEmpty)
     XCTAssertFalse(controller.membershipsBySession.isEmpty)
@@ -784,15 +783,15 @@ func testAwayUpdateOnOneChannelFansOutToAllChannelsOfSameUser() {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: "Libera", channel: channel, nick: "alice",
-            sessionID: 0, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 0, connectionID: 1, selfNick: "me")
     }
     // Single UPDATE on one channel; fan-out must hit the other two.
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_UPDATE,
         network: "Libera", channel: "#a", nick: "alice",
-        sessionID: 0, connectionID: 1, selfNick: "me",
-        account: nil, host: nil, isMe: false, isAway: true, modePrefix: nil)
+        modePrefix: nil, account: nil, host: nil, isMe: false, isAway: true,
+        sessionID: 0, connectionID: 1, selfNick: "me")
 
     let connID = controller.connectionsByServerID[1]!
     let userID = controller.usersByConnectionAndNick[UserKey(connectionID: connID, nick: "alice")]!
@@ -813,14 +812,14 @@ func testAccountUpdateOnOneChannelFansOutToAllChannels() {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: "Libera", channel: channel, nick: "alice",
-            sessionID: 0, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 0, connectionID: 1, selfNick: "me")
     }
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_UPDATE,
         network: "Libera", channel: "#a", nick: "alice",
-        sessionID: 0, connectionID: 1, selfNick: "me",
-        account: "alice!authname", host: nil, isMe: false, isAway: false, modePrefix: nil)
+        modePrefix: nil, account: "alice!authname", host: nil, isMe: false, isAway: false,
+        sessionID: 0, connectionID: 1, selfNick: "me")
 
     let connID = controller.connectionsByServerID[1]!
     for channel in ["#a", "#b"] {
@@ -837,8 +836,8 @@ func testModePrefixIsMembershipLocalAndDoesNotFanOut() {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: "Libera", channel: channel, nick: "alice",
-            sessionID: 0, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: prefix)
+            modePrefix: prefix, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 0, connectionID: 1, selfNick: "me")
     }
     let connID = controller.connectionsByServerID[1]!
     let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
@@ -851,8 +850,8 @@ func testModePrefixIsMembershipLocalAndDoesNotFanOut() {
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_UPDATE,
         network: "Libera", channel: "#a", nick: "alice",
-        sessionID: 0, connectionID: 1, selfNick: "me",
-        account: nil, host: nil, isMe: false, isAway: false, modePrefix: "+")
+        modePrefix: "+", account: nil, host: nil, isMe: false, isAway: false,
+        sessionID: 0, connectionID: 1, selfNick: "me")
     XCTAssertEqual(controller.usersBySession[aUUID]?.first?.modePrefix, "+")
     XCTAssertNil(controller.usersBySession[bUUID]?.first?.modePrefix,
                  "mode change in #a must remain isolated to #a")
@@ -864,14 +863,14 @@ func testRemoveInOneChannelLeavesOtherChannelMembershipIntact() {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT,
             network: "Libera", channel: channel, nick: "alice",
-            sessionID: 0, connectionID: 1, selfNick: "me",
-            account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 0, connectionID: 1, selfNick: "me")
     }
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_REMOVE,
         network: "Libera", channel: "#a", nick: "alice",
-        sessionID: 0, connectionID: 1, selfNick: "me",
-        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+        sessionID: 0, connectionID: 1, selfNick: "me")
 
     let connID = controller.connectionsByServerID[1]!
     let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
@@ -892,15 +891,15 @@ func testClearInOneChannelLeavesOtherChannelMembershipsIntact() {
             controller.applyUserlistForTest(
                 action: HC_APPLE_USERLIST_INSERT,
                 network: "Libera", channel: channel, nick: nick,
-                sessionID: 0, connectionID: 1, selfNick: "me",
-                account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+                modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+                sessionID: 0, connectionID: 1, selfNick: "me")
         }
     }
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_CLEAR,
         network: "Libera", channel: "#a", nick: "",
-        sessionID: 0, connectionID: 1, selfNick: "me",
-        account: nil, host: nil, isMe: false, isAway: false, modePrefix: nil)
+        modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+        sessionID: 0, connectionID: 1, selfNick: "me")
 
     let connID = controller.connectionsByServerID[1]!
     let aUUID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
