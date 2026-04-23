@@ -100,6 +100,34 @@ struct Connection: Identifiable, Hashable {
     var selfNick: String?
 }
 
+struct User: Identifiable, Hashable {
+    let id: UUID
+    let connectionID: UUID
+    var nick: String
+    var account: String?
+    var hostmask: String?
+    var isMe: Bool
+    var isAway: Bool
+}
+
+struct ChannelMembership: Identifiable, Hashable {
+    let sessionID: UUID
+    let userID: UUID
+    var modePrefix: Character?
+
+    var id: String { "\(sessionID.uuidString)::\(userID.uuidString)" }
+}
+
+struct UserKey: Hashable {
+    let connectionID: UUID
+    let nickKey: String
+
+    init(connectionID: UUID, nick: String) {
+        self.connectionID = connectionID
+        self.nickKey = nick.lowercased()
+    }
+}
+
 enum ChatMessageClassifier {
     static func classify(raw: String, fallback: ChatMessageKind = .message) -> ChatMessageKind {
         if raw.hasPrefix("[STARTING]") || raw.hasPrefix("[READY]") || raw.hasPrefix("[STOPPING]") || raw.hasPrefix("[STOPPED]") {

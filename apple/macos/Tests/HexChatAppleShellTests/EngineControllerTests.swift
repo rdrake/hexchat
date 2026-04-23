@@ -927,6 +927,39 @@ final class EngineControllerTests: XCTestCase {
             controller.connections.count, 2,
             "One system connection + one real connection")
     }
+
+    func testUserCarriesStableIDAndConnectionScopedIdentity() {
+        let connID = UUID()
+        var user = User(
+            id: UUID(), connectionID: connID, nick: "alice",
+            account: nil, hostmask: nil, isMe: false, isAway: false)
+        let originalID = user.id
+        user.nick = "alice_"
+        XCTAssertEqual(user.id, originalID, "User.id is stable across nick changes")
+        XCTAssertEqual(user.connectionID, connID, "User.connectionID is the identity scope")
+    }
+
+    func testChannelMembershipCarriesJunctionFields() {
+        let sessionID = UUID()
+        let userID = UUID()
+        var membership = ChannelMembership(sessionID: sessionID, userID: userID, modePrefix: "@")
+        XCTAssertEqual(membership.sessionID, sessionID)
+        XCTAssertEqual(membership.userID, userID)
+        XCTAssertEqual(membership.modePrefix, "@")
+        membership.modePrefix = "+"
+        XCTAssertEqual(membership.modePrefix, "+", "modePrefix is mutable for mode changes")
+    }
+
+    func testUserKeyIsCaseInsensitiveOnNick() {
+        let connID = UUID()
+        let a = UserKey(connectionID: connID, nick: "Alice")
+        let b = UserKey(connectionID: connID, nick: "ALICE")
+        XCTAssertEqual(a, b, "UserKey equality must be case-insensitive on nick")
+        var seen: Set<UserKey> = [a]
+        XCTAssertTrue(seen.contains(b), "UserKey hash parity")
+        let otherConn = UserKey(connectionID: UUID(), nick: "alice")
+        XCTAssertNotEqual(a, otherConn, "different connections must yield distinct keys")
+    }
 }
 #else
 @testable import HexChatAppleShell
