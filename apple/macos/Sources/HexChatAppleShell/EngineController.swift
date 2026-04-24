@@ -133,19 +133,19 @@ struct ChatUser: Identifiable, Hashable {
     var id: String { nick.lowercased() }
 }
 
-struct ServerEndpoint: Hashable {
+struct ServerEndpoint: Codable, Hashable {
     var host: String
     var port: UInt16
     var useTLS: Bool
 }
 
-struct SASLConfig: Hashable {
+struct SASLConfig: Codable, Hashable {
     var mechanism: String
     var username: String
     var password: String
 }
 
-struct Network: Identifiable, Hashable {
+struct Network: Identifiable, Codable, Hashable {
     let id: UUID
     var displayName: String
     var servers: [ServerEndpoint]

@@ -1663,6 +1663,53 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(net.autoJoin, ["#hexchat", "#dev"])
         XCTAssertEqual(net.onConnectCommands.count, 1)
     }
+
+    // MARK: - Phase 6 — persistence (Task 2)
+
+    func testServerEndpointRoundTrip() throws {
+        let ep = ServerEndpoint(host: "irc.example.net", port: 6697, useTLS: true)
+        let data = try JSONEncoder().encode(ep)
+        let back = try JSONDecoder().decode(ServerEndpoint.self, from: data)
+        XCTAssertEqual(ep, back)
+    }
+
+    func testSASLConfigRoundTrip() throws {
+        let cfg = SASLConfig(mechanism: "PLAIN", username: "alice", password: "pw")
+        let data = try JSONEncoder().encode(cfg)
+        let back = try JSONDecoder().decode(SASLConfig.self, from: data)
+        XCTAssertEqual(cfg, back)
+    }
+
+    func testNetworkFullRoundTrip() throws {
+        let net = Network(
+            id: UUID(), displayName: "Example",
+            servers: [
+                ServerEndpoint(host: "a", port: 6667, useTLS: false),
+                ServerEndpoint(host: "b", port: 6697, useTLS: true),
+            ],
+            nicks: ["alice"],
+            sasl: SASLConfig(mechanism: "PLAIN", username: "alice", password: "pw"),
+            autoconnect: true, autoJoin: ["#hexchat"],
+            onConnectCommands: ["/msg NickServ IDENTIFY pw"]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(net)
+        let back = try JSONDecoder().decode(Network.self, from: data)
+        XCTAssertEqual(net, back)
+    }
+
+    func testNetworkJSONKeysAreStable() throws {
+        let net = Network(
+            id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            displayName: "X")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = String(data: try encoder.encode(net), encoding: .utf8)!
+        XCTAssertTrue(json.contains("\"autoJoin\""))
+        XCTAssertTrue(json.contains("\"displayName\""))
+        XCTAssertTrue(json.contains("\"onConnectCommands\""))
+    }
 }
 #else
 @testable import HexChatAppleShell
