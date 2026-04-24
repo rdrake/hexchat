@@ -1362,6 +1362,7 @@ fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, ti
 
 	case XP_TE_CHANGENICK:
 		/* args[0] = old-nick, args[1] = new-nick */
+		/* fall through */
 	case XP_TE_UCHANGENICK:
 		/* args[0] = self-nick (old), args[1] = new-nick — same arg layout */
 		if (!sess || !sess->server)
