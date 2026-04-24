@@ -981,3 +981,9 @@ void fe_scrollback_set_virtual (struct session *sess, void *db, const char *chan
 void fe_set_pending_db_rowid (struct session *sess, gint64 rowid) {}
 void fe_begin_multiline_group (struct session *sess) {}
 void fe_end_multiline_group (struct session *sess) {}
+int
+fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, time_t timestamp)
+{
+	(void)sess; (void)xp_te_index; (void)args; (void)nargs; (void)timestamp;
+	return 0;
+}

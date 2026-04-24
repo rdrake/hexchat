@@ -238,11 +238,26 @@ test_runtime_events_lifecycle_and_command_path (void)
 	g_assert_true (state.saw_mode_change);
 }
 
+static void
+test_apple_fe_text_event_stub_returns_zero (void)
+{
+	/* In Task 5, fe_text_event in apple-frontend.c is a stub that returns 0
+	 * for every index. Task 6 replaces this with a real dispatch table that
+	 * returns 1 for the recognized XP_TE_* codes. Pinning the stub behaviour
+	 * here lets Task 6's dispatch tests prove the stub was actually replaced. */
+	char *args[PDIWORDS];
+	for (int i = 0; i < PDIWORDS; i++) args[i] = (char *)"";
+	/* No session is required to exercise the stub; null is fine. */
+	g_assert_cmpint (fe_text_event (NULL, /* arbitrary index */ 0, args, PDIWORDS, 0), ==, 0);
+}
+
 int
 main (int argc, char **argv)
 {
 	g_test_init (&argc, &argv, NULL);
 	g_test_add_func ("/fe-apple/runtime/events-lifecycle-and-command-path",
 	                 test_runtime_events_lifecycle_and_command_path);
+	g_test_add_func ("/fe-apple/runtime/fe-text-event-stub-returns-zero",
+	                 test_apple_fe_text_event_stub_returns_zero);
 	return g_test_run ();
 }

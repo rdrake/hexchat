@@ -2683,3 +2683,10 @@ fe_set_batch_mode (session *sess, gboolean on)
 		gtk_widget_queue_draw (GTK_WIDGET (buf->xtext));
 	}
 }
+
+int
+fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, time_t timestamp)
+{
+	(void)sess; (void)xp_te_index; (void)args; (void)nargs; (void)timestamp;
+	return 0;
+}

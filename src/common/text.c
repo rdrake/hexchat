@@ -2098,6 +2098,12 @@ text_emit (int index, session *sess, char *a, char *b, char *c, char *d,
 	if (!is_session (sess))
 		return;
 
+	/* Phase 5: give the frontend a chance to claim this event for typed
+	 * dispatch. word[0] is the event name; word[1..PDIWORDS-1] are args.
+	 * Pass args+1 so the frontend sees only the user-visible parameters. */
+	if (fe_text_event (sess, index, word + 1, PDIWORDS - 1, timestamp))
+		return;
+
 	switch (index)
 	{
 	case XP_TE_JOIN:
