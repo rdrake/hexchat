@@ -1343,6 +1343,7 @@ fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, ti
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, NULL, timestamp);
 		return 1;
 	case XP_TE_UPARTREASON:
+		/* args[0] = self-nick, args[1] = host, args[2] = channel, args[3] = reason */
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, args[3], timestamp);
 		return 1;
 

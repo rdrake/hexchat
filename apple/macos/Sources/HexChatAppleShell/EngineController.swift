@@ -1087,6 +1087,11 @@ final class EngineController {
         let oldNick = event.nick ?? ""
         let newNick = event.targetNick ?? ""
         guard !oldNick.isEmpty, !newNick.isEmpty else { return }
+        // Author is intentionally resolved from `oldNick` here. Phase 5 does NOT
+        // remap `usersByConnectionAndNick[oldNick] → newNick`; the next
+        // USERLIST_UPDATE for this user reconciles the index. A follow-up
+        // (deferred per Phase 4 session summary) can correlate the typed NICK
+        // event to update the User record in place instead of waiting.
         let author = resolveAuthor(connectionID: connectionID, nick: oldNick)
         let timestamp = event.timestampSeconds == 0
             ? Date()
