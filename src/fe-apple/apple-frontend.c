@@ -42,6 +42,7 @@
 #include "../common/util.h"
 #include "../common/fe.h"
 #include "../common/server.h"
+#include "../common/text.h"
 #include "apple-callback-log.h"
 #include "apple-runtime.h"
 
@@ -257,7 +258,7 @@ fe_new_window (struct session *sess, int focus)
 }
 
 static int
-get_stamp_str (time_t tim, char *dest, int size)
+get_stamp_str_local (time_t tim, char *dest, int size)
 {
 	return strftime_validated (dest, size, prefs.hex_stamp_text_format, localtime (&tim));
 }
@@ -271,7 +272,7 @@ timecat (char *buf, time_t stamp)
 	if (!stamp)
 		stamp = time (0);
 
-	get_stamp_str (stamp, stampbuf, sizeof (stampbuf));
+	get_stamp_str_local (stamp, stampbuf, sizeof (stampbuf));
 	strcat (buf, stampbuf);
 	return strlen (stampbuf);
 }
@@ -1288,9 +1289,133 @@ void fe_scrollback_set_virtual (struct session *sess, void *db, const char *chan
 void fe_set_pending_db_rowid (struct session *sess, gint64 rowid) {}
 void fe_begin_multiline_group (struct session *sess) {}
 void fe_end_multiline_group (struct session *sess) {}
+static void
+emit_membership_for_session (hc_apple_membership_action action,
+                             const session *sess,
+                             const char *nick,
+                             const char *target_nick,
+                             const char *reason,
+                             time_t timestamp)
+{
+	if (!sess || !sess->server)
+		return;
+	hc_apple_runtime_emit_membership_change (
+	    action,
+	    hc_apple_session_network (sess),
+	    hc_apple_session_channel (sess),
+	    nick,
+	    target_nick,
+	    reason,
+	    NULL,                                       /* account: deferred to Phase 7 */
+	    NULL,                                       /* host: deferred */
+	    hc_apple_session_runtime_id (sess),
+	    hc_apple_session_connection_id (sess),
+	    hc_apple_session_self_nick (sess),
+	    timestamp);
+}
+
 int
 fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, time_t timestamp)
 {
-	(void)sess; (void)xp_te_index; (void)args; (void)nargs; (void)timestamp;
-	return 0;
+	(void)nargs;
+
+	switch (xp_te_index)
+	{
+	case XP_TE_JOIN:
+		/* args[0] = nick, args[1] = channel, args[2] = ip, args[3] = account */
+		emit_membership_for_session (HC_APPLE_MEMBERSHIP_JOIN, sess, args[0], NULL, NULL, timestamp);
+		return 1;
+	case XP_TE_UJOIN:
+		/* args[0] = self-nick, args[1] = channel, args[2] = ip */
+		emit_membership_for_session (HC_APPLE_MEMBERSHIP_JOIN, sess, args[0], NULL, NULL, timestamp);
+		return 1;
+
+	case XP_TE_PART:
+		/* args[0] = nick, args[1] = host, args[2] = channel */
+		emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, NULL, timestamp);
+		return 1;
+	case XP_TE_PARTREASON:
+		/* args[0] = nick, args[1] = host, args[2] = channel, args[3] = reason */
+		emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, args[3], timestamp);
+		return 1;
+	case XP_TE_UPART:
+		/* args[0] = self-nick, args[1] = host, args[2] = channel */
+		emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, NULL, timestamp);
+		return 1;
+	case XP_TE_UPARTREASON:
+		emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, args[3], timestamp);
+		return 1;
+
+	case XP_TE_QUIT:
+		/* args[0] = nick, args[1] = reason, args[2] = host */
+		emit_membership_for_session (HC_APPLE_MEMBERSHIP_QUIT, sess, args[0], NULL, args[1], timestamp);
+		return 1;
+
+	case XP_TE_KICK:
+		/* args[0] = kicker, args[1] = kicked, args[2] = channel, args[3] = reason */
+		emit_membership_for_session (HC_APPLE_MEMBERSHIP_KICK, sess, args[0], args[1], args[3], timestamp);
+		return 1;
+	case XP_TE_UKICK:
+		/* args[0] = self-nick, args[1] = channel, args[2] = kicker, args[3] = reason */
+		emit_membership_for_session (HC_APPLE_MEMBERSHIP_KICK, sess, args[2], args[0], args[3], timestamp);
+		return 1;
+
+	case XP_TE_CHANGENICK:
+		/* args[0] = old-nick, args[1] = new-nick */
+	case XP_TE_UCHANGENICK:
+		/* args[0] = self-nick (old), args[1] = new-nick — same arg layout */
+		if (!sess || !sess->server)
+			return 1;
+		hc_apple_runtime_emit_nick_change (
+		    hc_apple_session_network (sess),
+		    hc_apple_session_channel (sess),
+		    args[0], args[1],
+		    hc_apple_session_runtime_id (sess),
+		    hc_apple_session_connection_id (sess),
+		    hc_apple_session_self_nick (sess),
+		    timestamp);
+		return 1;
+
+	case XP_TE_CHANMODEGEN:
+	{
+		/* args[0] = actor; args[1] = sign ("+" or "-"); args[2] = mode char ("o");
+		 * args[3] = "channel arg" when the mode has an arg, else just "channel".
+		 * Strip the leading "channel " prefix from args[3] to recover the mode arg
+		 * (or NULL when there is none — args[3] equals sess->channel verbatim). */
+		if (!sess || !sess->server)
+			return 1;
+		char modes[4];
+		g_snprintf (modes, sizeof modes, "%s%s",
+		            args[1] ? args[1] : "", args[2] ? args[2] : "");
+		const char *mode_arg = NULL;
+		if (args[3] && sess->channel[0])
+		{
+			size_t prefix_len = strlen (sess->channel);
+			if (strncmp (args[3], sess->channel, prefix_len) == 0
+			    && args[3][prefix_len] == ' ')
+			{
+				mode_arg = args[3] + prefix_len + 1;
+			}
+			/* If args[3] equals sess->channel exactly (no arg present), mode_arg
+			 * stays NULL — Swift gets .modeChange(modes:"+i", args:nil). */
+		}
+		hc_apple_runtime_emit_mode_change (
+		    hc_apple_session_network (sess),
+		    hc_apple_session_channel (sess),
+		    args[0], modes, mode_arg,
+		    hc_apple_session_runtime_id (sess),
+		    hc_apple_session_connection_id (sess),
+		    hc_apple_session_self_nick (sess),
+		    timestamp);
+		return 1;
+	}
+
+	/* XP_TE_RAWMODES: deliberately NOT intercepted. See "Mode-change dedup"
+	 * in the architecture section — RAWMODES + CHANMODEGEN both fire for the
+	 * same incoming MODE message when prefs.hex_irc_raw_modes is on; we keep
+	 * CHANMODEGEN as canonical and let RAWMODES fall through to display_event. */
+
+	default:
+		return 0;
+	}
 }

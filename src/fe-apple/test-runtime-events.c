@@ -3,6 +3,8 @@
 
 #include "hexchat-apple.h"
 #include "apple-runtime.h"
+#include "../common/hexchat.h"
+#include "../common/text.h"
 #include "../common/fe.h"
 
 typedef struct
@@ -23,6 +25,9 @@ typedef struct
 	gboolean saw_membership_kick;
 	gboolean saw_nick_change;
 	gboolean saw_mode_change;
+	/* Task 6: fe_text_event dispatch fields */
+	gboolean saw_apple_join_dispatch;
+	gint64 last_membership_timestamp;
 } runtime_events_state;
 
 static void
@@ -127,6 +132,14 @@ runtime_event_cb (const hc_apple_event *event, void *userdata)
 		    event->reason && strcmp (event->reason, "reason-text") == 0)
 		{
 			state->saw_membership_kick = TRUE;
+		}
+		/* Task 6: fe_text_event dispatch — watch for the unit-user JOIN on #unit */
+		if (event->membership_action == HC_APPLE_MEMBERSHIP_JOIN &&
+		    event->nick && strcmp (event->nick, "unit-user") == 0 &&
+		    event->channel && strcmp (event->channel, "#unit") == 0)
+		{
+			state->saw_apple_join_dispatch = TRUE;
+			state->last_membership_timestamp = event->timestamp_seconds;
 		}
 	}
 	if (event->kind == HC_APPLE_EVENT_NICK_CHANGE)
@@ -239,19 +252,41 @@ test_runtime_events_lifecycle_and_command_path (void)
 }
 
 static void
-test_apple_fe_text_event_stub_returns_zero (void)
+test_apple_fe_text_event_dispatches_join (void)
 {
-	/* In Task 5, fe_text_event in apple-frontend.c is a stub that returns 0
-	 * for every index. Task 6 replaces this with a real dispatch table that
-	 * returns 1 for the recognized XP_TE_* codes. Pinning the stub behaviour
-	 * here lets Task 6's dispatch tests prove the stub was actually replaced. */
-	/* Match the production call site in src/common/text.c:text_emit, which passes
-	 * `word + 1` as args and `PDIWORDS - 1` as nargs. The stub must accept that
-	 * convention so Task 6's real dispatch can rely on it without overrun risk. */
+	runtime_events_state state = { .phase_positions = { -1, -1, -1, -1 } };
+	hc_apple_runtime_config config = {
+		.config_dir = g_get_tmp_dir (), .no_auto = 1, .skip_plugins = 1,
+	};
+	g_assert_true (hc_apple_runtime_start (&config, runtime_event_cb, &state));
+
+	/* Build a minimal session that satisfies hc_apple_session_runtime_id /
+	 * _connection_id / _self_nick. server.nick / session.channel are fixed-size
+	 * char arrays (NICKLEN / CHANLEN). Network name is derived at runtime by
+	 * server_get_network(); leaving serv.network = NULL causes it to fall through
+	 * to the "network" fallback string — acceptable for this dispatch test. */
+	server fake_serv = {0};
+	fake_serv.id = 7;
+	g_strlcpy (fake_serv.nick, "unit-self", sizeof fake_serv.nick);
+	session fake_sess = {0};
+	fake_sess.server = &fake_serv;
+	g_strlcpy (fake_sess.channel, "#unit", sizeof fake_sess.channel);
+
+	/* Match the production call site: PDIWORDS - 1 args. */
 	char *args[PDIWORDS - 1];
 	for (int i = 0; i < PDIWORDS - 1; i++) args[i] = (char *)"";
-	/* No session is required to exercise the stub; null is fine. */
-	g_assert_cmpint (fe_text_event (NULL, /* arbitrary index */ 0, args, PDIWORDS - 1, 0), ==, 0);
+	args[0] = (char *)"unit-user";       /* nick */
+	args[1] = (char *)"#unit";           /* channel */
+	args[2] = (char *)"ip";              /* host */
+	args[3] = (char *)"acct";            /* account */
+
+	int handled = fe_text_event (&fake_sess, XP_TE_JOIN, args, PDIWORDS - 1, 1700000000);
+	g_assert_cmpint (handled, ==, 1);
+	g_assert_true (wait_for_flag (&state.saw_apple_join_dispatch, 3000));
+	/* timestamp_seconds threaded through */
+	g_assert_cmpint (state.last_membership_timestamp, ==, 1700000000);
+
+	hc_apple_runtime_stop ();
 }
 
 int
@@ -260,7 +295,7 @@ main (int argc, char **argv)
 	g_test_init (&argc, &argv, NULL);
 	g_test_add_func ("/fe-apple/runtime/events-lifecycle-and-command-path",
 	                 test_runtime_events_lifecycle_and_command_path);
-	g_test_add_func ("/fe-apple/runtime/fe-text-event-stub-returns-zero",
-	                 test_apple_fe_text_event_stub_returns_zero);
+	g_test_add_func ("/fe-apple/runtime/fe-text-event-dispatches-join",
+	                 test_apple_fe_text_event_dispatches_join);
 	return g_test_run ();
 }
