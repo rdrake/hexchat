@@ -1619,6 +1619,50 @@ final class EngineControllerTests: XCTestCase {
             timestampSeconds: 0)
         XCTAssertGreaterThanOrEqual(controller.messages.count, 3)
     }
+
+    // MARK: - Phase 6 — persistence (Task 1)
+
+    func testServerEndpointDefaults() {
+        let ep = ServerEndpoint(host: "irc.example.net", port: 6697, useTLS: true)
+        XCTAssertEqual(ep.host, "irc.example.net")
+        XCTAssertEqual(ep.port, 6697)
+        XCTAssertTrue(ep.useTLS)
+    }
+
+    func testSASLConfigShape() {
+        let cfg = SASLConfig(mechanism: "PLAIN", username: "alice", password: "hunter2")
+        XCTAssertEqual(cfg.mechanism, "PLAIN")
+        XCTAssertEqual(cfg.username, "alice")
+    }
+
+    func testNetworkBackCompatInitializer() {
+        let net = Network(id: UUID(), displayName: "Example")
+        XCTAssertTrue(net.servers.isEmpty)
+        XCTAssertTrue(net.nicks.isEmpty)
+        XCTAssertNil(net.sasl)
+        XCTAssertFalse(net.autoconnect)
+        XCTAssertTrue(net.autoJoin.isEmpty)
+        XCTAssertTrue(net.onConnectCommands.isEmpty)
+    }
+
+    func testNetworkFullShape() {
+        let net = Network(
+            id: UUID(),
+            displayName: "Example",
+            servers: [ServerEndpoint(host: "irc.example.net", port: 6697, useTLS: true)],
+            nicks: ["alice", "alice_"],
+            sasl: SASLConfig(mechanism: "PLAIN", username: "alice", password: "pw"),
+            autoconnect: true,
+            autoJoin: ["#hexchat", "#dev"],
+            onConnectCommands: ["/msg NickServ IDENTIFY pw"]
+        )
+        XCTAssertEqual(net.servers.count, 1)
+        XCTAssertEqual(net.nicks, ["alice", "alice_"])
+        XCTAssertEqual(net.sasl?.username, "alice")
+        XCTAssertTrue(net.autoconnect)
+        XCTAssertEqual(net.autoJoin, ["#hexchat", "#dev"])
+        XCTAssertEqual(net.onConnectCommands.count, 1)
+    }
 }
 #else
 @testable import HexChatAppleShell

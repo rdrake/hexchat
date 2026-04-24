@@ -133,9 +133,47 @@ struct ChatUser: Identifiable, Hashable {
     var id: String { nick.lowercased() }
 }
 
+struct ServerEndpoint: Hashable {
+    var host: String
+    var port: UInt16
+    var useTLS: Bool
+}
+
+struct SASLConfig: Hashable {
+    var mechanism: String
+    var username: String
+    var password: String
+}
+
 struct Network: Identifiable, Hashable {
     let id: UUID
     var displayName: String
+    var servers: [ServerEndpoint]
+    var nicks: [String]
+    var sasl: SASLConfig?
+    var autoconnect: Bool
+    var autoJoin: [String]
+    var onConnectCommands: [String]
+
+    init(
+        id: UUID,
+        displayName: String,
+        servers: [ServerEndpoint] = [],
+        nicks: [String] = [],
+        sasl: SASLConfig? = nil,
+        autoconnect: Bool = false,
+        autoJoin: [String] = [],
+        onConnectCommands: [String] = []
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.servers = servers
+        self.nicks = nicks
+        self.sasl = sasl
+        self.autoconnect = autoconnect
+        self.autoJoin = autoJoin
+        self.onConnectCommands = onConnectCommands
+    }
 }
 
 struct Connection: Identifiable, Hashable {
