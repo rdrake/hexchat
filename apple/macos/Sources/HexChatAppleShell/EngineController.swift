@@ -578,7 +578,13 @@ final class EngineController {
             isMe: isMe,
             isAway: isAway,
             connectionID: connectionID,
-            selfNick: selfNick
+            selfNick: selfNick,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            targetNick: nil,
+            reason: nil,
+            modes: nil,
+            modesArgs: nil,
+            timestampSeconds: 0
         )
         handleUserlistEvent(event)
     }
@@ -606,7 +612,13 @@ final class EngineController {
             isMe: false,
             isAway: false,
             connectionID: connectionID,
-            selfNick: selfNick
+            selfNick: selfNick,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            targetNick: nil,
+            reason: nil,
+            modes: nil,
+            modesArgs: nil,
+            timestampSeconds: 0
         )
         handleUserlistEvent(event)
     }
@@ -638,7 +650,13 @@ final class EngineController {
             isMe: false,
             isAway: false,
             connectionID: connectionID,
-            selfNick: selfNick
+            selfNick: selfNick,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            targetNick: nil,
+            reason: nil,
+            modes: nil,
+            modesArgs: nil,
+            timestampSeconds: 0
         )
         handleSessionEvent(event)
     }
@@ -666,7 +684,9 @@ final class EngineController {
             kind: HC_APPLE_EVENT_LIFECYCLE, text: nil, phase: phase,
             code: 0, sessionID: 0, network: nil, channel: nil, nick: nil,
             modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
-            connectionID: 0, selfNick: nil)
+            connectionID: 0, selfNick: nil,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN, targetNick: nil,
+            reason: nil, modes: nil, modesArgs: nil, timestampSeconds: 0)
         handleRuntimeEvent(event)
     }
 
@@ -693,7 +713,13 @@ final class EngineController {
             isMe: false,
             isAway: false,
             connectionID: connectionID,
-            selfNick: selfNick
+            selfNick: selfNick,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            targetNick: nil,
+            reason: nil,
+            modes: nil,
+            modesArgs: nil,
+            timestampSeconds: 0
         )
         handleRuntimeEvent(event)
     }
@@ -987,6 +1013,15 @@ fileprivate struct RuntimeEvent {
     let isAway: Bool
     let connectionID: UInt64
     let selfNick: String?
+    // Phase 5 typed events
+    let membershipAction: hc_apple_membership_action
+    let targetNick: String?
+    let reason: String?
+    let modes: String?
+    let modesArgs: String?
+    /// Producer-side `time_t` widened to int64. 0 means "no producer timestamp;
+    /// the consumer uses Date() at handle time."
+    let timestampSeconds: Int64
 
     var userlistAction: hc_apple_userlist_action {
         hc_apple_userlist_action(rawValue: UInt32(code))
@@ -1016,7 +1051,6 @@ private extension hc_apple_lifecycle_phase {
 
 private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> RuntimeEvent {
     let raw = pointer.pointee
-
     let copiedText = raw.text.map { String(cString: $0) }
     let copiedNetwork = raw.network.map { String(cString: $0) }
     let copiedChannel = raw.channel.map { String(cString: $0) }
@@ -1024,8 +1058,11 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
     let copiedAccount = raw.account.map { String(cString: $0) }
     let copiedHost = raw.host.map { String(cString: $0) }
     let copiedSelfNick = raw.self_nick.map { String(cString: $0) }
+    let copiedTarget = raw.target_nick.map { String(cString: $0) }
+    let copiedReason = raw.reason.map { String(cString: $0) }
+    let copiedModes = raw.modes.map { String(cString: $0) }
+    let copiedModesArgs = raw.modes_args.map { String(cString: $0) }
     let prefix: Character? = raw.mode_prefix == 0 ? nil : Character(UnicodeScalar(raw.mode_prefix))
-
     return RuntimeEvent(
         kind: raw.kind,
         text: copiedText,
@@ -1041,7 +1078,13 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
         isMe: raw.is_me != 0,
         isAway: raw.is_away != 0,
         connectionID: raw.connection_id,
-        selfNick: copiedSelfNick
+        selfNick: copiedSelfNick,
+        membershipAction: raw.membership_action,
+        targetNick: copiedTarget,
+        reason: copiedReason,
+        modes: copiedModes,
+        modesArgs: copiedModesArgs,
+        timestampSeconds: raw.timestamp_seconds
     )
 }
 
