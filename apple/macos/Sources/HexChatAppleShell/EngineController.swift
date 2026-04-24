@@ -690,6 +690,44 @@ final class EngineController {
         handleRuntimeEvent(event)
     }
 
+    func applyMembershipForTest(
+        action: hc_apple_membership_action,
+        network: String,
+        channel: String,
+        nick: String,
+        targetNick: String? = nil,
+        reason: String? = nil,
+        sessionID: UInt64 = 0,
+        connectionID: UInt64 = 0,
+        selfNick: String? = nil,
+        timestampSeconds: Int64 = 0
+    ) {
+        let event = RuntimeEvent(
+            kind: HC_APPLE_EVENT_MEMBERSHIP_CHANGE,
+            text: nil,
+            phase: HC_APPLE_LIFECYCLE_STARTING,
+            code: 0,
+            sessionID: sessionID,
+            network: network,
+            channel: channel,
+            nick: nick,
+            modePrefix: nil,
+            account: nil,
+            host: nil,
+            isMe: false,
+            isAway: false,
+            connectionID: connectionID,
+            selfNick: selfNick,
+            membershipAction: action,
+            targetNick: targetNick,
+            reason: reason,
+            modes: nil,
+            modesArgs: nil,
+            timestampSeconds: timestampSeconds
+        )
+        handleRuntimeEvent(event)
+    }
+
     func applyLogLineForTest(
         network: String? = nil,
         channel: String? = nil,
@@ -773,6 +811,8 @@ final class EngineController {
             handleUserlistEvent(event)
         case HC_APPLE_EVENT_SESSION:
             handleSessionEvent(event)
+        case HC_APPLE_EVENT_MEMBERSHIP_CHANGE:
+            handleMembershipChangeEvent(event)
         default:
             break
         }
@@ -953,6 +993,50 @@ final class EngineController {
         default:
             break
         }
+    }
+
+    private func handleMembershipChangeEvent(_ event: RuntimeEvent) {
+        let channel = event.channel ?? SystemSession.channel
+        let connectionID = registerConnection(from: event) ?? systemConnectionUUID()
+        let locator: SessionLocator = event.sessionID > 0
+            ? .runtime(id: event.sessionID)
+            : .composed(connectionID: connectionID, channel: channel)
+        let sessionID = upsertSession(locator: locator, connectionID: connectionID, channel: channel)
+        let nick = event.nick ?? ""
+        guard !nick.isEmpty else { return }
+        let author = resolveAuthor(connectionID: connectionID, nick: nick)
+        let kind: ChatMessageKind
+        switch event.membershipAction {
+        case HC_APPLE_MEMBERSHIP_JOIN:
+            kind = .join
+        case HC_APPLE_MEMBERSHIP_PART:
+            kind = .part(reason: event.reason)
+        case HC_APPLE_MEMBERSHIP_QUIT:
+            kind = .quit(reason: event.reason)
+        case HC_APPLE_MEMBERSHIP_KICK:
+            kind = .kick(target: event.targetNick ?? "", reason: event.reason)
+        default:
+            return
+        }
+        // Synthesize a back-compat raw string so legacy consumers reading `.raw` still
+        // see something readable. Matches the format the classifier used to assign.
+        let raw: String
+        switch kind {
+        case .join: raw = "* \(nick) has joined \(channel)"
+        case .part(let r):
+            raw = r.map { "* \(nick) has left \(channel) (\($0))" } ?? "* \(nick) has left \(channel)"
+        case .quit(let r):
+            raw = r.map { "* \(nick) has quit (\($0))" } ?? "* \(nick) has quit"
+        case .kick(let target, let r):
+            raw = r.map { "* \(nick) has kicked \(target) (\($0))" } ?? "* \(nick) has kicked \(target)"
+        default: raw = ""
+        }
+        let timestamp = event.timestampSeconds == 0
+            ? Date()
+            : Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds))
+        messages.append(ChatMessage(
+            sessionID: sessionID, raw: raw, kind: kind,
+            author: author, timestamp: timestamp))
     }
 
     private func sessionSort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {

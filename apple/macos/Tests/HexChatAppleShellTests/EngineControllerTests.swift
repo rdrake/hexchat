@@ -1416,6 +1416,94 @@ final class EngineControllerTests: XCTestCase {
         // Original nick casing is preserved on the author.
         XCTAssertEqual(upper.nick, "ALICE")
     }
+
+    // MARK: - Task 7 — MEMBERSHIP_CHANGE typed events
+
+    func testMembershipJoinAppendsTypedMessageWithResolvedAuthor() {
+        let controller = EngineController()
+        // Pre-seed the User so author.userID resolves.
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "Libera", channel: "#a", nick: "alice",
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        let connID = controller.connectionsByServerID[1]!
+        let userID = controller.usersByConnectionAndNick[UserKey(connectionID: connID, nick: "alice")]
+
+        controller.applyMembershipForTest(
+            action: HC_APPLE_MEMBERSHIP_JOIN,
+            network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+
+        let sessionUUID = controller.sessionUUID(for: .runtime(id: 1))!
+        let last = controller.messages.last!
+        XCTAssertEqual(last.sessionID, sessionUUID)
+        XCTAssertEqual(last.kind, .join)
+        XCTAssertEqual(last.author?.nick, "alice")
+        XCTAssertEqual(last.author?.userID, userID)
+    }
+
+    func testMembershipPartCarriesReasonOptionally() {
+        let controller = EngineController()
+        controller.applyMembershipForTest(
+            action: HC_APPLE_MEMBERSHIP_PART,
+            network: "Libera", channel: "#a", nick: "alice",
+            reason: "later",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        let part = controller.messages.last!
+        XCTAssertEqual(part.kind, .part(reason: "later"))
+
+        controller.applyMembershipForTest(
+            action: HC_APPLE_MEMBERSHIP_PART,
+            network: "Libera", channel: "#a", nick: "bob",
+            reason: nil,
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        XCTAssertEqual(controller.messages.last?.kind, .part(reason: nil))
+    }
+
+    func testMembershipKickCarriesTargetAndReason() {
+        let controller = EngineController()
+        controller.applyMembershipForTest(
+            action: HC_APPLE_MEMBERSHIP_KICK,
+            network: "Libera", channel: "#a", nick: "kicker",
+            targetNick: "victim", reason: "spam",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        XCTAssertEqual(controller.messages.last?.kind,
+                       .kick(target: "victim", reason: "spam"))
+        XCTAssertEqual(controller.messages.last?.author?.nick, "kicker")
+    }
+
+    func testMembershipQuitArrivesPerSessionFromCoreFanout() {
+        // Simulate what inbound_quit does: emit one MEMBERSHIP_CHANGE/QUIT per session
+        // that contained the user. Assert the consumer simply records each one without
+        // re-fanning out across the controller.
+        let controller = EngineController()
+        for channel in ["#a", "#b"] {
+            controller.applyUserlistForTest(
+                action: HC_APPLE_USERLIST_INSERT,
+                network: "Libera", channel: channel, nick: "alice",
+                modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+                sessionID: 0, connectionID: 1, selfNick: "me")
+        }
+        controller.applyMembershipForTest(
+            action: HC_APPLE_MEMBERSHIP_QUIT,
+            network: "Libera", channel: "#a", nick: "alice",
+            reason: "bye", sessionID: 0, connectionID: 1, selfNick: "me")
+        controller.applyMembershipForTest(
+            action: HC_APPLE_MEMBERSHIP_QUIT,
+            network: "Libera", channel: "#b", nick: "alice",
+            reason: "bye", sessionID: 0, connectionID: 1, selfNick: "me")
+
+        let connID = controller.connectionsByServerID[1]!
+        let aSess = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
+        let bSess = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#b"))!
+        let quits = controller.messages.filter {
+            if case .quit(let r) = $0.kind { return r == "bye" }
+            return false
+        }
+        XCTAssertEqual(quits.count, 2, "one quit per session — no extra fan-out on consumer")
+        XCTAssertEqual(Set(quits.map(\.sessionID)), Set([aSess, bSess]))
+    }
 }
 #else
 @testable import HexChatAppleShell
