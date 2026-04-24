@@ -101,9 +101,10 @@ void fe_progressbar_end (struct server *serv);
 void fe_print_text (struct session *sess, char *text, time_t stamp,
 					gboolean no_activity);
 /* Phase 5 typed-event hook. Frontends that handle a given XP_TE_* event return
- * non-zero to short-circuit text_emit (skip alerts / display_event for this
- * call). Default-implementing frontends return 0 — text_emit then runs
- * normally. */
+ * non-zero to short-circuit text_emit — skipping the join/part hide logic,
+ * the beep / flash / tray alerts, the sound trigger, and display_event (the
+ * formatted text path) for this call. Default-implementing frontends return 0
+ * — text_emit then runs normally. */
 int fe_text_event (struct session *sess, int xp_te_index,
                    char **args, int nargs, time_t timestamp);
 /* IRCv3 modernization: prepend for chathistory BEFORE requests (Phase 3) */

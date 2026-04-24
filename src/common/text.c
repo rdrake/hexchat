@@ -2099,8 +2099,10 @@ text_emit (int index, session *sess, char *a, char *b, char *c, char *d,
 		return;
 
 	/* Phase 5: give the frontend a chance to claim this event for typed
-	 * dispatch. word[0] is the event name; word[1..PDIWORDS-1] are args.
-	 * Pass args+1 so the frontend sees only the user-visible parameters. */
+	 * dispatch. Local word[0] is the event name (not forwarded); word[1..]
+	 * carry the user-visible args. The frontend receives them as
+	 * args[0..PDIWORDS-2]. Returning non-zero short-circuits the rest of
+	 * text_emit (alerts, sound, display_event). */
 	if (fe_text_event (sess, index, word + 1, PDIWORDS - 1, timestamp))
 		return;
 

@@ -245,10 +245,13 @@ test_apple_fe_text_event_stub_returns_zero (void)
 	 * for every index. Task 6 replaces this with a real dispatch table that
 	 * returns 1 for the recognized XP_TE_* codes. Pinning the stub behaviour
 	 * here lets Task 6's dispatch tests prove the stub was actually replaced. */
-	char *args[PDIWORDS];
-	for (int i = 0; i < PDIWORDS; i++) args[i] = (char *)"";
+	/* Match the production call site in src/common/text.c:text_emit, which passes
+	 * `word + 1` as args and `PDIWORDS - 1` as nargs. The stub must accept that
+	 * convention so Task 6's real dispatch can rely on it without overrun risk. */
+	char *args[PDIWORDS - 1];
+	for (int i = 0; i < PDIWORDS - 1; i++) args[i] = (char *)"";
 	/* No session is required to exercise the stub; null is fine. */
-	g_assert_cmpint (fe_text_event (NULL, /* arbitrary index */ 0, args, PDIWORDS, 0), ==, 0);
+	g_assert_cmpint (fe_text_event (NULL, /* arbitrary index */ 0, args, PDIWORDS - 1, 0), ==, 0);
 }
 
 int
