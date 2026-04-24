@@ -82,7 +82,20 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(ChatMessageClassifier.classify(raw: "> /join #a"), .command(body: "/join #a"))
         XCTAssertEqual(ChatMessageClassifier.classify(raw: "[READY] ready"), .lifecycle(phase: "READY", body: "ready"))
         XCTAssertEqual(ChatMessageClassifier.classify(raw: "-notice-"), .notice(body: "notice-"))
-        XCTAssertEqual(ChatMessageClassifier.classify(raw: "nick has joined #a"), .join)
+    }
+
+    func testClassifierNoLongerMatchesJoinPartQuitText() {
+        // The text path used to classify these as typed events. Phase 5 retires
+        // the heuristic — typed-event producers are the source of truth now.
+        if case .message = ChatMessageClassifier.classify(raw: "* alice has joined #a") {} else {
+            XCTFail("\" has joined\" must classify as .message in Phase 5+, not .join")
+        }
+        if case .message = ChatMessageClassifier.classify(raw: "* alice has left #a") {} else {
+            XCTFail("\" has left\" must classify as .message in Phase 5+, not .part")
+        }
+        if case .message = ChatMessageClassifier.classify(raw: "* alice has quit (bye)") {} else {
+            XCTFail("\" quit\" must classify as .message in Phase 5+, not .quit")
+        }
     }
 
     func testLogAttributionUsesEventSessionNotSelectedSession() {

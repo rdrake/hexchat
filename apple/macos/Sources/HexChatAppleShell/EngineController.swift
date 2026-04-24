@@ -184,8 +184,14 @@ struct UserKey: Hashable {
     }
 }
 
+/// Classifies free-text `LOG_LINE` strings (apple-runtime synthetic lines, IRC
+/// PRIVMSG/NOTICE bodies) into a `ChatMessageKind`. JOIN/PART/QUIT/KICK/NICK/MODE
+/// are no longer matched here as of Phase 5 — typed-event producers
+/// (`fe_text_event` → `HC_APPLE_EVENT_*_CHANGE`) are the source of truth for
+/// those events. Anything that doesn't match a recognized prefix becomes
+/// `.message(body:)`.
 enum ChatMessageClassifier {
-    static func classify(raw: String, fallback: ChatMessageKind = .message(body: "")) -> ChatMessageKind {
+    static func classify(raw: String) -> ChatMessageKind {
         let isLifecycle =
             raw.hasPrefix("[STARTING]") || raw.hasPrefix("[READY]")
             || raw.hasPrefix("[STOPPING]") || raw.hasPrefix("[STOPPED]")
@@ -197,18 +203,8 @@ enum ChatMessageClassifier {
         }
         if raw.hasPrefix("!") { return .error(body: String(raw.dropFirst().drop(while: { $0 == " " }))) }
         if raw.hasPrefix(">") { return .command(body: String(raw.dropFirst().drop(while: { $0 == " " }))) }
-        let lower = raw.lowercased()
-        if lower.contains(" has joined") || lower.contains(" joined ") { return .join }
-        if lower.contains(" has left") || lower.contains(" left ") { return .part(reason: nil) }
-        if lower.contains(" quit") { return .quit(reason: nil) }
         if raw.hasPrefix("-") { return .notice(body: String(raw.dropFirst().drop(while: { $0 == " " }))) }
-        // Default body for the message case is the raw text.
-        switch fallback {
-        case .message:
-            return .message(body: raw)
-        default:
-            return fallback
-        }
+        return .message(body: raw)
     }
 }
 
