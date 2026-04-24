@@ -579,7 +579,7 @@ final class EngineController {
             isAway: isAway,
             connectionID: connectionID,
             selfNick: selfNick,
-            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,  // ignored when kind != MEMBERSHIP_CHANGE
             targetNick: nil,
             reason: nil,
             modes: nil,
@@ -613,7 +613,7 @@ final class EngineController {
             isAway: false,
             connectionID: connectionID,
             selfNick: selfNick,
-            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,  // ignored when kind != MEMBERSHIP_CHANGE
             targetNick: nil,
             reason: nil,
             modes: nil,
@@ -651,7 +651,7 @@ final class EngineController {
             isAway: false,
             connectionID: connectionID,
             selfNick: selfNick,
-            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,  // ignored when kind != MEMBERSHIP_CHANGE
             targetNick: nil,
             reason: nil,
             modes: nil,
@@ -714,7 +714,7 @@ final class EngineController {
             isAway: false,
             connectionID: connectionID,
             selfNick: selfNick,
-            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,  // ignored when kind != MEMBERSHIP_CHANGE
             targetNick: nil,
             reason: nil,
             modes: nil,
@@ -1051,6 +1051,7 @@ private extension hc_apple_lifecycle_phase {
 
 private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> RuntimeEvent {
     let raw = pointer.pointee
+
     let copiedText = raw.text.map { String(cString: $0) }
     let copiedNetwork = raw.network.map { String(cString: $0) }
     let copiedChannel = raw.channel.map { String(cString: $0) }
@@ -1063,6 +1064,7 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
     let copiedModes = raw.modes.map { String(cString: $0) }
     let copiedModesArgs = raw.modes_args.map { String(cString: $0) }
     let prefix: Character? = raw.mode_prefix == 0 ? nil : Character(UnicodeScalar(raw.mode_prefix))
+
     return RuntimeEvent(
         kind: raw.kind,
         text: copiedText,
