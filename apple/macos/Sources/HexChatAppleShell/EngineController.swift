@@ -145,6 +145,21 @@ struct SASLConfig: Codable, Hashable {
     var password: String
 }
 
+struct ConversationKey: Codable, Hashable {
+    let networkID: UUID
+    let channel: String
+
+    static func == (lhs: ConversationKey, rhs: ConversationKey) -> Bool {
+        lhs.networkID == rhs.networkID
+            && lhs.channel.caseInsensitiveCompare(rhs.channel) == .orderedSame
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(networkID)
+        hasher.combine(channel.lowercased())
+    }
+}
+
 struct Network: Identifiable, Codable, Hashable {
     let id: UUID
     var displayName: String

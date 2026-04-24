@@ -1710,6 +1710,37 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertTrue(json.contains("\"displayName\""))
         XCTAssertTrue(json.contains("\"onConnectCommands\""))
     }
+
+    // MARK: - Phase 6 — persistence (Task 3)
+
+    func testConversationKeyCaseInsensitiveChannelEquality() {
+        let net = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let a = ConversationKey(networkID: net, channel: "#HexChat")
+        let b = ConversationKey(networkID: net, channel: "#hexchat")
+        XCTAssertEqual(a, b)
+        XCTAssertEqual(a.hashValue, b.hashValue)
+    }
+
+    func testConversationKeyRoundTrip() throws {
+        let net = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let original = ConversationKey(networkID: net, channel: "#HexChat")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(original)
+        let json = String(data: data, encoding: .utf8)!
+        XCTAssertTrue(json.contains("\"channel\":\"#HexChat\""))
+        XCTAssertTrue(json.contains("\"networkID\":\"22222222-2222-2222-2222-222222222222\""))
+        let back = try JSONDecoder().decode(ConversationKey.self, from: data)
+        XCTAssertEqual(original, back)
+        XCTAssertEqual(back, ConversationKey(networkID: net, channel: "#hexchat"))
+    }
+
+    func testConversationKeyDictionaryLookupIsCaseInsensitive() {
+        let net = UUID()
+        var m: [ConversationKey: Int] = [:]
+        m[ConversationKey(networkID: net, channel: "#HexChat")] = 42
+        XCTAssertEqual(m[ConversationKey(networkID: net, channel: "#hexchat")], 42)
+    }
 }
 #else
 @testable import HexChatAppleShell
