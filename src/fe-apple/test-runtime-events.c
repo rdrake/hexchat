@@ -19,6 +19,10 @@ typedef struct
 	gboolean saw_session_activate;
 	gboolean saw_scoped_log_event;
 	gboolean saw_echo_slash_log;
+	gboolean saw_membership_join;
+	gboolean saw_membership_kick;
+	gboolean saw_nick_change;
+	gboolean saw_mode_change;
 } runtime_events_state;
 
 static void
@@ -106,6 +110,41 @@ runtime_event_cb (const hc_apple_event *event, void *userdata)
 			state->saw_scoped_log_event = TRUE;
 		}
 	}
+
+	if (event->kind == HC_APPLE_EVENT_MEMBERSHIP_CHANGE)
+	{
+		if (event->membership_action == HC_APPLE_MEMBERSHIP_JOIN &&
+		    event->nick && strcmp (event->nick, "join-user") == 0 &&
+		    event->channel && strcmp (event->channel, "#runtime") == 0 &&
+		    event->target_nick == NULL && event->reason == NULL &&
+		    event->timestamp_seconds == 1700000000)
+		{
+			state->saw_membership_join = TRUE;
+		}
+		if (event->membership_action == HC_APPLE_MEMBERSHIP_KICK &&
+		    event->nick && strcmp (event->nick, "kicker") == 0 &&
+		    event->target_nick && strcmp (event->target_nick, "victim") == 0 &&
+		    event->reason && strcmp (event->reason, "reason-text") == 0)
+		{
+			state->saw_membership_kick = TRUE;
+		}
+	}
+	if (event->kind == HC_APPLE_EVENT_NICK_CHANGE)
+	{
+		if (event->nick && strcmp (event->nick, "old-nick") == 0 &&
+		    event->target_nick && strcmp (event->target_nick, "new-nick") == 0)
+		{
+			state->saw_nick_change = TRUE;
+		}
+	}
+	if (event->kind == HC_APPLE_EVENT_MODE_CHANGE)
+	{
+		if (event->modes && strcmp (event->modes, "+o-v") == 0 &&
+		    event->modes_args && strcmp (event->modes_args, "alice bob") == 0)
+		{
+			state->saw_mode_change = TRUE;
+		}
+	}
 }
 
 static gboolean
@@ -161,6 +200,16 @@ test_runtime_events_lifecycle_and_command_path (void)
 	                                "meta-user", '@', "meta-acct", "meta.example",
 	                                1, 1, 42, 99, "runtime-self");
 	hc_apple_runtime_emit_session (HC_APPLE_SESSION_ACTIVATE, "runtime-net", "#runtime", 42, 0, NULL);
+	hc_apple_runtime_emit_membership_change (
+	    HC_APPLE_MEMBERSHIP_JOIN, "runtime-net", "#runtime", "join-user",
+	    NULL, NULL, NULL, NULL, 42, 0, NULL, 1700000000);
+	hc_apple_runtime_emit_membership_change (
+	    HC_APPLE_MEMBERSHIP_KICK, "runtime-net", "#runtime", "kicker",
+	    "victim", "reason-text", NULL, NULL, 42, 0, NULL, 0);
+	hc_apple_runtime_emit_nick_change (
+	    "runtime-net", "#runtime", "old-nick", "new-nick", 42, 0, NULL, 0);
+	hc_apple_runtime_emit_mode_change (
+	    "runtime-net", "#runtime", "actor", "+o-v", "alice bob", 42, 0, NULL, 0);
 	hc_apple_runtime_stop ();
 
 	g_assert_cmpint (state.phase_positions[HC_APPLE_LIFECYCLE_STARTING], >=, 0);
@@ -183,6 +232,10 @@ test_runtime_events_lifecycle_and_command_path (void)
 	g_assert_true (state.saw_session_activate);
 	g_assert_true (state.saw_scoped_log_event);
 	g_assert_true (state.saw_echo_slash_log);
+	g_assert_true (state.saw_membership_join);
+	g_assert_true (state.saw_membership_kick);
+	g_assert_true (state.saw_nick_change);
+	g_assert_true (state.saw_mode_change);
 }
 
 int

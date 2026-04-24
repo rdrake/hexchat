@@ -137,6 +137,97 @@ hc_apple_runtime_emit_session (hc_apple_session_action action,
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
+void
+hc_apple_runtime_emit_membership_change (hc_apple_membership_action action,
+                                         const char *network,
+                                         const char *channel,
+                                         const char *nick,
+                                         const char *target_nick,
+                                         const char *reason,
+                                         const char *account,
+                                         const char *host,
+                                         uint64_t session_id,
+                                         uint64_t connection_id,
+                                         const char *self_nick,
+                                         time_t timestamp)
+{
+	hc_apple_event event = {0};
+
+	if (!hc_apple_runtime.callback)
+		return;
+
+	event.kind = HC_APPLE_EVENT_MEMBERSHIP_CHANGE;
+	event.membership_action = action;
+	event.network = network;
+	event.channel = channel;
+	event.nick = nick;
+	event.target_nick = target_nick;
+	event.reason = reason;
+	event.account = account;
+	event.host = host;
+	event.session_id = session_id;
+	event.connection_id = connection_id;
+	event.self_nick = self_nick;
+	event.timestamp_seconds = (int64_t)timestamp;
+	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
+}
+
+void
+hc_apple_runtime_emit_nick_change (const char *network,
+                                   const char *channel,
+                                   const char *nick,
+                                   const char *target_nick,
+                                   uint64_t session_id,
+                                   uint64_t connection_id,
+                                   const char *self_nick,
+                                   time_t timestamp)
+{
+	hc_apple_event event = {0};
+
+	if (!hc_apple_runtime.callback)
+		return;
+
+	event.kind = HC_APPLE_EVENT_NICK_CHANGE;
+	event.network = network;
+	event.channel = channel;
+	event.nick = nick;
+	event.target_nick = target_nick;
+	event.session_id = session_id;
+	event.connection_id = connection_id;
+	event.self_nick = self_nick;
+	event.timestamp_seconds = (int64_t)timestamp;
+	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
+}
+
+void
+hc_apple_runtime_emit_mode_change (const char *network,
+                                   const char *channel,
+                                   const char *nick,
+                                   const char *modes,
+                                   const char *modes_args,
+                                   uint64_t session_id,
+                                   uint64_t connection_id,
+                                   const char *self_nick,
+                                   time_t timestamp)
+{
+	hc_apple_event event = {0};
+
+	if (!hc_apple_runtime.callback)
+		return;
+
+	event.kind = HC_APPLE_EVENT_MODE_CHANGE;
+	event.network = network;
+	event.channel = channel;
+	event.nick = nick;
+	event.modes = modes;
+	event.modes_args = modes_args;
+	event.session_id = session_id;
+	event.connection_id = connection_id;
+	event.self_nick = self_nick;
+	event.timestamp_seconds = (int64_t)timestamp;
+	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
+}
+
 static gpointer
 hc_apple_engine_thread_main (gpointer data)
 {
