@@ -728,6 +728,44 @@ final class EngineController {
         handleRuntimeEvent(event)
     }
 
+    func applyNickChangeForTest(
+        network: String, channel: String,
+        oldNick: String, newNick: String,
+        sessionID: UInt64 = 0, connectionID: UInt64 = 0, selfNick: String? = nil,
+        timestampSeconds: Int64 = 0
+    ) {
+        let event = RuntimeEvent(
+            kind: HC_APPLE_EVENT_NICK_CHANGE,
+            text: nil, phase: HC_APPLE_LIFECYCLE_STARTING, code: 0,
+            sessionID: sessionID, network: network, channel: channel,
+            nick: oldNick, modePrefix: nil, account: nil, host: nil,
+            isMe: false, isAway: false,
+            connectionID: connectionID, selfNick: selfNick,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            targetNick: newNick, reason: nil, modes: nil, modesArgs: nil,
+            timestampSeconds: timestampSeconds)
+        handleRuntimeEvent(event)
+    }
+
+    func applyModeChangeForTest(
+        network: String, channel: String, actor: String,
+        modes: String, args: String?,
+        sessionID: UInt64 = 0, connectionID: UInt64 = 0, selfNick: String? = nil,
+        timestampSeconds: Int64 = 0
+    ) {
+        let event = RuntimeEvent(
+            kind: HC_APPLE_EVENT_MODE_CHANGE,
+            text: nil, phase: HC_APPLE_LIFECYCLE_STARTING, code: 0,
+            sessionID: sessionID, network: network, channel: channel,
+            nick: actor, modePrefix: nil, account: nil, host: nil,
+            isMe: false, isAway: false,
+            connectionID: connectionID, selfNick: selfNick,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            targetNick: nil, reason: nil, modes: modes, modesArgs: args,
+            timestampSeconds: timestampSeconds)
+        handleRuntimeEvent(event)
+    }
+
     func applyLogLineForTest(
         network: String? = nil,
         channel: String? = nil,
@@ -813,6 +851,10 @@ final class EngineController {
             handleSessionEvent(event)
         case HC_APPLE_EVENT_MEMBERSHIP_CHANGE:
             handleMembershipChangeEvent(event)
+        case HC_APPLE_EVENT_NICK_CHANGE:
+            handleNickChangeEvent(event)
+        case HC_APPLE_EVENT_MODE_CHANGE:
+            handleModeChangeEvent(event)
         default:
             break
         }
@@ -1037,6 +1079,52 @@ final class EngineController {
         messages.append(ChatMessage(
             sessionID: sessionID, raw: raw, kind: kind,
             author: author, timestamp: timestamp))
+    }
+
+    private func handleNickChangeEvent(_ event: RuntimeEvent) {
+        let channel = event.channel ?? SystemSession.channel
+        let connectionID = registerConnection(from: event) ?? systemConnectionUUID()
+        let locator: SessionLocator = event.sessionID > 0
+            ? .runtime(id: event.sessionID)
+            : .composed(connectionID: connectionID, channel: channel)
+        let sessionID = upsertSession(locator: locator, connectionID: connectionID, channel: channel)
+        let oldNick = event.nick ?? ""
+        let newNick = event.targetNick ?? ""
+        guard !oldNick.isEmpty, !newNick.isEmpty else { return }
+        let author = resolveAuthor(connectionID: connectionID, nick: oldNick)
+        let timestamp = event.timestampSeconds == 0
+            ? Date()
+            : Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds))
+        messages.append(ChatMessage(
+            sessionID: sessionID,
+            raw: "* \(oldNick) is now known as \(newNick)",
+            kind: .nickChange(from: oldNick, to: newNick),
+            author: author,
+            timestamp: timestamp))
+    }
+
+    private func handleModeChangeEvent(_ event: RuntimeEvent) {
+        let channel = event.channel ?? SystemSession.channel
+        let connectionID = registerConnection(from: event) ?? systemConnectionUUID()
+        let locator: SessionLocator = event.sessionID > 0
+            ? .runtime(id: event.sessionID)
+            : .composed(connectionID: connectionID, channel: channel)
+        let sessionID = upsertSession(locator: locator, connectionID: connectionID, channel: channel)
+        let actor = event.nick ?? ""
+        let modes = event.modes ?? ""
+        guard !modes.isEmpty else { return }
+        let author = actor.isEmpty
+            ? nil
+            : resolveAuthor(connectionID: connectionID, nick: actor)
+        let timestamp = event.timestampSeconds == 0
+            ? Date()
+            : Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds))
+        messages.append(ChatMessage(
+            sessionID: sessionID,
+            raw: "* \(actor) sets mode \(modes)\(event.modesArgs.map { " " + $0 } ?? "")",
+            kind: .modeChange(modes: modes, args: event.modesArgs),
+            author: author,
+            timestamp: timestamp))
     }
 
     private func sessionSort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {

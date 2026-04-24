@@ -1504,6 +1504,108 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(quits.count, 2, "one quit per session — no extra fan-out on consumer")
         XCTAssertEqual(Set(quits.map(\.sessionID)), Set([aSess, bSess]))
     }
+
+    func testNickChangeAppendsTypedMessage() {
+        let controller = EngineController()
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT,
+            network: "Libera", channel: "#a", nick: "alice",
+            modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        let connID = controller.connectionsByServerID[1]!
+        let userID = controller.usersByConnectionAndNick[UserKey(connectionID: connID, nick: "alice")]
+
+        controller.applyNickChangeForTest(
+            network: "Libera", channel: "#a",
+            oldNick: "alice", newNick: "alice_",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+
+        let last = controller.messages.last!
+        XCTAssertEqual(last.kind, .nickChange(from: "alice", to: "alice_"))
+        XCTAssertEqual(last.author?.userID, userID, "author resolved from old nick before any User update")
+    }
+
+    func testNickChangeArrivesPerSessionFromCoreFanout() {
+        let controller = EngineController()
+        for channel in ["#a", "#b"] {
+            controller.applyUserlistForTest(
+                action: HC_APPLE_USERLIST_INSERT,
+                network: "Libera", channel: channel, nick: "alice",
+                modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
+                sessionID: 0, connectionID: 1, selfNick: "me")
+        }
+        for channel in ["#a", "#b"] {
+            controller.applyNickChangeForTest(
+                network: "Libera", channel: channel,
+                oldNick: "alice", newNick: "alice_",
+                sessionID: 0, connectionID: 1, selfNick: "me")
+        }
+        let nickChanges = controller.messages.filter {
+            if case .nickChange(let f, let t) = $0.kind { return f == "alice" && t == "alice_" }
+            return false
+        }
+        XCTAssertEqual(nickChanges.count, 2)
+    }
+
+    func testModeChangeForwardsModesAndArgs() {
+        let controller = EngineController()
+        controller.applyModeChangeForTest(
+            network: "Libera", channel: "#a", actor: "chanop",
+            modes: "+o", args: "alice",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        XCTAssertEqual(controller.messages.last?.kind, .modeChange(modes: "+o", args: "alice"))
+        XCTAssertEqual(controller.messages.last?.author?.nick, "chanop")
+
+        controller.applyModeChangeForTest(
+            network: "Libera", channel: "#a", actor: "chanop",
+            modes: "+i", args: nil,
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        XCTAssertEqual(controller.messages.last?.kind, .modeChange(modes: "+i", args: nil))
+    }
+
+    func testProducerTimestampOverridesDateForTypedMessages() {
+        let controller = EngineController()
+        controller.applyMembershipForTest(
+            action: HC_APPLE_MEMBERSHIP_JOIN,
+            network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 1, connectionID: 1, selfNick: "me",
+            timestampSeconds: 1_700_000_000)
+        let last = controller.messages.last!
+        XCTAssertEqual(last.timestamp.timeIntervalSince1970, 1_700_000_000, accuracy: 0.001,
+                       "producer-side time_t must round-trip into ChatMessage.timestamp")
+
+        let before = Date()
+        controller.applyMembershipForTest(
+            action: HC_APPLE_MEMBERSHIP_JOIN,
+            network: "Libera", channel: "#a", nick: "bob",
+            sessionID: 1, connectionID: 1, selfNick: "me",
+            timestampSeconds: 0)
+        let after = Date()
+        let synthetic = controller.messages.last!.timestamp
+        XCTAssertGreaterThanOrEqual(synthetic, before)
+        XCTAssertLessThanOrEqual(synthetic, after)
+    }
+
+    func testTestHelperNamedArgOrderMatchesDeclaredOrder() {
+        let controller = EngineController()
+        controller.applyMembershipForTest(
+            action: HC_APPLE_MEMBERSHIP_KICK,
+            network: "n", channel: "#c", nick: "kicker",
+            targetNick: "victim", reason: "spam",
+            sessionID: 1, connectionID: 1, selfNick: "me",
+            timestampSeconds: 0)
+        controller.applyNickChangeForTest(
+            network: "n", channel: "#c",
+            oldNick: "old", newNick: "new",
+            sessionID: 1, connectionID: 1, selfNick: "me",
+            timestampSeconds: 0)
+        controller.applyModeChangeForTest(
+            network: "n", channel: "#c", actor: "actor",
+            modes: "+o", args: "alice",
+            sessionID: 1, connectionID: 1, selfNick: "me",
+            timestampSeconds: 0)
+        XCTAssertGreaterThanOrEqual(controller.messages.count, 3)
+    }
 }
 #else
 @testable import HexChatAppleShell
