@@ -1707,8 +1707,12 @@ final class EngineControllerTests: XCTestCase {
         encoder.outputFormatting = [.sortedKeys]
         let json = String(data: try encoder.encode(net), encoding: .utf8)!
         XCTAssertTrue(json.contains("\"autoJoin\""))
+        XCTAssertTrue(json.contains("\"autoconnect\""))
         XCTAssertTrue(json.contains("\"displayName\""))
+        XCTAssertTrue(json.contains("\"id\""))
+        XCTAssertTrue(json.contains("\"nicks\""))
         XCTAssertTrue(json.contains("\"onConnectCommands\""))
+        XCTAssertTrue(json.contains("\"servers\""))
     }
 
     // MARK: - Phase 6 — persistence (Task 3)
@@ -1740,6 +1744,20 @@ final class EngineControllerTests: XCTestCase {
         var m: [ConversationKey: Int] = [:]
         m[ConversationKey(networkID: net, channel: "#HexChat")] = 42
         XCTAssertEqual(m[ConversationKey(networkID: net, channel: "#hexchat")], 42)
+    }
+
+    func testConversationKeyDistinguishesNetworks() {
+        let netA = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let netB = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        let a = ConversationKey(networkID: netA, channel: "#hexchat")
+        let b = ConversationKey(networkID: netB, channel: "#hexchat")
+        XCTAssertNotEqual(a, b)
+        var m: [ConversationKey: Int] = [a: 1, b: 2]
+        XCTAssertEqual(m[a], 1)
+        XCTAssertEqual(m[b], 2)
+        m[ConversationKey(networkID: netA, channel: "#HEXCHAT")] = 99
+        XCTAssertEqual(m[a], 99)
+        XCTAssertEqual(m[b], 2)
     }
 }
 #else

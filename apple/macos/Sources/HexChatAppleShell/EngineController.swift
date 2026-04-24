@@ -149,9 +149,12 @@ struct ConversationKey: Codable, Hashable {
     let networkID: UUID
     let channel: String
 
+    // Normalisation note: both == and hash route through `channel.lowercased()` so the
+    // Hashable contract holds for any String. This is Foundation locale-insensitive
+    // case-folding, not RFC 1459 IRC casemapping (`{}|^` ↔ `[]\~`); upgrading to
+    // server-advertised CASEMAPPING is a future-phase concern.
     static func == (lhs: ConversationKey, rhs: ConversationKey) -> Bool {
-        lhs.networkID == rhs.networkID
-            && lhs.channel.caseInsensitiveCompare(rhs.channel) == .orderedSame
+        lhs.networkID == rhs.networkID && lhs.channel.lowercased() == rhs.channel.lowercased()
     }
 
     func hash(into hasher: inout Hasher) {
