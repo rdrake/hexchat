@@ -126,6 +126,29 @@ hc_apple_session_self_nick (const session *sess)
 	return sess->server->nick[0] ? sess->server->nick : NULL;
 }
 
+/*
+ * Phase 7.5: snapshot of sess->server->have_chathistory at emit time.
+ * Returned as uint8_t (0/1) to match the hc_apple_event field type.
+ */
+static uint8_t
+hc_apple_session_have_chathistory (const session *sess)
+{
+	return (sess && sess->server && sess->server->have_chathistory) ? 1 : 0;
+}
+
+/*
+ * Phase 7.5: read sess->current_msgid for the LOG_LINE emit path.
+ * proto-irc.c populates this just before fe_print_text is called for each
+ * tagged PRIVMSG/NOTICE; it is NOT cleared between emits, so callers must
+ * pair this with a known LOG_LINE flow (typed events deliberately pass NULL).
+ */
+static const char *
+hc_apple_session_current_msgid (const session *sess)
+{
+	if (!sess || !sess->current_msgid || !sess->current_msgid[0]) return NULL;
+	return sess->current_msgid;
+}
+
 static void
 hc_apple_session_forget_runtime_id (const session *sess)
 {
@@ -156,7 +179,8 @@ hc_apple_emit_session_upsert (const session *sess)
 	                               hc_apple_session_channel (sess),
 	                               hc_apple_session_runtime_id (sess),
 	                               hc_apple_session_connection_id (sess),
-	                               hc_apple_session_self_nick (sess));
+	                               hc_apple_session_self_nick (sess),
+	                               hc_apple_session_have_chathistory (sess));
 }
 
 static void
@@ -167,7 +191,8 @@ hc_apple_emit_session_activate (const session *sess)
 	                               hc_apple_session_channel (sess),
 	                               hc_apple_session_runtime_id (sess),
 	                               hc_apple_session_connection_id (sess),
-	                               hc_apple_session_self_nick (sess));
+	                               hc_apple_session_self_nick (sess),
+	                               hc_apple_session_have_chathistory (sess));
 }
 
 static void
@@ -178,7 +203,8 @@ hc_apple_emit_session_remove (const session *sess)
 	                               hc_apple_session_channel (sess),
 	                               hc_apple_session_runtime_id (sess),
 	                               hc_apple_session_connection_id (sess),
-	                               hc_apple_session_self_nick (sess));
+	                               hc_apple_session_self_nick (sess),
+	                               hc_apple_session_have_chathistory (sess));
 }
 
 static void
@@ -189,7 +215,9 @@ hc_apple_emit_log_line_for_session (const session *sess, const char *text)
 	                                            hc_apple_session_channel (sess),
 	                                            hc_apple_session_runtime_id (sess),
 	                                            hc_apple_session_connection_id (sess),
-	                                            hc_apple_session_self_nick (sess));
+	                                            hc_apple_session_self_nick (sess),
+	                                            hc_apple_session_current_msgid (sess),
+	                                            hc_apple_session_have_chathistory (sess));
 }
 
 static gboolean
@@ -957,7 +985,8 @@ fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel)
 	                                newuser->away ? 1 : 0,
 	                                hc_apple_session_runtime_id (sess),
 	                                hc_apple_session_connection_id (sess),
-	                                hc_apple_session_self_nick (sess));
+	                                hc_apple_session_self_nick (sess),
+	                                hc_apple_session_have_chathistory (sess));
 }
 int
 fe_userlist_remove (struct session *sess, struct User *user)
@@ -975,7 +1004,8 @@ fe_userlist_remove (struct session *sess, struct User *user)
 	                                user->away ? 1 : 0,
 	                                hc_apple_session_runtime_id (sess),
 	                                hc_apple_session_connection_id (sess),
-	                                hc_apple_session_self_nick (sess));
+	                                hc_apple_session_self_nick (sess),
+	                                hc_apple_session_have_chathistory (sess));
 	return 0;
 }
 void
@@ -994,7 +1024,8 @@ fe_userlist_rehash (struct session *sess, struct User *user)
 	                                user->away ? 1 : 0,
 	                                hc_apple_session_runtime_id (sess),
 	                                hc_apple_session_connection_id (sess),
-	                                hc_apple_session_self_nick (sess));
+	                                hc_apple_session_self_nick (sess),
+	                                hc_apple_session_have_chathistory (sess));
 }
 void
 fe_userlist_numbers (struct session *sess)
@@ -1015,7 +1046,8 @@ fe_userlist_clear (struct session *sess)
 	                                0,
 	                                hc_apple_session_runtime_id (sess),
 	                                hc_apple_session_connection_id (sess),
-	                                hc_apple_session_self_nick (sess));
+	                                hc_apple_session_self_nick (sess),
+	                                hc_apple_session_have_chathistory (sess));
 }
 void
 fe_userlist_set_selected (struct session *sess)
@@ -1256,7 +1288,8 @@ fe_userlist_update (session *sess, struct User *user)
 	                                user->away ? 1 : 0,
 	                                hc_apple_session_runtime_id (sess),
 	                                hc_apple_session_connection_id (sess),
-	                                hc_apple_session_self_nick (sess));
+	                                hc_apple_session_self_nick (sess),
+	                                hc_apple_session_have_chathistory (sess));
 }
 void
 fe_open_chan_list (server *serv, char *filter, int do_refresh)
@@ -1311,7 +1344,8 @@ emit_membership_for_session (hc_apple_membership_action action,
 	    hc_apple_session_runtime_id (sess),
 	    hc_apple_session_connection_id (sess),
 	    hc_apple_session_self_nick (sess),
-	    timestamp);
+	    timestamp,
+	    hc_apple_session_have_chathistory (sess));
 }
 
 int
@@ -1375,7 +1409,8 @@ fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, ti
 		    hc_apple_session_runtime_id (sess),
 		    hc_apple_session_connection_id (sess),
 		    hc_apple_session_self_nick (sess),
-		    timestamp);
+		    timestamp,
+		    hc_apple_session_have_chathistory (sess));
 		return 1;
 
 	case XP_TE_CHANMODEGEN:
@@ -1408,7 +1443,8 @@ fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, ti
 		    hc_apple_session_runtime_id (sess),
 		    hc_apple_session_connection_id (sess),
 		    hc_apple_session_self_nick (sess),
-		    timestamp);
+		    timestamp,
+		    hc_apple_session_have_chathistory (sess));
 		return 1;
 	}
 

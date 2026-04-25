@@ -89,6 +89,15 @@ typedef struct
 	const char *modes_args;        /* MODE_CHANGE: args (e.g. "alice bob"); NULL if none */
 	/* Producer-side time_t widened to int64. 0 means "use receiver clock". */
 	int64_t timestamp_seconds;
+	/* IRCv3 msgid tag. Populated only on LOG_LINE emits where the producer
+	 * has set sess->current_msgid for the current PRIVMSG/NOTICE; NULL
+	 * otherwise. Typed events (membership/nick/mode) leave this NULL because
+	 * sess->current_msgid is not cleared between events on those paths. */
+	const char *server_msgid;
+	/* Snapshot of sess->server->have_chathistory at emit time. 0 when no
+	 * server context. Phase 7.5: the Swift side caches this on Connection
+	 * so loadOlder can gate chathistory bridge dispatch on the cap bit. */
+	uint8_t connection_have_chathistory;
 } hc_apple_event;
 
 typedef void (*hc_apple_event_cb) (const hc_apple_event *event, void *userdata);
@@ -104,7 +113,9 @@ void hc_apple_runtime_emit_log_line_for_session (const char *text,
                                                  const char *channel,
                                                  uint64_t session_id,
                                                  uint64_t connection_id,
-                                                 const char *self_nick);
+                                                 const char *self_nick,
+                                                 const char *server_msgid,
+                                                 uint8_t connection_have_chathistory);
 void hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
                                      const char *network,
                                      const char *channel,
@@ -116,13 +127,15 @@ void hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
                                      uint8_t is_away,
                                      uint64_t session_id,
                                      uint64_t connection_id,
-                                     const char *self_nick);
+                                     const char *self_nick,
+                                     uint8_t connection_have_chathistory);
 void hc_apple_runtime_emit_session (hc_apple_session_action action,
                                     const char *network,
                                     const char *channel,
                                     uint64_t session_id,
                                     uint64_t connection_id,
-                                    const char *self_nick);
+                                    const char *self_nick,
+                                    uint8_t connection_have_chathistory);
 void hc_apple_runtime_emit_membership_change (hc_apple_membership_action action,
                                               const char *network,
                                               const char *channel,
@@ -134,7 +147,8 @@ void hc_apple_runtime_emit_membership_change (hc_apple_membership_action action,
                                               uint64_t session_id,
                                               uint64_t connection_id,
                                               const char *self_nick,
-                                              time_t timestamp);
+                                              time_t timestamp,
+                                              uint8_t connection_have_chathistory);
 void hc_apple_runtime_emit_nick_change (const char *network,
                                         const char *channel,
                                         const char *nick,
@@ -142,7 +156,8 @@ void hc_apple_runtime_emit_nick_change (const char *network,
                                         uint64_t session_id,
                                         uint64_t connection_id,
                                         const char *self_nick,
-                                        time_t timestamp);
+                                        time_t timestamp,
+                                        uint8_t connection_have_chathistory);
 void hc_apple_runtime_emit_mode_change (const char *network,
                                         const char *channel,
                                         const char *nick,
@@ -151,5 +166,6 @@ void hc_apple_runtime_emit_mode_change (const char *network,
                                         uint64_t session_id,
                                         uint64_t connection_id,
                                         const char *self_nick,
-                                        time_t timestamp);
+                                        time_t timestamp,
+                                        uint8_t connection_have_chathistory);
 void hc_apple_runtime_stop (void);

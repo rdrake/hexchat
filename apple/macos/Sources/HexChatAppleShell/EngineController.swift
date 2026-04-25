@@ -389,6 +389,11 @@ struct Connection: Identifiable, Hashable {
     let networkID: UUID
     var serverName: String
     var selfNick: String?
+    /// Snapshot of `server::have_chathistory`. Set on every event the
+    /// connection is observed in; flips on CAP NEW/DEL or full reconnect. The
+    /// Phase 7.5 `loadOlder` path gates the chathistory bridge dispatch on
+    /// this flag.
+    var haveChathistory: Bool = false
 }
 
 struct User: Identifiable, Hashable {
@@ -987,7 +992,9 @@ final class EngineController {
             reason: nil,
             modes: nil,
             modesArgs: nil,
-            timestampSeconds: 0
+            timestampSeconds: 0,
+            serverMsgID: nil,
+            connectionHaveChathistory: false
         )
         handleUserlistEvent(event)
     }
@@ -1021,7 +1028,9 @@ final class EngineController {
             reason: nil,
             modes: nil,
             modesArgs: nil,
-            timestampSeconds: 0
+            timestampSeconds: 0,
+            serverMsgID: nil,
+            connectionHaveChathistory: false
         )
         handleUserlistEvent(event)
     }
@@ -1036,7 +1045,8 @@ final class EngineController {
         channel: String,
         sessionID: UInt64 = 0,
         connectionID: UInt64 = 0,
-        selfNick: String? = nil
+        selfNick: String? = nil,
+        connectionHaveChathistory: Bool = false
     ) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_SESSION,
@@ -1059,7 +1069,9 @@ final class EngineController {
             reason: nil,
             modes: nil,
             modesArgs: nil,
-            timestampSeconds: 0
+            timestampSeconds: 0,
+            serverMsgID: nil,
+            connectionHaveChathistory: connectionHaveChathistory
         )
         handleSessionEvent(event)
     }
@@ -1089,7 +1101,8 @@ final class EngineController {
             modePrefix: nil, account: nil, host: nil, isMe: false, isAway: false,
             connectionID: 0, selfNick: nil,
             membershipAction: HC_APPLE_MEMBERSHIP_JOIN, targetNick: nil,
-            reason: nil, modes: nil, modesArgs: nil, timestampSeconds: 0)
+            reason: nil, modes: nil, modesArgs: nil, timestampSeconds: 0,
+            serverMsgID: nil, connectionHaveChathistory: false)
         handleRuntimeEvent(event)
     }
 
@@ -1103,7 +1116,8 @@ final class EngineController {
         sessionID: UInt64 = 0,
         connectionID: UInt64 = 0,
         selfNick: String? = nil,
-        timestampSeconds: Int64 = 0
+        timestampSeconds: Int64 = 0,
+        connectionHaveChathistory: Bool = false
     ) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_MEMBERSHIP_CHANGE,
@@ -1126,7 +1140,9 @@ final class EngineController {
             reason: reason,
             modes: nil,
             modesArgs: nil,
-            timestampSeconds: timestampSeconds
+            timestampSeconds: timestampSeconds,
+            serverMsgID: nil,
+            connectionHaveChathistory: connectionHaveChathistory
         )
         handleRuntimeEvent(event)
     }
@@ -1146,7 +1162,8 @@ final class EngineController {
             connectionID: connectionID, selfNick: selfNick,
             membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
             targetNick: newNick, reason: nil, modes: nil, modesArgs: nil,
-            timestampSeconds: timestampSeconds)
+            timestampSeconds: timestampSeconds,
+            serverMsgID: nil, connectionHaveChathistory: false)
         handleRuntimeEvent(event)
     }
 
@@ -1165,7 +1182,8 @@ final class EngineController {
             connectionID: connectionID, selfNick: selfNick,
             membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
             targetNick: nil, reason: nil, modes: modes, modesArgs: args,
-            timestampSeconds: timestampSeconds)
+            timestampSeconds: timestampSeconds,
+            serverMsgID: nil, connectionHaveChathistory: false)
         handleRuntimeEvent(event)
     }
 
@@ -1175,7 +1193,10 @@ final class EngineController {
         text: String,
         sessionID: UInt64 = 0,
         connectionID: UInt64 = 0,
-        selfNick: String? = nil
+        selfNick: String? = nil,
+        serverMsgID: String? = nil,
+        connectionHaveChathistory: Bool = false,
+        timestampSeconds: Int64 = 0
     ) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_LOG_LINE,
@@ -1198,7 +1219,9 @@ final class EngineController {
             reason: nil,
             modes: nil,
             modesArgs: nil,
-            timestampSeconds: 0
+            timestampSeconds: timestampSeconds,
+            serverMsgID: serverMsgID,
+            connectionHaveChathistory: connectionHaveChathistory
         )
         handleRuntimeEvent(event)
     }
@@ -1269,7 +1292,29 @@ final class EngineController {
 
     private func appendMessage(raw: String, kind: ChatMessageKind, event: RuntimeEvent? = nil) {
         let targetUUID = resolveMessageSessionID(event: event)
-        append(ChatMessage(sessionID: targetUUID, raw: raw, kind: kind))
+        // Phase 7.5: only LOG_LINE events carry a meaningful serverMsgID — typed
+        // events deliberately leave it nil because sess->current_msgid is not
+        // safe to read on those code paths. Apply at this seam so callers don't
+        // have to think about it.
+        let serverMsgID: String? = {
+            guard let event, event.kind == HC_APPLE_EVENT_LOG_LINE else { return nil }
+            guard let raw = event.serverMsgID, !raw.isEmpty,
+                !raw.hasPrefix("pending:")
+            else { return nil }
+            return raw
+        }()
+        // Honor producer-side timestamp for chathistory replays. Falls back to
+        // Date() when the event is local or has no timestamp.
+        let timestamp: Date = {
+            if let event, event.timestampSeconds > 0 {
+                return Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds))
+            }
+            return Date()
+        }()
+        append(
+            ChatMessage(
+                sessionID: targetUUID, raw: raw, kind: kind, timestamp: timestamp,
+                serverMsgID: serverMsgID))
     }
 
     private func append(_ message: ChatMessage) {
@@ -1397,7 +1442,8 @@ final class EngineController {
             serverID: event.connectionID,
             networkID: networkID,
             serverName: networkName,
-            selfNick: event.selfNick)
+            selfNick: event.selfNick,
+            haveChathistory: event.connectionHaveChathistory)
     }
 
     private func resolveEventSessionID(_ event: RuntimeEvent) -> UUID? {
@@ -1491,7 +1537,8 @@ final class EngineController {
 
     @discardableResult
     private func upsertConnection(
-        serverID: UInt64, networkID: UUID, serverName: String, selfNick: String?
+        serverID: UInt64, networkID: UUID, serverName: String, selfNick: String?,
+        haveChathistory: Bool = false
     ) -> UUID {
         if let existing = connectionsByServerID[serverID] {
             if connections[existing]?.serverName != serverName {
@@ -1500,11 +1547,18 @@ final class EngineController {
             if let nick = selfNick, connections[existing]?.selfNick != nick {
                 connections[existing]?.selfNick = nick
             }
+            // Phase 7.5: cap bit can flip mid-session on CAP NEW/DEL or full
+            // reconnect. Always rewrite from the freshest event so loadOlder's
+            // gate decision uses current state.
+            if connections[existing]?.haveChathistory != haveChathistory {
+                connections[existing]?.haveChathistory = haveChathistory
+            }
             return existing
         }
         let new = Connection(
             id: UUID(), networkID: networkID,
-            serverName: serverName, selfNick: selfNick)
+            serverName: serverName, selfNick: selfNick,
+            haveChathistory: haveChathistory)
         connections[new.id] = new
         connectionsByServerID[serverID] = new.id
         return new.id
@@ -1701,6 +1755,12 @@ fileprivate struct RuntimeEvent {
     /// Producer-side `time_t` widened to int64. 0 means "no producer timestamp;
     /// the consumer uses Date() at handle time."
     let timestampSeconds: Int64
+    // Phase 7.5: chathistory bridge fields.
+    /// IRCv3 msgid tag for log-line emits where `sess->current_msgid` was set.
+    /// `nil` for typed events and untagged content.
+    let serverMsgID: String?
+    /// Snapshot of `sess->server->have_chathistory` at emit time.
+    let connectionHaveChathistory: Bool
 
     var userlistAction: hc_apple_userlist_action {
         hc_apple_userlist_action(rawValue: UInt32(code))
@@ -1742,6 +1802,7 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
     let copiedReason = raw.reason.map { String(cString: $0) }
     let copiedModes = raw.modes.map { String(cString: $0) }
     let copiedModesArgs = raw.modes_args.map { String(cString: $0) }
+    let copiedServerMsgID = raw.server_msgid.map { String(cString: $0) }
     let prefix: Character? = raw.mode_prefix == 0 ? nil : Character(UnicodeScalar(raw.mode_prefix))
 
     return RuntimeEvent(
@@ -1765,7 +1826,9 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
         reason: copiedReason,
         modes: copiedModes,
         modesArgs: copiedModesArgs,
-        timestampSeconds: raw.timestamp_seconds
+        timestampSeconds: raw.timestamp_seconds,
+        serverMsgID: copiedServerMsgID,
+        connectionHaveChathistory: raw.connection_have_chathistory != 0
     )
 }
 

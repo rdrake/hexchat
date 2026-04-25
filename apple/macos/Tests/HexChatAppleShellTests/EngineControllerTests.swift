@@ -2643,6 +2643,109 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(try store.count(conversation: key), 2)
     }
 
+    // MARK: - Phase 7.5 task-2: thread server_msgid + have_chathistory
+
+    func testLogLineEventCarriesServerMsgID() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        controller.applyLogLineForTest(
+            network: "Net", channel: "#a", text: "hi from msgid abc",
+            sessionID: 0, connectionID: 1, selfNick: "me",
+            serverMsgID: "abc")
+        let ring = controller.messageRingForTest(conversation: key)
+        XCTAssertEqual(ring.count, 1)
+        XCTAssertEqual(ring.last?.serverMsgID, "abc")
+    }
+
+    func testLogLineEventDropsPendingMsgID() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        controller.applyLogLineForTest(
+            network: "Net", channel: "#a", text: "x",
+            connectionID: 1, serverMsgID: "pending:label-42")
+        let ring = controller.messageRingForTest(conversation: key)
+        XCTAssertEqual(ring.count, 1)
+        XCTAssertNil(ring.last?.serverMsgID, "pending:* placeholders normalize to nil")
+    }
+
+    func testTypedEventDropsServerMsgID() {
+        // Even if a typed event helper somehow carried a serverMsgID, the
+        // controller's appendMessage seam should drop it for non-LOG_LINE events.
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        controller.applyMembershipForTest(
+            action: HC_APPLE_MEMBERSHIP_JOIN, network: "Net", channel: "#a",
+            nick: "alice", connectionID: 1, timestampSeconds: 1_700_000_000)
+        let ring = controller.messageRingForTest(conversation: key)
+        XCTAssertFalse(ring.isEmpty)
+        XCTAssertNil(ring.last?.serverMsgID)
+    }
+
+    func testConnectionHaveChathistoryFlippedByEvent() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1, connectionHaveChathistory: false)
+        let conn = controller.connectionsByServerID[1]!
+        XCTAssertEqual(controller.connections[conn]?.haveChathistory, false)
+        // CAP NEW arrives: subsequent event carries the flipped bit.
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Net", channel: "#a",
+            connectionID: 1, connectionHaveChathistory: true)
+        XCTAssertEqual(controller.connections[conn]?.haveChathistory, true)
+        // CAP DEL flips it back off.
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Net", channel: "#a",
+            connectionID: 1, connectionHaveChathistory: false)
+        XCTAssertEqual(controller.connections[conn]?.haveChathistory, false)
+    }
+
+    func testReplayWithSameServerMsgIDIsDroppedOverEventPath() throws {
+        // End-to-end: two log-line events with same (network, channel, msgid,
+        // timestamp) collapse to one row in both ring and store.
+        let store = InMemoryMessageStore()
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: store, debounceInterval: .zero)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1, connectionHaveChathistory: true)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let key = ConversationKey(networkID: netID, channel: "#a")
+
+        controller.applyLogLineForTest(
+            network: "Net", channel: "#a", text: "hi",
+            connectionID: 1, serverMsgID: "abc",
+            connectionHaveChathistory: true,
+            timestampSeconds: 1_700_000_000)
+        XCTAssertEqual(controller.messageRingForTest(conversation: key).count, 1)
+        XCTAssertEqual(try store.count(conversation: key), 1)
+
+        controller.applyLogLineForTest(
+            network: "Net", channel: "#a", text: "hi",
+            connectionID: 1, serverMsgID: "abc",
+            connectionHaveChathistory: true,
+            timestampSeconds: 1_700_000_000)
+        XCTAssertEqual(controller.messageRingForTest(conversation: key).count, 1)
+        XCTAssertEqual(try store.count(conversation: key), 1)
+    }
+
     func testBrokenStoreDoesNotMutateRing() {
         struct BrokenStore: MessageStore {
             func append(_ m: ChatMessage, conversation: ConversationKey) throws -> Bool {

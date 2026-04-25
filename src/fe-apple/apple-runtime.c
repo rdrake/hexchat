@@ -47,7 +47,9 @@ hc_apple_runtime_emit_log_line_for_session (const char *text,
                                             const char *channel,
                                             uint64_t session_id,
                                             uint64_t connection_id,
-                                            const char *self_nick)
+                                            const char *self_nick,
+                                            const char *server_msgid,
+                                            uint8_t connection_have_chathistory)
 {
 	hc_apple_event event = {0};
 
@@ -64,6 +66,8 @@ hc_apple_runtime_emit_log_line_for_session (const char *text,
 	event.channel = channel;
 	event.connection_id = connection_id;
 	event.self_nick = self_nick;
+	event.server_msgid = server_msgid;
+	event.connection_have_chathistory = connection_have_chathistory;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
@@ -91,7 +95,8 @@ hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
                                 uint8_t is_away,
                                 uint64_t session_id,
                                 uint64_t connection_id,
-                                const char *self_nick)
+                                const char *self_nick,
+                                uint8_t connection_have_chathistory)
 {
 	hc_apple_event event = {0};
 
@@ -111,6 +116,7 @@ hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
 	event.is_away = is_away;
 	event.connection_id = connection_id;
 	event.self_nick = self_nick;
+	event.connection_have_chathistory = connection_have_chathistory;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
@@ -120,7 +126,8 @@ hc_apple_runtime_emit_session (hc_apple_session_action action,
                                const char *channel,
                                uint64_t session_id,
                                uint64_t connection_id,
-                               const char *self_nick)
+                               const char *self_nick,
+                               uint8_t connection_have_chathistory)
 {
 	hc_apple_event event = {0};
 
@@ -134,6 +141,7 @@ hc_apple_runtime_emit_session (hc_apple_session_action action,
 	event.channel = channel;
 	event.connection_id = connection_id;
 	event.self_nick = self_nick;
+	event.connection_have_chathistory = connection_have_chathistory;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
@@ -149,7 +157,8 @@ hc_apple_runtime_emit_membership_change (hc_apple_membership_action action,
                                          uint64_t session_id,
                                          uint64_t connection_id,
                                          const char *self_nick,
-                                         time_t timestamp)
+                                         time_t timestamp,
+                                         uint8_t connection_have_chathistory)
 {
 	hc_apple_event event = {0};
 
@@ -169,6 +178,7 @@ hc_apple_runtime_emit_membership_change (hc_apple_membership_action action,
 	event.connection_id = connection_id;
 	event.self_nick = self_nick;
 	event.timestamp_seconds = (int64_t)timestamp;
+	event.connection_have_chathistory = connection_have_chathistory;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
@@ -180,7 +190,8 @@ hc_apple_runtime_emit_nick_change (const char *network,
                                    uint64_t session_id,
                                    uint64_t connection_id,
                                    const char *self_nick,
-                                   time_t timestamp)
+                                   time_t timestamp,
+                                   uint8_t connection_have_chathistory)
 {
 	hc_apple_event event = {0};
 
@@ -196,6 +207,7 @@ hc_apple_runtime_emit_nick_change (const char *network,
 	event.connection_id = connection_id;
 	event.self_nick = self_nick;
 	event.timestamp_seconds = (int64_t)timestamp;
+	event.connection_have_chathistory = connection_have_chathistory;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 
@@ -208,7 +220,8 @@ hc_apple_runtime_emit_mode_change (const char *network,
                                    uint64_t session_id,
                                    uint64_t connection_id,
                                    const char *self_nick,
-                                   time_t timestamp)
+                                   time_t timestamp,
+                                   uint8_t connection_have_chathistory)
 {
 	hc_apple_event event = {0};
 
@@ -225,6 +238,7 @@ hc_apple_runtime_emit_mode_change (const char *network,
 	event.connection_id = connection_id;
 	event.self_nick = self_nick;
 	event.timestamp_seconds = (int64_t)timestamp;
+	event.connection_have_chathistory = connection_have_chathistory;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
 }
 

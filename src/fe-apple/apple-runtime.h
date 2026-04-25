@@ -30,7 +30,9 @@ void hc_apple_runtime_emit_log_line_for_session (const char *text,
                                                  const char *channel,
                                                  uint64_t session_id,
                                                  uint64_t connection_id,
-                                                 const char *self_nick);
+                                                 const char *self_nick,
+                                                 const char *server_msgid,
+                                                 uint8_t connection_have_chathistory);
 void hc_apple_runtime_emit_lifecycle (hc_apple_lifecycle_phase phase, const char *text);
 void hc_apple_runtime_emit_command (const char *text, int code);
 void hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
@@ -44,10 +46,12 @@ void hc_apple_runtime_emit_userlist (hc_apple_userlist_action action,
                                      uint8_t is_away,
                                      uint64_t session_id,
                                      uint64_t connection_id,
-                                     const char *self_nick);
+                                     const char *self_nick,
+                                     uint8_t connection_have_chathistory);
 void hc_apple_runtime_emit_session (hc_apple_session_action action,
                                     const char *network,
                                     const char *channel,
                                     uint64_t session_id,
                                     uint64_t connection_id,
-                                    const char *self_nick);
+                                    const char *self_nick,
+                                    uint8_t connection_have_chathistory);
