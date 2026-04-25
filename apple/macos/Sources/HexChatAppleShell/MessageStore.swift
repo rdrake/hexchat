@@ -47,7 +47,11 @@ final class InMemoryMessageStore: MessageStore, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if seenIDs.contains(message.id) { return false }
-        if let msgid = message.serverMsgID, !msgid.isEmpty {
+        // Mirror SQLiteMessageStore.append's normalization: empty strings and
+        // `pending:*` placeholders fall outside the dedup grain.
+        if let msgid = message.serverMsgID, !msgid.isEmpty,
+            !msgid.hasPrefix("pending:")
+        {
             let key = ServerKey(
                 networkID: conversation.networkID,
                 channelLowercased: conversation.channel.lowercased(),

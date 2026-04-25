@@ -293,6 +293,74 @@ final class SQLiteMessageStoreTests: XCTestCase {
         XCTAssertEqual(try store.count(conversation: key), 2)
     }
 
+    func testStoreNormalizesEmptyAndPendingServerMsgIDs() throws {
+        let store = try freshStore()
+        let key = ConversationKey(networkID: UUID(), channel: "#a")
+        // Empty string and pending:* normalize to NULL inside SQLiteMessageStore.append,
+        // so they don't participate in the partial UNIQUE INDEX. Two appends with
+        // the same empty msgid should both insert.
+        let empty1 = ChatMessage(
+            sessionID: UUID(), raw: "x", kind: .message(body: "x"),
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000), serverMsgID: "")
+        let empty2 = ChatMessage(
+            sessionID: UUID(), raw: "y", kind: .message(body: "y"),
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000), serverMsgID: "")
+        XCTAssertTrue(try store.append(empty1, conversation: key))
+        XCTAssertTrue(try store.append(empty2, conversation: key))
+
+        let pending1 = ChatMessage(
+            sessionID: UUID(), raw: "z", kind: .message(body: "z"),
+            timestamp: Date(timeIntervalSince1970: 1_700_000_001),
+            serverMsgID: "pending:label-1")
+        let pending2 = ChatMessage(
+            sessionID: UUID(), raw: "w", kind: .message(body: "w"),
+            timestamp: Date(timeIntervalSince1970: 1_700_000_001),
+            serverMsgID: "pending:label-1")
+        XCTAssertTrue(try store.append(pending1, conversation: key))
+        XCTAssertTrue(try store.append(pending2, conversation: key))
+
+        XCTAssertEqual(try store.count(conversation: key), 4)
+    }
+
+    func testV1MigrationRecoversFromPartiallyMigratedFile() throws {
+        // Simulate a crash between ALTER and `PRAGMA user_version = 2`: a v1
+        // file already has the new column but user_version is still 1.
+        // SQLiteMessageStore.init must not throw "duplicate column" — it
+        // should detect via PRAGMA table_info, skip the ALTER, and set v2.
+        let url = scratchDir.appendingPathComponent("messages.sqlite")
+        var raw: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+        XCTAssertEqual(sqlite3_open_v2(url.path, &raw, flags, nil), SQLITE_OK)
+        guard let db = raw else {
+            XCTFail("no db")
+            return
+        }
+
+        let halfMigratedSchema = """
+            CREATE TABLE messages (
+                id              TEXT PRIMARY KEY,
+                network_id      TEXT NOT NULL,
+                channel_lower   TEXT NOT NULL,
+                channel_display TEXT NOT NULL,
+                timestamp_ms    INTEGER NOT NULL,
+                kind            TEXT NOT NULL,
+                body            TEXT,
+                extra_json      TEXT,
+                author_nick     TEXT,
+                raw             TEXT NOT NULL,
+                server_msgid    TEXT
+            );
+            PRAGMA user_version = 1;
+            """
+        XCTAssertEqual(sqlite3_exec(db, halfMigratedSchema, nil, nil, nil), SQLITE_OK)
+        sqlite3_close_v2(db)
+
+        // Reopen — must succeed and migrate to v2 without erroring on
+        // "duplicate column server_msgid".
+        let store = try SQLiteMessageStore(fileURL: url)
+        XCTAssertEqual(try store.userVersion(), 2)
+    }
+
     func testServerMsgIDRoundTrip() throws {
         let store = try freshStore()
         let key = ConversationKey(networkID: UUID(), channel: "#a")

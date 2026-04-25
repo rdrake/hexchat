@@ -1348,52 +1348,78 @@ emit_membership_for_session (hc_apple_membership_action action,
 	    hc_apple_session_have_chathistory (sess));
 }
 
+/*
+ * When a typed event is claimed (`fe_text_event` returns non-zero), text.c's
+ * `text_emit` short-circuits and the normal `PrintTextTimeStamp` path that
+ * clears `sess->current_msgid` is skipped (text.c:891). chathistory replays
+ * set `current_msgid` for *every* message in the batch including JOIN/PART —
+ * so a stale msgid would otherwise leak into a later LOG_LINE on the same
+ * session. Clear it here at every claim site to prevent that.
+ */
+static void
+hc_apple_clear_current_msgid (struct session *sess)
+{
+	if (!sess) return;
+	g_clear_pointer (&sess->current_msgid, g_free);
+}
+
 int
 fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, time_t timestamp)
 {
 	(void)nargs;
+
+	int handled = 0;
 
 	switch (xp_te_index)
 	{
 	case XP_TE_JOIN:
 		/* args[0] = nick, args[1] = channel, args[2] = ip, args[3] = account */
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_JOIN, sess, args[0], NULL, NULL, timestamp);
-		return 1;
+		handled = 1;
+		break;
 	case XP_TE_UJOIN:
 		/* args[0] = self-nick, args[1] = channel, args[2] = ip */
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_JOIN, sess, args[0], NULL, NULL, timestamp);
-		return 1;
+		handled = 1;
+		break;
 
 	case XP_TE_PART:
 		/* args[0] = nick, args[1] = host, args[2] = channel */
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, NULL, timestamp);
-		return 1;
+		handled = 1;
+		break;
 	case XP_TE_PARTREASON:
 		/* args[0] = nick, args[1] = host, args[2] = channel, args[3] = reason */
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, args[3], timestamp);
-		return 1;
+		handled = 1;
+		break;
 	case XP_TE_UPART:
 		/* args[0] = self-nick, args[1] = host, args[2] = channel */
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, NULL, timestamp);
-		return 1;
+		handled = 1;
+		break;
 	case XP_TE_UPARTREASON:
 		/* args[0] = self-nick, args[1] = host, args[2] = channel, args[3] = reason */
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_PART, sess, args[0], NULL, args[3], timestamp);
-		return 1;
+		handled = 1;
+		break;
 
 	case XP_TE_QUIT:
 		/* args[0] = nick, args[1] = reason, args[2] = host */
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_QUIT, sess, args[0], NULL, args[1], timestamp);
-		return 1;
+		handled = 1;
+		break;
 
 	case XP_TE_KICK:
 		/* args[0] = kicker, args[1] = kicked, args[2] = channel, args[3] = reason */
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_KICK, sess, args[0], args[1], args[3], timestamp);
-		return 1;
+		handled = 1;
+		break;
 	case XP_TE_UKICK:
 		/* args[0] = self-nick, args[1] = channel, args[2] = kicker, args[3] = reason */
 		emit_membership_for_session (HC_APPLE_MEMBERSHIP_KICK, sess, args[2], args[0], args[3], timestamp);
-		return 1;
+		handled = 1;
+		break;
 
 	case XP_TE_CHANGENICK:
 		/* args[0] = old-nick, args[1] = new-nick */
@@ -1401,7 +1427,10 @@ fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, ti
 	case XP_TE_UCHANGENICK:
 		/* args[0] = self-nick (old), args[1] = new-nick — same arg layout */
 		if (!sess || !sess->server)
-			return 1;
+		{
+			handled = 1;
+			break;
+		}
 		hc_apple_runtime_emit_nick_change (
 		    hc_apple_session_network (sess),
 		    hc_apple_session_channel (sess),
@@ -1411,7 +1440,8 @@ fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, ti
 		    hc_apple_session_self_nick (sess),
 		    timestamp,
 		    hc_apple_session_have_chathistory (sess));
-		return 1;
+		handled = 1;
+		break;
 
 	case XP_TE_CHANMODEGEN:
 	{
@@ -1420,7 +1450,10 @@ fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, ti
 		 * Strip the leading "channel " prefix from args[3] to recover the mode arg
 		 * (or NULL when there is none — args[3] equals sess->channel verbatim). */
 		if (!sess || !sess->server)
-			return 1;
+		{
+			handled = 1;
+			break;
+		}
 		char modes[4];
 		g_snprintf (modes, sizeof modes, "%s%s",
 		            args[1] ? args[1] : "", args[2] ? args[2] : "");
@@ -1445,7 +1478,8 @@ fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, ti
 		    hc_apple_session_self_nick (sess),
 		    timestamp,
 		    hc_apple_session_have_chathistory (sess));
-		return 1;
+		handled = 1;
+		break;
 	}
 
 	/* XP_TE_RAWMODES: deliberately NOT intercepted. See "Mode-change dedup"
@@ -1454,6 +1488,10 @@ fe_text_event (struct session *sess, int xp_te_index, char **args, int nargs, ti
 	 * CHANMODEGEN as canonical and let RAWMODES fall through to display_event. */
 
 	default:
-		return 0;
+		break;
 	}
+
+	if (handled)
+		hc_apple_clear_current_msgid (sess);
+	return handled;
 }

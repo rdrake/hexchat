@@ -96,7 +96,15 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
         bind(stmt, index: 8, text: payload.extraJSON)
         bind(stmt, index: 9, text: message.author?.nick)
         bind(stmt, index: 10, text: message.raw)
-        bind(stmt, index: 11, text: message.serverMsgID)
+        // Normalize empty / `pending:*` to NULL so they fall outside the partial
+        // UNIQUE INDEX — same contract InMemoryMessageStore enforces in code.
+        let normalizedMsgID: String? = {
+            guard let id = message.serverMsgID, !id.isEmpty,
+                !id.hasPrefix("pending:")
+            else { return nil }
+            return id
+        }()
+        bind(stmt, index: 11, text: normalizedMsgID)
         let rc = sqlite3_step(stmt)
         guard rc == SQLITE_DONE else {
             throw SQLiteMessageStoreError.stepFailed(
@@ -349,9 +357,14 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
         }
         if current == 1 {
             // v1 → v2: add server_msgid column + the partial UNIQUE INDEX. The
-            // existing rows have NULL server_msgid, which is outside the partial
-            // index's WHERE clause, so they coexist with future tagged rows.
-            try exec(db, "ALTER TABLE messages ADD COLUMN server_msgid TEXT")
+            // ALTER is gated on a `PRAGMA table_info` lookup so a crash between
+            // ALTER and the user_version bump doesn't leave a partially-migrated
+            // file unopenable on the next launch — we just re-run the parts that
+            // are still missing.
+            let hasColumn = try columnExists(db, table: "messages", column: "server_msgid")
+            if !hasColumn {
+                try exec(db, "ALTER TABLE messages ADD COLUMN server_msgid TEXT")
+            }
             try exec(
                 db,
                 """
@@ -365,6 +378,29 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
         if Int32(current) != currentSchemaVersion {
             throw SQLiteMessageStoreError.migrationFailed(currentVersion: current)
         }
+    }
+
+    private static func columnExists(_ db: OpaquePointer, table: String, column: String) throws
+        -> Bool
+    {
+        var stmt: OpaquePointer?
+        let sql = "PRAGMA table_info(\(table))"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
+            throw SQLiteMessageStoreError.prepareFailed(
+                code: sqlite3_errcode(db),
+                message: String(cString: sqlite3_errmsg(db)),
+                sql: sql)
+        }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            // Column 1 of PRAGMA table_info is the column name.
+            if let cstr = sqlite3_column_text(stmt, 1),
+                String(cString: cstr) == column
+            {
+                return true
+            }
+        }
+        return false
     }
 
     private static func readUserVersion(_ db: OpaquePointer) throws -> Int {
