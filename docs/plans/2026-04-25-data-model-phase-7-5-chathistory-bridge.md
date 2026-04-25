@@ -389,13 +389,24 @@ Add header declarations in both `hexchat-apple-public.h` copies.
 
 ## Post-phase checklist
 
-- [ ] All success criteria met.
-- [ ] `cd apple/macos && swift test` green.
-- [ ] `meson test -C builddir fe-apple-runtime-events` green.
-- [ ] `meson test -C builddir fe-apple-chathistory-bridge` green (added in Task 4).
-- [ ] `cd apple/macos && swift-format lint -r Sources Tests` clean.
-- [ ] `messages.sqlite` migrates v1 → v2 cleanly on first launch with a Phase 7 file in place.
-- [ ] Roadmap row 7.5 cross-linked.
+- [x] All success criteria met.
+- [x] `cd apple/macos && swift test` green (206 tests).
+- [x] `meson test -C builddir fe-apple-runtime-events` green.
+- [x] `meson test -C builddir fe-apple-chathistory-bridge` green (added in Task 4; 7 tests).
+- [x] `cd apple/macos && swift-format lint -r Sources Tests` clean (no new diagnostics vs. master baseline).
+- [x] `messages.sqlite` migrates v1 → v2 cleanly on first launch with a Phase 7 file in place (covered by `testV1MigratesToV2PreservingRows` and `testV1MigrationRecoversFromPartiallyMigratedFile`).
+- [x] Roadmap row 7.5 cross-linked.
+
+## Manual smoke checklist
+
+When running against a `draft/chathistory`-capable test IRCd (Ergo, Soju, etc.):
+
+- [ ] Launch the app, connect, join a channel with prior history.
+- [ ] Quit + relaunch — `messages.sqlite` already holds the local cache; the ring shows the most recent N messages.
+- [ ] Scroll the conversation to the top → trigger `loadOlder` → observe older messages appear from the server. The wire request should be `BEFORE timestamp=<oldest-local-row-time>`, not `BEFORE timestamp=<ring-pre-fetch-oldest>`.
+- [ ] Reconnect after a deliberate pause; chathistory replay arrives but neither `messageStore.count` nor `messageRing.count` doubles.
+- [ ] Out-of-order replay arriving late lands at the timestamp-correct ring position, not the tail.
+- [ ] CAP NEW or CAP DEL flips `Connection.haveChathistory` and the next `loadOlder` honours the change.
 
 ## After Phase 7.5
 
