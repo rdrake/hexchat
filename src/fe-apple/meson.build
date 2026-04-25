@@ -52,3 +52,11 @@ test_runtime_events = executable('test-fe-apple-runtime-events',
 )
 
 test('fe-apple-runtime-events', test_runtime_events)
+
+test_chathistory_bridge = executable('test-fe-apple-chathistory-bridge',
+  sources: 'test-chathistory-bridge.c',
+  link_with: hexchat_apple_core,
+  dependencies: [hexchat_common_dep, dependency('openssl')],
+)
+
+test('fe-apple-chathistory-bridge', test_chathistory_bridge)

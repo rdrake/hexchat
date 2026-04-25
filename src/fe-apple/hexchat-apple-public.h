@@ -168,4 +168,21 @@ void hc_apple_runtime_emit_mode_change (const char *network,
                                         const char *self_nick,
                                         time_t timestamp,
                                         uint8_t connection_have_chathistory);
+/*
+ * Phase 7.5: request CHATHISTORY BEFORE for the given (connection, channel)
+ * at the given UTC millisecond timestamp. Formats `before_msec` as the
+ * IRCv3 reference string "timestamp=YYYY-MM-DDThh:mm:ss.sssZ" and dispatches
+ * onto the engine thread before any C-core lookup (serv_list / sess_list
+ * walks must run on the engine thread because GLib lists are not thread-safe).
+ *
+ * Returns 1 if the dispatch was queued; 0 only if the runtime is not running
+ * or the inputs are invalid. *All* other failure modes (unknown connection,
+ * channel not found, lost cap, server disconnected) drop silently inside
+ * the dispatched callback after the synchronous return.
+ */
+int hc_apple_runtime_request_chathistory_before (uint64_t connection_id,
+                                                  const char *channel,
+                                                  int64_t before_msec,
+                                                  int limit);
+
 void hc_apple_runtime_stop (void);

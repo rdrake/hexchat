@@ -1,11 +1,15 @@
 #include "apple-runtime.h"
 
 #include <string.h>
+#include <time.h>
 
 #include "../common/cfgfiles.h"
+#include "../common/chathistory.h"
 #include "../common/hexchat.h"
 #include "../common/hexchatc.h"
 #include "../common/outbound.h"
+#include "../common/server.h"
+#include "../common/util.h"
 
 hc_apple_runtime_state hc_apple_runtime = {0};
 
@@ -240,6 +244,128 @@ hc_apple_runtime_emit_mode_change (const char *network,
 	event.timestamp_seconds = (int64_t)timestamp;
 	event.connection_have_chathistory = connection_have_chathistory;
 	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
+}
+
+/*
+ * Phase 7.5: format an absolute UTC millisecond timestamp into the IRCv3
+ * `timestamp=YYYY-MM-DDThh:mm:ss.sssZ` reference string used by CHATHISTORY.
+ * Exposed via the internal `hc_apple_runtime_format_chathistory_reference`
+ * symbol so the test harness can exercise it without standing up a runtime.
+ *
+ * Returns the number of bytes written (excluding the trailing NUL) on success,
+ * or -1 if `out` is NULL or `cap` is too small.
+ */
+int
+hc_apple_runtime_format_chathistory_reference (int64_t before_msec,
+                                                char *out, size_t cap)
+{
+	time_t whole_seconds;
+	int milliseconds;
+	struct tm utc;
+	int written;
+
+	if (!out || cap < 36)
+		return -1;
+
+	whole_seconds = (time_t)(before_msec / 1000);
+	milliseconds = (int)(before_msec % 1000);
+	if (milliseconds < 0)
+	{
+		/* Negative remainder: roll one second back so the formatted
+		 * sub-second portion stays in [0, 999]. */
+		whole_seconds -= 1;
+		milliseconds += 1000;
+	}
+	gmtime_r (&whole_seconds, &utc);
+	written = g_snprintf (out, cap,
+	                      "timestamp=%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+	                      utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+	                      utc.tm_hour, utc.tm_min, utc.tm_sec, milliseconds);
+	return written;
+}
+
+typedef struct
+{
+	uint64_t connection_id;
+	char *channel;
+	char *reference;
+	int limit;
+} hc_apple_chathistory_dispatch_data;
+
+static gboolean
+hc_apple_runtime_request_chathistory_before_cb (gpointer data)
+{
+	hc_apple_chathistory_dispatch_data *dispatch = data;
+	server *target_serv = NULL;
+	session *target_sess = NULL;
+	GSList *list;
+
+	if (!dispatch)
+		return G_SOURCE_REMOVE;
+
+	/* Resolve server* from connection_id. server->id starts at 0; the bridge
+	 * offsets to keep 0 unambiguous. */
+	for (list = serv_list; list; list = list->next)
+	{
+		server *serv = list->data;
+		if (serv && (uint64_t)serv->id + 1 == dispatch->connection_id)
+		{
+			target_serv = serv;
+			break;
+		}
+	}
+	if (!target_serv || !target_serv->have_chathistory || !target_serv->connected)
+		goto done;
+
+	/* Walk sess_list filtering on this server, match channel via the
+	 * server's casemap-aware compare (CASEMAPPING-aware; rfc1459 default). */
+	for (list = sess_list; list; list = list->next)
+	{
+		session *sess = list->data;
+		if (sess && sess->server == target_serv
+		    && target_serv->p_cmp (sess->channel, dispatch->channel) == 0)
+		{
+			target_sess = sess;
+			break;
+		}
+	}
+	if (!target_sess)
+		goto done;
+
+	chathistory_request_before (target_sess, dispatch->reference, dispatch->limit);
+
+done:
+	g_free (dispatch->channel);
+	g_free (dispatch->reference);
+	g_free (dispatch);
+	return G_SOURCE_REMOVE;
+}
+
+int
+hc_apple_runtime_request_chathistory_before (uint64_t connection_id,
+                                              const char *channel,
+                                              int64_t before_msec,
+                                              int limit)
+{
+	char reference[64];
+	hc_apple_chathistory_dispatch_data *dispatch;
+
+	if (!hc_apple_runtime.context || !channel || !channel[0] || limit <= 0)
+		return 0;
+	if (hc_apple_runtime_format_chathistory_reference (
+	        before_msec, reference, sizeof reference) < 0)
+		return 0;
+
+	dispatch = g_new0 (hc_apple_chathistory_dispatch_data, 1);
+	dispatch->connection_id = connection_id;
+	dispatch->channel = g_strdup (channel);
+	dispatch->reference = g_strdup (reference);
+	dispatch->limit = limit;
+
+	g_main_context_invoke (hc_apple_runtime.context,
+	                       hc_apple_runtime_request_chathistory_before_cb,
+	                       dispatch);
+	return 1;
 }
 
 static gpointer
