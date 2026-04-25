@@ -70,7 +70,7 @@ Each phase is independently shippable. The app remains fully functional between 
 | 4 | **User dedup via ChannelMembership** ✅ | Per-connection `User` + `ChannelMembership` junction. Nick/account/away mutate one record, not N. | Med | [docs/plans/2026-04-23-data-model-phase-4-user-dedup.md](2026-04-23-data-model-phase-4-user-dedup.md) |
 | 5 | **Message structuring** ✅ | Typed `MessageKind` with structured fields; new `hc_apple_event_kind` variants on the C side for JOIN/PART/QUIT/KICK/MODE/NICK. | Med | [docs/plans/2026-04-24-data-model-phase-5-message-structuring.md](2026-04-24-data-model-phase-5-message-structuring.md) |
 | 6 | **Config & state persistence** ✅ | `Codable` + JSON for `Network`, `ConversationState`, `AppState`. Atomic writes, debounced on-change saves. | Med | [docs/plans/2026-04-24-data-model-phase-6-persistence.md](2026-04-24-data-model-phase-6-persistence.md) |
-| 7 | Message persistence + pagination | SQLite-backed message history; scroll-back; hooks for IRCv3 `chathistory`. | Higher | future |
+| 7 | **Message persistence + pagination** ✅ | SQLite-backed `messages.sqlite` with per-conversation in-memory ring + paginated `loadOlder` back-fill. IRCv3 `draft/chathistory` server bridge deferred to Phase 7.5. | Higher | [docs/plans/2026-04-24-data-model-phase-7-message-persistence.md](2026-04-24-data-model-phase-7-message-persistence.md) |
 | 8 | Transferable + Multi-window | `Transferable` across the model; multi-window `WindowGroup`. | Low | future |
 
 ### Explicit non-goals
@@ -1261,7 +1261,8 @@ Each phase gets its own plan doc dated when its predecessor ships. Current order
 - **Phase 4 — User dedup via `ChannelMembership`.** Per-connection `User` identity; `ChannelMembership` junction stores `modePrefix` per channel. Nick/account/away changes mutate one `User`, not N rows.
 - **Phase 5 — Structured `Message`.** Typed `MessageKind` cases for join/part/quit/kick/mode/nick-change with structured fields. C-side emits new `hc_apple_event_kind` variants to bypass heuristic text-parsing.
 - **Phase 6 — Config & state persistence.** `Codable` + JSON for `Network`, `ConversationState`, `AppState`. Atomic writes, debounced on-change saves.
-- **Phase 7 — Message persistence + pagination.** SQLite (GRDB), per-conversation ring in memory, older pages paged from disk, IRCv3 `chathistory` hook.
+- **Phase 7 — Message persistence + pagination** ✅ shipped. SQLite via system `sqlite3` (no Swift package dep), per-conversation in-memory ring (200/conv) plus globally-capped `messages` (5000), paginated `loadOlder` back-fill. See [phase 7 plan](2026-04-24-data-model-phase-7-message-persistence.md).
+- **Phase 7.5 — IRCv3 `draft/chathistory` server bridge.** Bridge `chathistory_request_before(server*, reference, limit)` from `src/common/chathistory.c` into a new `hc_apple_runtime_request_chathistory_before` C function and have `loadOlder` consult the connection's `have_chathistory` cap when local history runs out. Estimated: ~6 small tasks.
 - **Phase 8 — Transferable + multi-window.** All entities conform to `Transferable`; drop destinations enumerated for product decisions. `WindowGroup` per scene with its own focused conversation.
 
 ---
