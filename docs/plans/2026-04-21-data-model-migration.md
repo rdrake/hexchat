@@ -69,7 +69,7 @@ Each phase is independently shippable. The app remains fully functional between 
 | 3 | **Network / Connection split** ✅ | Introduce persistable `Network` + runtime `Connection` (self-nick, capabilities, endpoint, away). | Low–med | [docs/plans/2026-04-22-data-model-phase-3-network-connection-split.md](2026-04-22-data-model-phase-3-network-connection-split.md) |
 | 4 | **User dedup via ChannelMembership** ✅ | Per-connection `User` + `ChannelMembership` junction. Nick/account/away mutate one record, not N. | Med | [docs/plans/2026-04-23-data-model-phase-4-user-dedup.md](2026-04-23-data-model-phase-4-user-dedup.md) |
 | 5 | **Message structuring** ✅ | Typed `MessageKind` with structured fields; new `hc_apple_event_kind` variants on the C side for JOIN/PART/QUIT/KICK/MODE/NICK. | Med | [docs/plans/2026-04-24-data-model-phase-5-message-structuring.md](2026-04-24-data-model-phase-5-message-structuring.md) |
-| 6 | Config & state persistence | `Codable` + JSON for Networks, drafts, read markers, sidebar state. Debounced writes. | Med | future |
+| 6 | **Config & state persistence** ✅ | `Codable` + JSON for `Network`, `ConversationState`, `AppState`. Atomic writes, debounced on-change saves. | Med | [docs/plans/2026-04-24-data-model-phase-6-persistence.md](2026-04-24-data-model-phase-6-persistence.md) |
 | 7 | Message persistence + pagination | SQLite-backed message history; scroll-back; hooks for IRCv3 `chathistory`. | Higher | future |
 | 8 | Transferable + Multi-window | `Transferable` across the model; multi-window `WindowGroup`. | Low | future |
 
