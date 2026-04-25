@@ -27,6 +27,7 @@ let package = Package(
             dependencies: ["AppleAdapterBridge"],
             path: "Sources/HexChatAppleShell",
             linkerSettings: [
+                .linkedLibrary("sqlite3"),
                 .unsafeFlags([
                     "-L\(adapterLibDir)",
                     "-lhexchatappleadapter",
