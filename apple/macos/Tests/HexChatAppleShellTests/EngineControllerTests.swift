@@ -2378,6 +2378,72 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(try store.count(conversation: key), 1)
     }
 
+    // MARK: - Phase 7 — message persistence (Task 7, ring + caps)
+
+    func testMessageRingTracksPerConversation() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
+            connectionID: 1)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#b",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let sessA = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+        let sessB = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#b"))!
+
+        for i in 0..<3 {
+            controller.appendMessageForTest(
+                ChatMessage(sessionID: sessA, raw: "a\(i)", kind: .message(body: "a\(i)")))
+        }
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: sessB, raw: "b0", kind: .message(body: "b0")))
+
+        let keyA = ConversationKey(networkID: netID, channel: "#a")
+        let keyB = ConversationKey(networkID: netID, channel: "#b")
+        XCTAssertEqual(controller.messageRingForTest(conversation: keyA).count, 3)
+        XCTAssertEqual(controller.messageRingForTest(conversation: keyB).count, 1)
+    }
+
+    func testMessageRingHonoursPerConversationCap() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let sess = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+
+        let cap = EngineController.messageRingPerConversation
+        for i in 0..<(cap + 50) {
+            controller.appendMessageForTest(
+                ChatMessage(sessionID: sess, raw: "m\(i)", kind: .message(body: "m\(i)")))
+        }
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        XCTAssertEqual(controller.messageRingForTest(conversation: key).count, cap)
+        XCTAssertEqual(
+            controller.messageRingForTest(conversation: key).first?.body, "m50",
+            "ring should drop oldest entries first")
+    }
+
+    func testGlobalMessagesArrayHonoursGlobalCap() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let sess = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+
+        let cap = EngineController.messagesGlobalCap
+        for i in 0..<(cap + 25) {
+            controller.appendMessageForTest(
+                ChatMessage(sessionID: sess, raw: "m\(i)", kind: .message(body: "m\(i)")))
+        }
+        XCTAssertEqual(controller.messages.count, cap)
+        XCTAssertEqual(controller.messages.last?.body, "m\(cap + 24)")
+    }
+
     func testEngineControllerToleratesBrokenMessageStore() {
         struct BrokenMessageStore: MessageStore {
             func append(_ m: ChatMessage, conversation: ConversationKey) throws {

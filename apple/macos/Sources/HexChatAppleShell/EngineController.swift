@@ -487,9 +487,12 @@ enum SessionLocator: Hashable {
 @Observable
 final class EngineController {
     static let commandHistoryCap = 1000
+    static let messagesGlobalCap = 5000
+    static let messageRingPerConversation = 200
 
     var isRunning = false
     var messages: [ChatMessage] = []
+    private var messageRing: [ConversationKey: [ChatMessage]] = [:]
     var sessions: [ChatSession] = []
 
     var input: String {
@@ -1266,8 +1269,23 @@ final class EngineController {
 
     private func append(_ message: ChatMessage) {
         messages.append(message)
+        if messages.count > Self.messagesGlobalCap {
+            messages.removeFirst(messages.count - Self.messagesGlobalCap)
+        }
+        if let key = conversationKey(for: message.sessionID) {
+            var bucket = messageRing[key] ?? []
+            bucket.append(message)
+            if bucket.count > Self.messageRingPerConversation {
+                bucket.removeFirst(bucket.count - Self.messageRingPerConversation)
+            }
+            messageRing[key] = bucket
+        }
         recordActivity(on: message.sessionID)
         writeThroughToMessageStore(message)
+    }
+
+    func messageRingForTest(conversation: ConversationKey) -> [ChatMessage] {
+        messageRing[conversation] ?? []
     }
 
     private func writeThroughToMessageStore(_ message: ChatMessage) {
