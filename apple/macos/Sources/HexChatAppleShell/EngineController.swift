@@ -599,8 +599,16 @@ final class EngineController {
     @ObservationIgnored
     private var coordinator: PersistenceCoordinator?
 
+    /// Convenience for tests, previews, and any caller that doesn't want to
+    /// write to the user's real `~/Library/Application Support`. Production
+    /// must explicitly construct `EngineController(persistence:)` with a
+    /// `FileSystemPersistenceStore`.
+    convenience init() {
+        self.init(persistence: InMemoryPersistenceStore(), debounceInterval: .milliseconds(500))
+    }
+
     init(
-        persistence: PersistenceStore = FileSystemPersistenceStore(),
+        persistence: PersistenceStore,
         debounceInterval: Duration = .milliseconds(500)
     ) {
         // Coordinator stays nil during apply() so didSet observers don't schedule
@@ -1104,6 +1112,10 @@ final class EngineController {
             if event.phase == HC_APPLE_LIFECYCLE_READY {
                 isRunning = true
             } else if event.phase == HC_APPLE_LIFECYCLE_STOPPED {
+                // Persist the final live state before the runtime teardown nukes it.
+                // Done before any clearing so the on-disk snapshot reflects what the
+                // user actually had when the engine stopped.
+                coordinator?.flushNow()
                 isRunning = false
                 sessionByLocator = [:]
                 networks = [:]

@@ -2143,6 +2143,16 @@ final class EngineControllerTests: XCTestCase {
             "system-session activity must not bump any conversation's unread count")
     }
 
+    func testFinalFlushOnLifecycleStopped() {
+        let store = CountingStore()
+        let controller = EngineController(persistence: store, debounceInterval: .seconds(60))
+        controller.recordCommand("/late")
+        XCTAssertEqual(store.saveCount, 0)  // 60s debounce hasn't fired
+        controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
+        XCTAssertEqual(store.saveCount, 1)
+        XCTAssertEqual(try store.load()?.commandHistory, ["/late"])
+    }
+
     func testIncomingMessageForSelectedSessionDoesNotIncrementUnread() {
         let controller = EngineController(
             persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
