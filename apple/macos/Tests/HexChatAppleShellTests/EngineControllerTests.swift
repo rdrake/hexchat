@@ -2505,7 +2505,7 @@ final class EngineControllerTests: XCTestCase {
 
     func testEngineControllerToleratesBrokenMessageStore() {
         struct BrokenMessageStore: MessageStore {
-            func append(_ m: ChatMessage, conversation: ConversationKey) throws {
+            func append(_ m: ChatMessage, conversation: ConversationKey) throws -> Bool {
                 throw CocoaError(.fileWriteUnknown)
             }
             func page(conversation: ConversationKey, before: Date?, limit: Int) throws

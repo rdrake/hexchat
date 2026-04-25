@@ -18,7 +18,7 @@ enum SQLiteMessageStoreError: Error {
 /// synchronous (the JSON state.json takes the durability slot for tier-1 data),
 /// MEMORY temp_store, foreign_keys ON for forward-compat.
 final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
-    static let currentSchemaVersion: Int32 = 1
+    static let currentSchemaVersion: Int32 = 2
 
     let fileURL: URL
     private let db: OpaquePointer
@@ -70,11 +70,12 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
     private static let insertSQL = """
         INSERT OR IGNORE INTO messages
             (id, network_id, channel_lower, channel_display, timestamp_ms,
-             kind, body, extra_json, author_nick, raw)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             kind, body, extra_json, author_nick, raw, server_msgid)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
-    func append(_ message: ChatMessage, conversation: ConversationKey) throws {
+    @discardableResult
+    func append(_ message: ChatMessage, conversation: ConversationKey) throws -> Bool {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, Self.insertSQL, -1, &stmt, nil) == SQLITE_OK, let stmt else {
             throw SQLiteMessageStoreError.prepareFailed(
@@ -95,6 +96,7 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
         bind(stmt, index: 8, text: payload.extraJSON)
         bind(stmt, index: 9, text: message.author?.nick)
         bind(stmt, index: 10, text: message.raw)
+        bind(stmt, index: 11, text: message.serverMsgID)
         let rc = sqlite3_step(stmt)
         guard rc == SQLITE_DONE else {
             throw SQLiteMessageStoreError.stepFailed(
@@ -102,11 +104,15 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
                 message: String(cString: sqlite3_errmsg(db)),
                 sql: Self.insertSQL)
         }
+        // INSERT OR IGNORE swallows partial-UNIQUE-INDEX conflicts; the only
+        // way to tell inserted-vs-ignored is sqlite3_changes(): SQLITE_DONE
+        // alone tells us nothing.
+        return sqlite3_changes(db) > 0
     }
 
     private static let pageSQL = """
         SELECT id, network_id, channel_display, timestamp_ms,
-               kind, body, extra_json, author_nick, raw
+               kind, body, extra_json, author_nick, raw, server_msgid
         FROM messages
         WHERE network_id = ? AND channel_lower = ?
               AND (?3 = 0 OR timestamp_ms < ?4)
@@ -246,6 +252,7 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
         guard let raw = columnText(stmt, 8) else { return nil }
         guard let kind = decodeKindPayload(tag: tag, body: body, extraJSON: extraJSON)
         else { return nil }
+        let serverMsgID = columnText(stmt, 9)
         _ = channelDisplay  // reserved for future use
         return ChatMessage(
             id: id,
@@ -253,7 +260,8 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
             raw: raw,
             kind: kind,
             author: authorNick.map { MessageAuthor(nick: $0, userID: nil) },
-            timestamp: Date(timeIntervalSince1970: TimeInterval(timestampMs) / 1000))
+            timestamp: Date(timeIntervalSince1970: TimeInterval(timestampMs) / 1000),
+            serverMsgID: serverMsgID)
     }
 
     private func encodeJSON(_ dict: [String: String]) -> String {
@@ -304,7 +312,7 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
     }
 
     private static func migrateIfNeeded(_ db: OpaquePointer) throws {
-        let current = try readUserVersion(db)
+        var current = try readUserVersion(db)
         if current == 0 {
             try exec(
                 db,
@@ -319,7 +327,8 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
                     body            TEXT,
                     extra_json      TEXT,
                     author_nick     TEXT,
-                    raw             TEXT NOT NULL
+                    raw             TEXT NOT NULL,
+                    server_msgid    TEXT
                 )
                 """)
             try exec(
@@ -328,8 +337,30 @@ final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
                 CREATE INDEX IF NOT EXISTS idx_messages_conv_ts
                 ON messages (network_id, channel_lower, timestamp_ms DESC)
                 """)
+            try exec(
+                db,
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_server_msgid
+                ON messages (network_id, channel_lower, server_msgid, timestamp_ms)
+                WHERE server_msgid IS NOT NULL
+                """)
             try exec(db, "PRAGMA user_version = \(currentSchemaVersion)")
             return
+        }
+        if current == 1 {
+            // v1 → v2: add server_msgid column + the partial UNIQUE INDEX. The
+            // existing rows have NULL server_msgid, which is outside the partial
+            // index's WHERE clause, so they coexist with future tagged rows.
+            try exec(db, "ALTER TABLE messages ADD COLUMN server_msgid TEXT")
+            try exec(
+                db,
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_server_msgid
+                ON messages (network_id, channel_lower, server_msgid, timestamp_ms)
+                WHERE server_msgid IS NOT NULL
+                """)
+            try exec(db, "PRAGMA user_version = 2")
+            current = 2
         }
         if Int32(current) != currentSchemaVersion {
             throw SQLiteMessageStoreError.migrationFailed(currentVersion: current)

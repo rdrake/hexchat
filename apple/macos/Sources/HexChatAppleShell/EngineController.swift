@@ -166,6 +166,12 @@ struct ChatMessage: Codable, Identifiable {
     let kind: ChatMessageKind
     let author: MessageAuthor?
     let timestamp: Date
+    /// IRCv3 `msgid` tag, or nil for locally-generated messages and untagged
+    /// PRIVMSGs. Combined with `(networkID, channel, timestamp)` it forms the
+    /// dedup key for chathistory replays — see SQLiteMessageStore's partial
+    /// UNIQUE INDEX. Empty strings and `pending:*` placeholders normalize to
+    /// nil at the controller boundary; only "real" server msgids reach storage.
+    let serverMsgID: String?
 
     init(
         id: UUID = UUID(),
@@ -173,7 +179,8 @@ struct ChatMessage: Codable, Identifiable {
         raw: String,
         kind: ChatMessageKind,
         author: MessageAuthor? = nil,
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        serverMsgID: String? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
@@ -181,6 +188,7 @@ struct ChatMessage: Codable, Identifiable {
         self.kind = kind
         self.author = author
         self.timestamp = timestamp
+        self.serverMsgID = serverMsgID
     }
 
     var body: String? {

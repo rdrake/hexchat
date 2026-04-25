@@ -5,36 +5,64 @@ import Foundation
 /// SQLite implementation for production. `conversation` is passed explicitly
 /// instead of being derived from the message because the system pseudo-session
 /// has no `ConversationKey` to derive — the controller owns the routing decision.
+///
+/// `append` returns `true` for an inserted row, `false` for a duplicate ignored
+/// at the storage layer (PRIMARY KEY collision on `id`, or the partial UNIQUE
+/// INDEX on `(network_id, channel_lower, server_msgid, timestamp_ms)` for
+/// msgid-tagged rows). Phase 7.5's invariant: `EngineController.append` mutates
+/// its in-memory ring only when the store reports `true`.
 protocol MessageStore: Sendable {
-    func append(_ message: ChatMessage, conversation: ConversationKey) throws
+    @discardableResult
+    func append(_ message: ChatMessage, conversation: ConversationKey) throws -> Bool
     func page(conversation: ConversationKey, before: Date?, limit: Int) throws
         -> [ChatMessage]
     func count(conversation: ConversationKey) throws -> Int
 }
 
-/// Thread-safe in-memory message store. Implementations of MessageStore are
-/// reached from both the main actor (read paths via loadOlder in Task 8) and
-/// the EngineController.messageWriteQueue background queue (write-through);
-/// the NSLock is the cheapest way to serialise without dragging an actor
-/// boundary into every test.
+/// Thread-safe in-memory message store. Phase 7.5 makes writes synchronous on
+/// the main actor (the Phase 7 background queue is gone), so the lock guards
+/// against any future async page() callers; current call sites are all
+/// main-actor-bound.
 final class InMemoryMessageStore: MessageStore, @unchecked Sendable {
+    /// Storage-layer dedup key. Mirrors SQLite's
+    /// `(network_id, channel_lower, server_msgid, timestamp_ms)` partial
+    /// UNIQUE INDEX so the in-memory store rejects the same set of duplicates
+    /// the production store does — tests behave identically against either.
+    private struct ServerKey: Hashable {
+        let networkID: UUID
+        let channelLowercased: String
+        let serverMsgID: String
+        let timestampMs: Int64
+    }
+
     private let lock = NSLock()
     private var byConversation: [ConversationKey: [ChatMessage]] = [:]
     private var seenIDs: Set<UUID> = []
+    private var seenServerKeys: Set<ServerKey> = []
 
     init() {}
 
-    func append(_ message: ChatMessage, conversation: ConversationKey) throws {
+    @discardableResult
+    func append(_ message: ChatMessage, conversation: ConversationKey) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !seenIDs.contains(message.id) else { return }
+        if seenIDs.contains(message.id) { return false }
+        if let msgid = message.serverMsgID, !msgid.isEmpty {
+            let key = ServerKey(
+                networkID: conversation.networkID,
+                channelLowercased: conversation.channel.lowercased(),
+                serverMsgID: msgid,
+                timestampMs: Int64(message.timestamp.timeIntervalSince1970 * 1000))
+            if !seenServerKeys.insert(key).inserted { return false }
+        }
         seenIDs.insert(message.id)
         var bucket = byConversation[conversation] ?? []
         // Insertion-sort by timestamp so out-of-order arrivals (chathistory
-        // back-fill in Phase 7.5) land in the right slot.
+        // back-fill) land in the right slot.
         let insertAt = bucket.firstIndex { $0.timestamp > message.timestamp } ?? bucket.endIndex
         bucket.insert(message, at: insertAt)
         byConversation[conversation] = bucket
+        return true
     }
 
     func page(conversation: ConversationKey, before: Date?, limit: Int) throws -> [ChatMessage] {
