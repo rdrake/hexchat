@@ -398,7 +398,23 @@ final class EngineController {
     var isRunning = false
     var messages: [ChatMessage] = []
     var sessions: [ChatSession] = []
-    var input = ""
+
+    var input: String {
+        get {
+            guard let key = currentConversationKey else { return "" }
+            return conversations[key]?.draft ?? ""
+        }
+        set {
+            guard let key = currentConversationKey else { return }
+            var state = conversations[key] ?? ConversationState(key: key)
+            state.draft = newValue
+            conversations[key] = state
+        }
+    }
+
+    private var currentConversationKey: ConversationKey? {
+        selectedSessionID.flatMap(conversationKey(for:))
+    }
 
     var conversations: [ConversationKey: ConversationState] = [:] {
         didSet { coordinator?.markDirty() }

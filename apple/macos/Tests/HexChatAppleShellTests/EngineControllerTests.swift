@@ -77,6 +77,14 @@ final class EngineControllerTests: XCTestCase {
 
     func testHistoryBrowseUpDownRestoresDraft() {
         let controller = EngineController()
+        // Per-conversation drafts (Phase 6 task 8) require a selected session for `input`
+        // to land somewhere; seed a real session before exercising history navigation.
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#hexchat",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        controller.selectedSessionID = controller.sessionUUID(
+            for: .composed(connectionID: conn, channel: "#hexchat"))
         controller.send("/join #hexchat")
         controller.send("/msg alice hi")
         controller.input = "/nick newname"
@@ -1981,6 +1989,46 @@ final class EngineControllerTests: XCTestCase {
         _ = controller.upsertNetworkForName("afternet")
         XCTAssertEqual(controller.networks.count, 1)
         XCTAssertEqual(controller.networks.values.first?.displayName, "AfterNET")
+    }
+
+    // MARK: - Phase 6 — persistence (Task 8, per-conversation drafts)
+
+    func testInputIsPerConversationDraft() {
+        let store = InMemoryPersistenceStore()
+        let controller = EngineController(persistence: store, debounceInterval: .zero)
+        let netID = UUID()
+        let connID = UUID()
+        controller.networks[netID] = Network(id: netID, displayName: "Net")
+        controller.connections[connID] = Connection(
+            id: connID, networkID: netID, serverName: "Net", selfNick: nil)
+        let locA = SessionLocator.composed(connectionID: connID, channel: "#a")
+        let locB = SessionLocator.composed(connectionID: connID, channel: "#b")
+        let sessA = ChatSession(connectionID: connID, channel: "#a", isActive: true, locator: locA)
+        let sessB = ChatSession(connectionID: connID, channel: "#b", isActive: true, locator: locB)
+        controller.sessions = [sessA, sessB]
+        let keyA = ConversationKey(networkID: netID, channel: "#a")
+        let keyB = ConversationKey(networkID: netID, channel: "#b")
+
+        controller.selectedSessionID = sessA.id
+        controller.input = "typing in A"
+        XCTAssertEqual(controller.conversations[keyA]?.draft, "typing in A")
+
+        controller.selectedSessionID = sessB.id
+        XCTAssertEqual(controller.input, "")
+        controller.input = "typing in B"
+        XCTAssertEqual(controller.conversations[keyB]?.draft, "typing in B")
+
+        controller.selectedSessionID = sessA.id
+        XCTAssertEqual(controller.input, "typing in A")
+    }
+
+    func testInputWithNoSelectedSessionIsNoOp() {
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
+        XCTAssertEqual(controller.input, "")
+        controller.input = "ignored"
+        XCTAssertEqual(controller.input, "")
+        XCTAssertTrue(controller.conversations.isEmpty)
     }
 }
 #else
