@@ -2686,6 +2686,22 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(bridge.records.first?.limit, 50)
     }
 
+    // MARK: - Phase 7.5 task-5: live CRuntimeChathistoryBridge smoke
+
+    func testCRuntimeBridgeCallsCFunctionWithoutCrash() {
+        // Smoke-level only — substantive behavior is covered by:
+        //   * fe-apple-chathistory-bridge meson tests (formatter + dispatch lifecycle)
+        //   * RecordingChathistoryBridge tests above (loadOlder gate matrix)
+        // Here we only verify the production bridge can be constructed and
+        // called from Swift without crashing. Connection 0 is unmapped on the
+        // C side; the dispatched callback walks serv_list, finds nothing,
+        // drops silently.
+        let bridge = CRuntimeChathistoryBridge()
+        bridge.requestBefore(
+            connectionID: 0, channel: "#nope",
+            beforeMsec: 1_700_000_000_000, limit: 50)
+    }
+
     func testEngineControllerToleratesBrokenMessageStore() {
         struct BrokenMessageStore: MessageStore {
             func append(_ m: ChatMessage, conversation: ConversationKey) throws -> Bool {

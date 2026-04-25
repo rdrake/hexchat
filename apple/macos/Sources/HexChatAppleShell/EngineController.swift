@@ -415,13 +415,16 @@ protocol ChathistoryBridge: Sendable {
     func requestBefore(connectionID: UInt64, channel: String, beforeMsec: Int64, limit: Int)
 }
 
-/// Production bridge — in Task 5 this calls `hc_apple_runtime_request_chathistory_before`.
-/// Today (Task 3) it's a no-op stub; the controller dispatches into it but
-/// nothing reaches the C runtime. The seam means production tests can run
-/// against the real bridge without touching the C side until Task 5 wires it.
+/// Production bridge — calls `hc_apple_runtime_request_chathistory_before`
+/// in `src/fe-apple/apple-runtime.c`. The C function is thread-safe (it
+/// strdups the channel and dispatches via `g_main_context_invoke` onto the
+/// engine thread), so calling from the @MainActor `loadOlder` path needs no
+/// extra serialisation. Failures inside the engine-thread callback drop
+/// silently — replays come over the existing event channel.
 struct CRuntimeChathistoryBridge: ChathistoryBridge {
     func requestBefore(connectionID: UInt64, channel: String, beforeMsec: Int64, limit: Int) {
-        // Task 5 replaces this stub with the real C call.
+        _ = hc_apple_runtime_request_chathistory_before(
+            connectionID, channel, beforeMsec, Int32(limit))
     }
 }
 
