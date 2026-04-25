@@ -2143,7 +2143,7 @@ final class EngineControllerTests: XCTestCase {
             "system-session activity must not bump any conversation's unread count")
     }
 
-    func testFinalFlushOnLifecycleStopped() {
+    func testFinalFlushOnLifecycleStopped() async throws {
         let store = CountingStore()
         let controller = EngineController(persistence: store, debounceInterval: .seconds(60))
         controller.recordCommand("/late")
@@ -2151,6 +2151,14 @@ final class EngineControllerTests: XCTestCase {
         controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
         XCTAssertEqual(store.saveCount, 1)
         XCTAssertEqual(try store.load()?.commandHistory, ["/late"])
+
+        // Quiescence: the post-flush teardown clears non-persisted fields (networks,
+        // connections, sessions, indexes) — none of which have a markDirty didSet —
+        // so no second save should fire afterward. Regression guard for the day
+        // someone adds a didSet to one of those fields without realising.
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(store.saveCount, 1)
     }
 
     func testIncomingMessageForSelectedSessionDoesNotIncrementUnread() {
