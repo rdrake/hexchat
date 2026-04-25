@@ -2180,6 +2180,82 @@ final class EngineControllerTests: XCTestCase {
         let keyA = ConversationKey(networkID: netID, channel: "#a")
         XCTAssertEqual(controller.conversations[keyA]?.unread ?? 0, 0)
     }
+
+    // MARK: - Phase 7 — message persistence (Task 1, Codable on ChatMessage)
+
+    private func roundTripChatMessageKind(_ kind: ChatMessageKind) throws {
+        let original = ChatMessage(
+            sessionID: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            raw: "raw text", kind: kind,
+            author: MessageAuthor(nick: "alice", userID: nil),
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000))
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        enc.dateEncodingStrategy = .iso8601
+        let data = try enc.encode(original)
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let back = try dec.decode(ChatMessage.self, from: data)
+        XCTAssertEqual(back.id, original.id, "id must round-trip")
+        XCTAssertEqual(back.sessionID, original.sessionID)
+        XCTAssertEqual(back.raw, original.raw)
+        XCTAssertEqual(back.kind, original.kind, "kind round-trip failed for \(kind)")
+        XCTAssertEqual(back.author?.nick, original.author?.nick)
+        XCTAssertEqual(
+            back.timestamp.timeIntervalSince1970,
+            original.timestamp.timeIntervalSince1970, accuracy: 0.001)
+    }
+
+    func testChatMessageMessageKindRoundTrip() throws {
+        try roundTripChatMessageKind(.message(body: "hello"))
+    }
+    func testChatMessageNoticeKindRoundTrip() throws {
+        try roundTripChatMessageKind(.notice(body: "fyi"))
+    }
+    func testChatMessageActionKindRoundTrip() throws {
+        try roundTripChatMessageKind(.action(body: "waves"))
+    }
+    func testChatMessageCommandKindRoundTrip() throws {
+        try roundTripChatMessageKind(.command(body: "/join #a"))
+    }
+    func testChatMessageErrorKindRoundTrip() throws {
+        try roundTripChatMessageKind(.error(body: "boom"))
+    }
+    func testChatMessageLifecycleKindRoundTrip() throws {
+        try roundTripChatMessageKind(.lifecycle(phase: "READY", body: "ready"))
+    }
+    func testChatMessageJoinKindRoundTrip() throws {
+        try roundTripChatMessageKind(.join)
+    }
+    func testChatMessagePartKindRoundTrip() throws {
+        try roundTripChatMessageKind(.part(reason: "bye"))
+        try roundTripChatMessageKind(.part(reason: nil))
+    }
+    func testChatMessageQuitKindRoundTrip() throws {
+        try roundTripChatMessageKind(.quit(reason: "ping timeout"))
+        try roundTripChatMessageKind(.quit(reason: nil))
+    }
+    func testChatMessageKickKindRoundTrip() throws {
+        try roundTripChatMessageKind(.kick(target: "bob", reason: "spam"))
+        try roundTripChatMessageKind(.kick(target: "bob", reason: nil))
+    }
+    func testChatMessageNickChangeKindRoundTrip() throws {
+        try roundTripChatMessageKind(.nickChange(from: "alice", to: "alice_"))
+    }
+    func testChatMessageModeChangeKindRoundTrip() throws {
+        try roundTripChatMessageKind(.modeChange(modes: "+o", args: "alice"))
+        try roundTripChatMessageKind(.modeChange(modes: "+i", args: nil))
+    }
+
+    func testChatMessageOmitsNilAuthor() throws {
+        let m = ChatMessage(
+            sessionID: UUID(), raw: "system line", kind: .lifecycle(phase: "X", body: "x"))
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        let data = try enc.encode(m)
+        let json = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(json.contains("\"author\""))
+    }
 }
 #else
 @testable import HexChatAppleShell

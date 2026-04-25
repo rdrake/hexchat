@@ -41,7 +41,7 @@ struct NetworkSection: Identifiable {
 /// `nil` when the nick has not yet been seen on the connection — for example, a
 /// typed JOIN arriving before its USERLIST_INSERT companion. The nick string
 /// preserves the casing used in the originating IRC event.
-struct MessageAuthor: Hashable {
+struct MessageAuthor: Codable, Hashable {
     let nick: String
     let userID: UUID?
 }
@@ -53,7 +53,7 @@ struct MessageAuthor: Hashable {
 /// free-form body — `body` returns `nil` for these. `.action` is included for
 /// forward compatibility: Phase 5 does not emit it; Phase 7 will once typed
 /// PRIVMSG/ACTION arrives.
-enum ChatMessageKind: Hashable {
+enum ChatMessageKind: Codable, Hashable {
     case message(body: String)
     case notice(body: String)
     case action(body: String)
@@ -66,10 +66,100 @@ enum ChatMessageKind: Hashable {
     case kick(target: String, reason: String?)
     case nickChange(from: String, to: String)
     case modeChange(modes: String, args: String?)
+
+    // Stable JSON shape: { tag: <discriminator>, body?, phase?, reason?, target?,
+    // from?, to?, modes?, args? }. The same field set maps to SQLite's body+extra_json
+    // pair in Phase 7 task-4 (SQLiteMessageStore.append).
+    private enum CodingKeys: String, CodingKey {
+        case tag, body, phase, reason, target, from, to, modes, args
+    }
+
+    private enum Tag: String, Codable {
+        case message, notice, action, command, error, lifecycle
+        case join, part, quit, kick, nickChange, modeChange
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let tag = try c.decode(Tag.self, forKey: .tag)
+        switch tag {
+        case .message: self = .message(body: try c.decode(String.self, forKey: .body))
+        case .notice: self = .notice(body: try c.decode(String.self, forKey: .body))
+        case .action: self = .action(body: try c.decode(String.self, forKey: .body))
+        case .command: self = .command(body: try c.decode(String.self, forKey: .body))
+        case .error: self = .error(body: try c.decode(String.self, forKey: .body))
+        case .lifecycle:
+            self = .lifecycle(
+                phase: try c.decode(String.self, forKey: .phase),
+                body: try c.decode(String.self, forKey: .body))
+        case .join: self = .join
+        case .part:
+            self = .part(reason: try c.decodeIfPresent(String.self, forKey: .reason))
+        case .quit:
+            self = .quit(reason: try c.decodeIfPresent(String.self, forKey: .reason))
+        case .kick:
+            self = .kick(
+                target: try c.decode(String.self, forKey: .target),
+                reason: try c.decodeIfPresent(String.self, forKey: .reason))
+        case .nickChange:
+            self = .nickChange(
+                from: try c.decode(String.self, forKey: .from),
+                to: try c.decode(String.self, forKey: .to))
+        case .modeChange:
+            self = .modeChange(
+                modes: try c.decode(String.self, forKey: .modes),
+                args: try c.decodeIfPresent(String.self, forKey: .args))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .message(let b):
+            try c.encode(Tag.message, forKey: .tag)
+            try c.encode(b, forKey: .body)
+        case .notice(let b):
+            try c.encode(Tag.notice, forKey: .tag)
+            try c.encode(b, forKey: .body)
+        case .action(let b):
+            try c.encode(Tag.action, forKey: .tag)
+            try c.encode(b, forKey: .body)
+        case .command(let b):
+            try c.encode(Tag.command, forKey: .tag)
+            try c.encode(b, forKey: .body)
+        case .error(let b):
+            try c.encode(Tag.error, forKey: .tag)
+            try c.encode(b, forKey: .body)
+        case .lifecycle(let phase, let body):
+            try c.encode(Tag.lifecycle, forKey: .tag)
+            try c.encode(phase, forKey: .phase)
+            try c.encode(body, forKey: .body)
+        case .join:
+            try c.encode(Tag.join, forKey: .tag)
+        case .part(let reason):
+            try c.encode(Tag.part, forKey: .tag)
+            try c.encodeIfPresent(reason, forKey: .reason)
+        case .quit(let reason):
+            try c.encode(Tag.quit, forKey: .tag)
+            try c.encodeIfPresent(reason, forKey: .reason)
+        case .kick(let target, let reason):
+            try c.encode(Tag.kick, forKey: .tag)
+            try c.encode(target, forKey: .target)
+            try c.encodeIfPresent(reason, forKey: .reason)
+        case .nickChange(let from, let to):
+            try c.encode(Tag.nickChange, forKey: .tag)
+            try c.encode(from, forKey: .from)
+            try c.encode(to, forKey: .to)
+        case .modeChange(let modes, let args):
+            try c.encode(Tag.modeChange, forKey: .tag)
+            try c.encode(modes, forKey: .modes)
+            try c.encodeIfPresent(args, forKey: .args)
+        }
+    }
 }
 
-struct ChatMessage: Identifiable {
-    let id = UUID()
+struct ChatMessage: Codable, Identifiable {
+    let id: UUID
     let sessionID: UUID
     let raw: String
     let kind: ChatMessageKind
@@ -77,12 +167,14 @@ struct ChatMessage: Identifiable {
     let timestamp: Date
 
     init(
+        id: UUID = UUID(),
         sessionID: UUID,
         raw: String,
         kind: ChatMessageKind,
         author: MessageAuthor? = nil,
         timestamp: Date = Date()
     ) {
+        self.id = id
         self.sessionID = sessionID
         self.raw = raw
         self.kind = kind
