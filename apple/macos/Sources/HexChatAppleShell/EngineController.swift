@@ -390,14 +390,23 @@ enum SessionLocator: Hashable {
     }
 }
 
+@MainActor
 @Observable
 final class EngineController {
+    static let commandHistoryCap = 1000
+
     var isRunning = false
     var messages: [ChatMessage] = []
     var sessions: [ChatSession] = []
     var input = ""
 
-    var selectedSessionID: UUID?
+    var conversations: [ConversationKey: ConversationState] = [:] {
+        didSet { coordinator?.markDirty() }
+    }
+
+    var selectedSessionID: UUID? {
+        didSet { coordinator?.markDirty() }
+    }
     var activeSessionID: UUID?
 
     private(set) var sessionByLocator: [SessionLocator: UUID] = [:]
@@ -550,9 +559,110 @@ final class EngineController {
         sessionByLocator[locator]
     }
 
-    private(set) var commandHistory: [String] = []
+    var commandHistory: [String] = [] {
+        didSet {
+            if commandHistory.count > Self.commandHistoryCap {
+                commandHistory.removeFirst(commandHistory.count - Self.commandHistoryCap)
+                return  // recursive didSet from the trim hits markDirty itself
+            }
+            coordinator?.markDirty()
+        }
+    }
     private var historyCursor = 0
     private var historyDraft = ""
+
+    @ObservationIgnored
+    private var coordinator: PersistenceCoordinator?
+
+    init(
+        persistence: PersistenceStore = FileSystemPersistenceStore(),
+        debounceInterval: Duration = .milliseconds(500)
+    ) {
+        // Coordinator stays nil during apply() so didSet observers don't schedule
+        // saves while we're rehydrating from disk. Wired up after apply() completes.
+        self.coordinator = nil
+        if let loaded = try? persistence.load() {
+            apply(loaded)
+        }
+        self.coordinator = PersistenceCoordinator(
+            store: persistence,
+            debounceInterval: debounceInterval,
+            snapshot: { [weak self] in self?.currentAppState() ?? AppState() }
+        )
+    }
+
+    /// Resolves a runtime session UUID to the durable persistence key.
+    /// Returns nil for the system session or when the network mapping is missing.
+    func conversationKey(for sessionID: UUID) -> ConversationKey? {
+        guard
+            let session = sessions.first(where: { $0.id == sessionID }),
+            let connection = connections[session.connectionID]
+        else { return nil }
+        return ConversationKey(networkID: connection.networkID, channel: session.channel)
+    }
+
+    private func currentAppState() -> AppState {
+        AppState(
+            networks: networks.values.sorted {
+                let primary = $0.displayName.localizedStandardCompare($1.displayName)
+                if primary != .orderedSame { return primary == .orderedAscending }
+                return $0.id.uuidString < $1.id.uuidString
+            },
+            conversations: conversations.values.sorted {
+                if $0.key.networkID != $1.key.networkID {
+                    return $0.key.networkID.uuidString < $1.key.networkID.uuidString
+                }
+                return $0.key.channel.lowercased() < $1.key.channel.lowercased()
+            },
+            selectedKey: selectedSessionID.flatMap(conversationKey(for:)),
+            commandHistory: commandHistory
+        )
+    }
+
+    private func apply(_ state: AppState) {
+        networks = Dictionary(
+            state.networks.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        networksByName = Dictionary(
+            state.networks.map { ($0.displayName.lowercased(), $0.id) },
+            uniquingKeysWith: { _, last in last })
+        conversations = Dictionary(
+            state.conversations.map { ($0.key, $0) },
+            uniquingKeysWith: { _, last in last })
+        commandHistory = state.commandHistory
+    }
+
+    func recordCommand(_ cmd: String) {
+        commandHistory.append(cmd)
+    }
+
+    func upsertNetworkForTest(id: UUID, name: String) {
+        upsertNetwork(id: id, name: name)
+    }
+
+    @discardableResult
+    func upsertNetworkForName(_ name: String) -> UUID {
+        if let existing = networksByName[name.lowercased()] {
+            return existing
+        }
+        return upsertNetwork(id: UUID(), name: name)
+    }
+
+    @discardableResult
+    private func upsertNetwork(id: UUID, name: String) -> UUID {
+        if var existing = networks[id] {
+            existing.displayName = name
+            networks[id] = existing
+        } else {
+            networks[id] = Network(id: id, displayName: name)
+        }
+        networksByName[name.lowercased()] = id
+        coordinator?.markDirty()
+        return id
+    }
+
+    func setConversationStateForTest(_ state: ConversationState) {
+        conversations[state.key] = state
+    }
 
     private var callbackUserdata: UnsafeMutableRawPointer?
 
@@ -640,7 +750,7 @@ final class EngineController {
 
         if trackHistory {
             if commandHistory.last != trimmed {
-                commandHistory.append(trimmed)
+                recordCommand(trimmed)
             }
             historyCursor = commandHistory.count
             historyDraft = ""
@@ -1120,12 +1230,7 @@ final class EngineController {
 
     @discardableResult
     private func upsertNetwork(name: String) -> UUID {
-        let key = name.lowercased()
-        if let existing = networksByName[key] { return existing }
-        let new = Network(id: UUID(), displayName: name)
-        networks[new.id] = new
-        networksByName[key] = new.id
-        return new.id
+        upsertNetworkForName(name)
     }
 
     @discardableResult

@@ -1,8 +1,25 @@
 #if canImport(XCTest)
 import XCTest
+
 @testable import HexChatAppleShell
 import AppleAdapterBridge
 
+private final class CountingStore: PersistenceStore {
+    private(set) var saveCount = 0
+    private var cached: AppState?
+    func load() throws -> AppState? { cached }
+    func save(_ s: AppState) throws {
+        cached = s
+        saveCount += 1
+    }
+}
+
+private final class BrokenStore: PersistenceStore {
+    func load() throws -> AppState? { throw CocoaError(.fileReadCorruptFile) }
+    func save(_ s: AppState) throws {}
+}
+
+@MainActor
 final class EngineControllerTests: XCTestCase {
     func testUserlistInsertUpdateRemoveAndClear() {
         let controller = EngineController()
@@ -1887,6 +1904,83 @@ final class EngineControllerTests: XCTestCase {
         try store.save(state)
         let back = try store.load()
         XCTAssertEqual(back, state)
+    }
+
+    // MARK: - Phase 6 — persistence (Task 7, EngineController wiring)
+
+    func testEngineControllerLoadsPersistedStateAtInit() {
+        let netID = UUID()
+        let net = Network(id: netID, displayName: "Example")
+        let keyA = ConversationKey(networkID: netID, channel: "#a")
+        let seeded = AppState(
+            networks: [net],
+            conversations: [
+                ConversationState(
+                    key: keyA, draft: "halfway through a thought",
+                    unread: 2, lastReadAt: nil)
+            ],
+            selectedKey: keyA,
+            commandHistory: ["/join #a"]
+        )
+        let store = InMemoryPersistenceStore(initial: seeded)
+        let controller = EngineController(persistence: store, debounceInterval: .zero)
+        XCTAssertEqual(controller.networks[netID]?.displayName, "Example")
+        XCTAssertEqual(controller.commandHistory, ["/join #a"])
+        XCTAssertEqual(controller.conversations[keyA]?.draft, "halfway through a thought")
+    }
+
+    func testEngineControllerWritesThroughOnMutation() async throws {
+        let store = InMemoryPersistenceStore()
+        let controller = EngineController(persistence: store, debounceInterval: .zero)
+        let netID = UUID()
+        controller.upsertNetworkForTest(id: netID, name: "X")
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(try store.load()?.networks.first?.displayName, "X")
+    }
+
+    func testEngineControllerDebounceCollapsesBursts() async throws {
+        let store = CountingStore()
+        let controller = EngineController(persistence: store, debounceInterval: .milliseconds(50))
+        for i in 0..<10 { controller.recordCommand("/cmd\(i)") }
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(store.saveCount, 1)
+        XCTAssertEqual(try store.load()?.commandHistory.count, 10)
+    }
+
+    func testEngineControllerCorruptionTolerantInit() {
+        let controller = EngineController(persistence: BrokenStore(), debounceInterval: .zero)
+        XCTAssertTrue(controller.networks.isEmpty)
+        XCTAssertTrue(controller.conversations.isEmpty)
+    }
+
+    func testCommandHistoryIsCapped() {
+        let store = InMemoryPersistenceStore()
+        let controller = EngineController(persistence: store, debounceInterval: .zero)
+        for i in 0..<(EngineController.commandHistoryCap + 5) {
+            controller.recordCommand("/cmd\(i)")
+        }
+        XCTAssertEqual(controller.commandHistory.count, EngineController.commandHistoryCap)
+        XCTAssertEqual(
+            controller.commandHistory.last, "/cmd\(EngineController.commandHistoryCap + 4)")
+    }
+
+    func testSelectedSessionIDMutationSchedulesSave() async throws {
+        let store = CountingStore()
+        let controller = EngineController(persistence: store, debounceInterval: .zero)
+        controller.selectedSessionID = UUID()
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertGreaterThanOrEqual(store.saveCount, 1)
+    }
+
+    func testUpsertNetworkPreservesFirstSeenCasing() {
+        let store = InMemoryPersistenceStore()
+        let controller = EngineController(persistence: store, debounceInterval: .zero)
+        _ = controller.upsertNetworkForName("AfterNET")
+        _ = controller.upsertNetworkForName("afternet")
+        XCTAssertEqual(controller.networks.count, 1)
+        XCTAssertEqual(controller.networks.values.first?.displayName, "AfterNET")
     }
 }
 #else
