@@ -2353,6 +2353,53 @@ final class EngineControllerTests: XCTestCase {
         try store.append(makeMessage(in: keyUpper, body: "x"), conversation: keyUpper)
         XCTAssertEqual(try store.count(conversation: keyLower), 1)
     }
+
+    // MARK: - Phase 7 — message persistence (Task 6, controller wiring)
+
+    func testEngineControllerWritesMessagesThroughToStore() async throws {
+        let store = InMemoryMessageStore()
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: store,
+            debounceInterval: .zero)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let sessA = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: sessA, raw: "hi", kind: .message(body: "hi")))
+
+        // Write-through is fire-and-forget on a background queue; give it a beat.
+        try? await Task.sleep(for: .milliseconds(100))
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        XCTAssertEqual(try store.count(conversation: key), 1)
+    }
+
+    func testEngineControllerToleratesBrokenMessageStore() {
+        struct BrokenMessageStore: MessageStore {
+            func append(_ m: ChatMessage, conversation: ConversationKey) throws {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            func page(conversation: ConversationKey, before: Date?, limit: Int) throws
+                -> [ChatMessage]
+            { throw CocoaError(.fileReadCorruptFile) }
+            func count(conversation: ConversationKey) throws -> Int {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+        }
+        // Construct succeeds; failed writes log and don't crash.
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: BrokenMessageStore(),
+            debounceInterval: .zero)
+        XCTAssertTrue(controller.messages.isEmpty)
+        // Trigger a write-through; should not throw or crash.
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: UUID(), raw: "x", kind: .message(body: "x")))
+    }
 }
 #else
 @testable import HexChatAppleShell

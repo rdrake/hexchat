@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 import AppleAdapterBridge
 
 struct ChatSession: Identifiable, Hashable {
@@ -691,18 +692,32 @@ final class EngineController {
     @ObservationIgnored
     private var coordinator: PersistenceCoordinator?
 
+    @ObservationIgnored
+    private let messageStore: MessageStore
+    @ObservationIgnored
+    private static let messageWriteQueue = DispatchQueue(
+        label: "net.afternet.hexchat.messageStore", qos: .utility)
+    @ObservationIgnored
+    nonisolated private static let messageStoreLog = Logger(
+        subsystem: "net.afternet.hexchat", category: "messageStore")
+
     /// Convenience for tests, previews, and any caller that doesn't want to
     /// write to the user's real `~/Library/Application Support`. Production
-    /// must explicitly construct `EngineController(persistence:)` with a
-    /// `FileSystemPersistenceStore`.
+    /// must explicitly construct `EngineController(persistence:messageStore:)`
+    /// with the on-disk stores.
     convenience init() {
-        self.init(persistence: InMemoryPersistenceStore(), debounceInterval: .milliseconds(500))
+        self.init(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: InMemoryMessageStore(),
+            debounceInterval: .milliseconds(500))
     }
 
     init(
         persistence: PersistenceStore,
+        messageStore: MessageStore = InMemoryMessageStore(),
         debounceInterval: Duration = .milliseconds(500)
     ) {
+        self.messageStore = messageStore
         // Coordinator stays nil during apply() so didSet observers don't schedule
         // saves while we're rehydrating from disk. Wired up after apply() completes.
         self.coordinator = nil
@@ -1252,6 +1267,25 @@ final class EngineController {
     private func append(_ message: ChatMessage) {
         messages.append(message)
         recordActivity(on: message.sessionID)
+        writeThroughToMessageStore(message)
+    }
+
+    private func writeThroughToMessageStore(_ message: ChatMessage) {
+        // System-pseudo-session messages are console output and don't belong in
+        // the per-conversation message archive. Skip — same skip predicate as
+        // recordActivity.
+        guard message.sessionID != systemSessionUUIDStorage,
+            let key = conversationKey(for: message.sessionID)
+        else { return }
+        let store = messageStore
+        Self.messageWriteQueue.async {
+            do {
+                try store.append(message, conversation: key)
+            } catch {
+                Self.messageStoreLog.error(
+                    "messageStore.append failed: \(String(describing: error))")
+            }
+        }
     }
 
     private func recordActivity(on sessionID: UUID) {

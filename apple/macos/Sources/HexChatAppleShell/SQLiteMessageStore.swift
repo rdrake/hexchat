@@ -8,13 +8,16 @@ enum SQLiteMessageStoreError: Error {
     case migrationFailed(currentVersion: Int)
 }
 
-/// SQLite-backed `MessageStore`. Owns one connection; not thread-safe by itself
-/// — callers serialize through a dedicated dispatch queue (Phase 7 task 6).
+/// SQLite-backed `MessageStore`. Owns one connection opened with
+/// `SQLITE_OPEN_FULLMUTEX`, which makes the connection internally serialised —
+/// so concurrent calls from the main actor and the controller's write queue
+/// are safe. The `@unchecked Sendable` is correct because the only mutable
+/// state (`db`) is owned by SQLite's serialised mutex.
 ///
 /// PRAGMA tuning: WAL journal mode for write-during-read concurrency, NORMAL
 /// synchronous (the JSON state.json takes the durability slot for tier-1 data),
 /// MEMORY temp_store, foreign_keys ON for forward-compat.
-final class SQLiteMessageStore: MessageStore {
+final class SQLiteMessageStore: MessageStore, @unchecked Sendable {
     static let currentSchemaVersion: Int32 = 1
 
     let fileURL: URL
@@ -30,7 +33,7 @@ final class SQLiteMessageStore: MessageStore {
         let rc = sqlite3_open_v2(fileURL.path, &handle, flags, nil)
         guard rc == SQLITE_OK, let handle else {
             let msg = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed"
-            handle.map { sqlite3_close_v2($0) }
+            if let handle { sqlite3_close_v2(handle) }
             throw SQLiteMessageStoreError.openFailed(code: rc, message: msg)
         }
         self.db = handle
