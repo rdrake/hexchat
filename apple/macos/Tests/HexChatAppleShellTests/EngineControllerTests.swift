@@ -1762,6 +1762,34 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(m[a], 99)
         XCTAssertEqual(m[b], 2)
     }
+
+    // MARK: - Phase 6 — persistence (Task 4)
+
+    func testConversationStateDefaults() {
+        let key = ConversationKey(networkID: UUID(), channel: "#a")
+        let state = ConversationState(key: key)
+        XCTAssertEqual(state.draft, "")
+        XCTAssertEqual(state.unread, 0)
+        XCTAssertNil(state.lastReadAt)
+    }
+
+    func testConversationStateRoundTrip() throws {
+        let net = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let original = ConversationState(
+            key: ConversationKey(networkID: net, channel: "#a"),
+            draft: "typing…",
+            unread: 3,
+            lastReadAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(original)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let back = try decoder.decode(ConversationState.self, from: data)
+        XCTAssertEqual(original, back)
+    }
 }
 #else
 @testable import HexChatAppleShell

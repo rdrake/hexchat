@@ -188,6 +188,25 @@ struct ConversationKey: Codable, Hashable {
     }
 }
 
+struct ConversationState: Codable, Hashable {
+    var key: ConversationKey
+    var draft: String
+    var unread: Int
+    var lastReadAt: Date?
+
+    init(
+        key: ConversationKey,
+        draft: String = "",
+        unread: Int = 0,
+        lastReadAt: Date? = nil
+    ) {
+        self.key = key
+        self.draft = draft
+        self.unread = unread
+        self.lastReadAt = lastReadAt
+    }
+}
+
 struct Network: Identifiable, Codable, Hashable {
     let id: UUID
     var displayName: String
