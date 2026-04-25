@@ -1859,6 +1859,24 @@ final class EngineControllerTests: XCTestCase {
         let b = try encoder.encode(state)
         XCTAssertEqual(a, b)
     }
+
+    // MARK: - Phase 6 — persistence (Task 6, in-memory store)
+
+    func testInMemoryPersistenceStoreStartsEmpty() throws {
+        let store = InMemoryPersistenceStore()
+        XCTAssertNil(try store.load())
+    }
+
+    func testInMemoryPersistenceStoreRoundTrip() throws {
+        let store = InMemoryPersistenceStore()
+        let state = AppState(
+            networks: [Network(id: UUID(), displayName: "X")],
+            commandHistory: ["/a", "/b"]
+        )
+        try store.save(state)
+        let back = try store.load()
+        XCTAssertEqual(back, state)
+    }
 }
 #else
 @testable import HexChatAppleShell
