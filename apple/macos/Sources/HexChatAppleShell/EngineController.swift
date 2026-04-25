@@ -396,6 +396,35 @@ struct Connection: Identifiable, Hashable {
     var haveChathistory: Bool = false
 }
 
+/// Result of `EngineController.loadOlder(forConversation:limit:)`. Phase 7.5
+/// replaces the Phase 7 `Int` return so callers can distinguish "no local rows
+/// AND no remote fetch in flight" (UI: stop paginating) from "no local rows
+/// but a server request was dispatched" (UI: keep the affordance, replays will
+/// arrive asynchronously).
+struct LoadOlderResult: Equatable {
+    let localCount: Int
+    let requestedRemote: Bool
+}
+
+/// Outbound seam for `CHATHISTORY BEFORE` requests. The C-runtime
+/// implementation lives in `CRuntimeChathistoryBridge`; tests inject a
+/// recording fake. `requestBefore` is fire-and-forget — replays arrive over
+/// the existing event channel, and `loadOlder` returns synchronously
+/// regardless of bridge state.
+protocol ChathistoryBridge: Sendable {
+    func requestBefore(connectionID: UInt64, channel: String, beforeMsec: Int64, limit: Int)
+}
+
+/// Production bridge — in Task 5 this calls `hc_apple_runtime_request_chathistory_before`.
+/// Today (Task 3) it's a no-op stub; the controller dispatches into it but
+/// nothing reaches the C runtime. The seam means production tests can run
+/// against the real bridge without touching the C side until Task 5 wires it.
+struct CRuntimeChathistoryBridge: ChathistoryBridge {
+    func requestBefore(connectionID: UInt64, channel: String, beforeMsec: Int64, limit: Int) {
+        // Task 5 replaces this stub with the real C call.
+    }
+}
+
 struct User: Identifiable, Hashable {
     let id: UUID
     let connectionID: UUID
@@ -711,6 +740,8 @@ final class EngineController {
     @ObservationIgnored
     private let messageStore: MessageStore
     @ObservationIgnored
+    private let chathistoryBridge: ChathistoryBridge
+    @ObservationIgnored
     nonisolated private static let messageStoreLog = Logger(
         subsystem: "net.afternet.hexchat", category: "messageStore")
 
@@ -728,9 +759,11 @@ final class EngineController {
     init(
         persistence: PersistenceStore,
         messageStore: MessageStore = InMemoryMessageStore(),
-        debounceInterval: Duration = .milliseconds(500)
+        debounceInterval: Duration = .milliseconds(500),
+        chathistory: ChathistoryBridge = CRuntimeChathistoryBridge()
     ) {
         self.messageStore = messageStore
+        self.chathistoryBridge = chathistory
         // Coordinator stays nil during apply() so didSet observers don't schedule
         // saves while we're rehydrating from disk. Wired up after apply() completes.
         self.coordinator = nil
@@ -1354,33 +1387,70 @@ final class EngineController {
         messageRing[conversation] ?? []
     }
 
-    /// Page older history for a conversation from the message store. Returns the
-    /// number of rows loaded (0 means there's nothing more older than what's
-    /// currently in the ring). The fetched rows are prepended to the ring in
-    /// ascending timestamp order so the UI can render them at the top.
+    /// Page older history for a conversation. Phase 7.5 makes this two-tier:
+    /// SQLite first, then `CHATHISTORY BEFORE` over the C bridge if local rows
+    /// fall short of `limit` AND the connection advertises `draft/chathistory`.
+    /// Replays arrive asynchronously over the existing event channel; the
+    /// caller doesn't wait. `LoadOlderResult.requestedRemote` tells the UI
+    /// whether to keep the "load older" affordance enabled past `localCount == 0`.
     ///
-    /// Synchronous on @MainActor for now — SQLite reads are fast at this scale,
-    /// and FULLMUTEX makes the connection safe to call into from main while a
-    /// background write may be in flight. If profiling shows hot-path pain we
-    /// can move to async in a follow-up.
+    /// Synchronous on @MainActor: SQLite reads are fast at this scale and
+    /// FULLMUTEX makes the connection safe alongside the (now sync) write
+    /// path. The bridge dispatch is itself fire-and-forget.
     @discardableResult
-    func loadOlder(forConversation key: ConversationKey, limit: Int) throws -> Int {
-        guard limit > 0 else { return 0 }
-        let oldestInRing = messageRing[key]?.first?.timestamp
+    func loadOlder(forConversation key: ConversationKey, limit: Int) throws -> LoadOlderResult {
+        guard limit > 0 else { return LoadOlderResult(localCount: 0, requestedRemote: false) }
+        let preFetchOldest = messageRing[key]?.first?.timestamp
         let page = try messageStore.page(
-            conversation: key, before: oldestInRing, limit: limit)
-        guard !page.isEmpty else { return 0 }
-        var bucket = messageRing[key] ?? []
-        bucket.insert(contentsOf: page, at: 0)
-        // Allow loadOlder to push the ring up to 2x the per-conversation cap so
-        // the UI has room to scroll without an immediate trim discarding the
-        // newly-prepended rows.
-        let upperBound = Self.messageRingPerConversation * 2
-        if bucket.count > upperBound {
-            bucket.removeFirst(bucket.count - upperBound)
+            conversation: key, before: preFetchOldest, limit: limit)
+        if !page.isEmpty {
+            var bucket = messageRing[key] ?? []
+            bucket.insert(contentsOf: page, at: 0)
+            // Allow loadOlder to push the ring up to 2x the per-conversation cap so
+            // the UI has room to scroll without an immediate trim discarding the
+            // newly-prepended rows.
+            let upperBound = Self.messageRingPerConversation * 2
+            if bucket.count > upperBound {
+                bucket.removeFirst(bucket.count - upperBound)
+            }
+            messageRing[key] = bucket
         }
-        messageRing[key] = bucket
-        return page.count
+
+        let localCount = page.count
+        var requestedRemote = false
+        if localCount < limit,
+            let connection = liveConnection(forNetwork: key.networkID),
+            connection.haveChathistory,
+            let runtimeServerID = runtimeServerID(forConnection: connection.id)
+        {
+            // Anchor on the post-fetch ring oldest, not the pre-fetch one — codex
+            // finding #1 from the plan review. Falls back to "now" only when the
+            // ring is still completely empty after the local fetch.
+            let anchor =
+                page.first?.timestamp
+                ?? preFetchOldest
+                ?? Date()
+            chathistoryBridge.requestBefore(
+                connectionID: runtimeServerID,
+                channel: key.channel,
+                beforeMsec: Int64(anchor.timeIntervalSince1970 * 1000),
+                limit: limit - localCount)
+            requestedRemote = true
+        }
+        return LoadOlderResult(localCount: localCount, requestedRemote: requestedRemote)
+    }
+
+    /// Resolves a durable `networkID` to the most recent live `Connection`. If
+    /// the network has no Connection in flight (offline), returns nil.
+    private func liveConnection(forNetwork networkID: UUID) -> Connection? {
+        connections.values.first(where: { $0.networkID == networkID })
+    }
+
+    /// Inverse of `connectionsByServerID`: durable connection UUID → runtime
+    /// server id (UInt64). The bridge needs the runtime id to resolve back to
+    /// the C-side `server*`.
+    private func runtimeServerID(forConnection connectionID: UUID) -> UInt64? {
+        connectionsByServerID.first(where: { $0.value == connectionID })?.key
     }
 
     /// Returns whether the in-memory ring should mutate. System-pseudo-session

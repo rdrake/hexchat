@@ -2489,8 +2489,8 @@ final class EngineControllerTests: XCTestCase {
                 timestamp: t.addingTimeInterval(100)))
         XCTAssertEqual(controller.messageRingForTest(conversation: runtimeKey).count, 1)
 
-        let loaded = try controller.loadOlder(forConversation: runtimeKey, limit: 30)
-        XCTAssertEqual(loaded, 30)
+        let result = try controller.loadOlder(forConversation: runtimeKey, limit: 30)
+        XCTAssertEqual(result.localCount, 30)
         XCTAssertEqual(controller.messageRingForTest(conversation: runtimeKey).count, 31)
         // Prepended in ascending timestamp order; "current" stays last.
         XCTAssertEqual(
@@ -2500,7 +2500,190 @@ final class EngineControllerTests: XCTestCase {
     func testLoadOlderReturnsZeroWhenStoreEmpty() throws {
         let controller = EngineController()
         let key = ConversationKey(networkID: UUID(), channel: "#empty")
-        XCTAssertEqual(try controller.loadOlder(forConversation: key, limit: 50), 0)
+        let result = try controller.loadOlder(forConversation: key, limit: 50)
+        XCTAssertEqual(result.localCount, 0)
+        XCTAssertFalse(result.requestedRemote)
+    }
+
+    // MARK: - Phase 7.5 task-3: cap-gated bridge dispatch (stub bridge)
+
+    final class RecordingChathistoryBridge: ChathistoryBridge, @unchecked Sendable {
+        struct Call: Equatable {
+            let connectionID: UInt64
+            let channel: String
+            let beforeMsec: Int64
+            let limit: Int
+        }
+        private let lock = NSLock()
+        private var calls: [Call] = []
+
+        func requestBefore(
+            connectionID: UInt64, channel: String, beforeMsec: Int64, limit: Int
+        ) {
+            lock.lock()
+            calls.append(
+                Call(
+                    connectionID: connectionID, channel: channel, beforeMsec: beforeMsec,
+                    limit: limit))
+            lock.unlock()
+        }
+
+        var records: [Call] {
+            lock.lock()
+            defer { lock.unlock() }
+            return calls
+        }
+    }
+
+    func testLoadOlderRequestsBridgeWhenLocalShort() throws {
+        let store = InMemoryMessageStore()
+        let bridge = RecordingChathistoryBridge()
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: store, debounceInterval: .zero, chathistory: bridge)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1, connectionHaveChathistory: true)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        // 5 local rows in the store; loadOlder asks for 50.
+        for i in 0..<5 {
+            let m = ChatMessage(
+                sessionID: UUID(), raw: "m\(i)", kind: .message(body: "m\(i)"),
+                timestamp: t.addingTimeInterval(Double(i)))
+            try store.append(m, conversation: key)
+        }
+        let result = try controller.loadOlder(forConversation: key, limit: 50)
+        XCTAssertEqual(result.localCount, 5)
+        XCTAssertTrue(result.requestedRemote)
+        XCTAssertEqual(bridge.records.count, 1)
+        XCTAssertEqual(bridge.records.first?.connectionID, 1)
+        XCTAssertEqual(bridge.records.first?.channel, "#a")
+        XCTAssertEqual(bridge.records.first?.limit, 45)
+    }
+
+    func testLoadOlderUsesPostFetchAnchor() throws {
+        // Anchor passed to the bridge must be the OLDEST local row's timestamp
+        // after the prepend, not the pre-fetch ring oldest, otherwise we
+        // re-request rows we just prepended.
+        let store = InMemoryMessageStore()
+        let bridge = RecordingChathistoryBridge()
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: store, debounceInterval: .zero, chathistory: bridge)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1, connectionHaveChathistory: true)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+
+        // Pre-fetch ring oldest is t+100 (one message); the local store has 30
+        // older rows at t+50..t+79. loadOlder(limit: 100) should prepend all
+        // 30 rows then ask the bridge for "before t+50" (oldest of new ring),
+        // limit 70. Critically: NOT "before t+100" (pre-fetch anchor).
+        let sess = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+        controller.appendMessageForTest(
+            ChatMessage(
+                sessionID: sess, raw: "current", kind: .message(body: "current"),
+                timestamp: t.addingTimeInterval(100)))
+        for i in 0..<30 {
+            try store.append(
+                ChatMessage(
+                    sessionID: UUID(), raw: "older\(i)", kind: .message(body: "older\(i)"),
+                    timestamp: t.addingTimeInterval(Double(50 + i))),
+                conversation: key)
+        }
+
+        let result = try controller.loadOlder(forConversation: key, limit: 100)
+        XCTAssertEqual(result.localCount, 30)
+        XCTAssertTrue(result.requestedRemote)
+        // Anchor must be t+50 (the oldest of the just-prepended page), not
+        // t+100 (the pre-fetch ring oldest).
+        let preFetchMs = Int64(t.addingTimeInterval(100).timeIntervalSince1970 * 1000)
+        let postFetchMs = Int64(t.addingTimeInterval(50).timeIntervalSince1970 * 1000)
+        XCTAssertEqual(bridge.records.first?.beforeMsec, postFetchMs)
+        XCTAssertLessThan(bridge.records.first?.beforeMsec ?? .max, preFetchMs)
+        XCTAssertEqual(bridge.records.first?.limit, 70)
+    }
+
+    func testLoadOlderSkipsBridgeWhenCapMissing() throws {
+        let store = InMemoryMessageStore()
+        let bridge = RecordingChathistoryBridge()
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: store, debounceInterval: .zero, chathistory: bridge)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1, connectionHaveChathistory: false)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        let result = try controller.loadOlder(forConversation: key, limit: 50)
+        XCTAssertEqual(result.localCount, 0)
+        XCTAssertFalse(result.requestedRemote)
+        XCTAssertTrue(bridge.records.isEmpty)
+    }
+
+    func testLoadOlderSkipsBridgeWhenLocalSatisfies() throws {
+        let store = InMemoryMessageStore()
+        let bridge = RecordingChathistoryBridge()
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: store, debounceInterval: .zero, chathistory: bridge)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1, connectionHaveChathistory: true)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        for i in 0..<50 {
+            try store.append(
+                ChatMessage(
+                    sessionID: UUID(), raw: "m\(i)", kind: .message(body: "m\(i)"),
+                    timestamp: t.addingTimeInterval(Double(i))),
+                conversation: key)
+        }
+        let result = try controller.loadOlder(forConversation: key, limit: 30)
+        XCTAssertEqual(result.localCount, 30)
+        XCTAssertFalse(result.requestedRemote)
+        XCTAssertTrue(bridge.records.isEmpty)
+    }
+
+    func testLoadOlderSkipsBridgeForUnknownConnection() throws {
+        let bridge = RecordingChathistoryBridge()
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: InMemoryMessageStore(), debounceInterval: .zero,
+            chathistory: bridge)
+        // No applySessionForTest — no live Connection for this networkID.
+        let key = ConversationKey(networkID: UUID(), channel: "#a")
+        let result = try controller.loadOlder(forConversation: key, limit: 50)
+        XCTAssertFalse(result.requestedRemote)
+        XCTAssertTrue(bridge.records.isEmpty)
+    }
+
+    func testLoadOlderRequestedRemoteFlagWithEmptyLocal() throws {
+        let store = InMemoryMessageStore()
+        let bridge = RecordingChathistoryBridge()
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: store, debounceInterval: .zero, chathistory: bridge)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1, connectionHaveChathistory: true)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        let result = try controller.loadOlder(forConversation: key, limit: 50)
+        XCTAssertEqual(result.localCount, 0)
+        XCTAssertTrue(result.requestedRemote)
+        XCTAssertEqual(bridge.records.count, 1)
+        XCTAssertEqual(bridge.records.first?.limit, 50)
     }
 
     func testEngineControllerToleratesBrokenMessageStore() {
