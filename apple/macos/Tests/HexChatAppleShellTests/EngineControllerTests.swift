@@ -2256,6 +2256,103 @@ final class EngineControllerTests: XCTestCase {
         let json = String(data: data, encoding: .utf8)!
         XCTAssertFalse(json.contains("\"author\""))
     }
+
+    // MARK: - Phase 7 — message persistence (Task 2, MessageStore in-memory)
+
+    private func makeMessage(
+        in key: ConversationKey, body: String,
+        timestamp: Date = Date(timeIntervalSince1970: 1_700_000_000)
+    ) -> ChatMessage {
+        ChatMessage(
+            sessionID: UUID(),
+            raw: body,
+            kind: .message(body: body),
+            author: MessageAuthor(nick: "alice", userID: nil),
+            timestamp: timestamp)
+    }
+
+    func testInMemoryMessageStoreRoundTripsAppendAndPage() throws {
+        let store = InMemoryMessageStore()
+        let key = ConversationKey(networkID: UUID(), channel: "#a")
+        let m = makeMessage(in: key, body: "hello")
+        try store.append(m, conversation: key)
+        let page = try store.page(conversation: key, before: nil, limit: 10)
+        XCTAssertEqual(page.count, 1)
+        XCTAssertEqual(page[0].id, m.id)
+        XCTAssertEqual(try store.count(conversation: key), 1)
+    }
+
+    func testInMemoryMessageStoreOrdersAscending() throws {
+        let store = InMemoryMessageStore()
+        let key = ConversationKey(networkID: UUID(), channel: "#a")
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        try store.append(makeMessage(in: key, body: "a", timestamp: t), conversation: key)
+        try store.append(
+            makeMessage(in: key, body: "b", timestamp: t.addingTimeInterval(1)),
+            conversation: key)
+        try store.append(
+            makeMessage(in: key, body: "c", timestamp: t.addingTimeInterval(2)),
+            conversation: key)
+        let page = try store.page(conversation: key, before: nil, limit: 10)
+        XCTAssertEqual(page.map(\.body), ["a", "b", "c"])
+    }
+
+    func testInMemoryMessageStorePageBeforeExcludesBoundary() throws {
+        let store = InMemoryMessageStore()
+        let key = ConversationKey(networkID: UUID(), channel: "#a")
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        for i in 0..<5 {
+            try store.append(
+                makeMessage(in: key, body: "m\(i)", timestamp: t.addingTimeInterval(Double(i))),
+                conversation: key)
+        }
+        let page = try store.page(
+            conversation: key, before: t.addingTimeInterval(2), limit: 10)
+        XCTAssertEqual(page.map(\.body), ["m0", "m1"])
+    }
+
+    func testInMemoryMessageStorePageHonoursLimit() throws {
+        let store = InMemoryMessageStore()
+        let key = ConversationKey(networkID: UUID(), channel: "#a")
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        for i in 0..<10 {
+            try store.append(
+                makeMessage(in: key, body: "m\(i)", timestamp: t.addingTimeInterval(Double(i))),
+                conversation: key)
+        }
+        let page = try store.page(conversation: key, before: nil, limit: 3)
+        XCTAssertEqual(page.map(\.body), ["m7", "m8", "m9"])
+    }
+
+    func testInMemoryMessageStoreDuplicateIDIsNoOp() throws {
+        let store = InMemoryMessageStore()
+        let key = ConversationKey(networkID: UUID(), channel: "#a")
+        let m = makeMessage(in: key, body: "hi")
+        try store.append(m, conversation: key)
+        try store.append(m, conversation: key)  // same id
+        XCTAssertEqual(try store.count(conversation: key), 1)
+    }
+
+    func testInMemoryMessageStoreIsolatesConversations() throws {
+        let store = InMemoryMessageStore()
+        let netID = UUID()
+        let keyA = ConversationKey(networkID: netID, channel: "#a")
+        let keyB = ConversationKey(networkID: netID, channel: "#b")
+        try store.append(makeMessage(in: keyA, body: "a"), conversation: keyA)
+        try store.append(makeMessage(in: keyB, body: "b"), conversation: keyB)
+        XCTAssertEqual(try store.count(conversation: keyA), 1)
+        XCTAssertEqual(try store.count(conversation: keyB), 1)
+        XCTAssertEqual(try store.page(conversation: keyA, before: nil, limit: 10).map(\.body), ["a"])
+    }
+
+    func testInMemoryMessageStoreCaseInsensitiveChannel() throws {
+        let store = InMemoryMessageStore()
+        let netID = UUID()
+        let keyUpper = ConversationKey(networkID: netID, channel: "#HEX")
+        let keyLower = ConversationKey(networkID: netID, channel: "#hex")
+        try store.append(makeMessage(in: keyUpper, body: "x"), conversation: keyUpper)
+        XCTAssertEqual(try store.count(conversation: keyLower), 1)
+    }
 }
 #else
 @testable import HexChatAppleShell
