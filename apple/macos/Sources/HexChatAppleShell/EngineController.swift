@@ -188,6 +188,51 @@ struct ConversationKey: Codable, Hashable {
     }
 }
 
+enum AppStateDecodingError: Error {
+    case unsupportedSchemaVersion(Int)
+}
+
+struct AppState: Codable, Hashable {
+    static let currentSchemaVersion = 1
+
+    var schemaVersion: Int
+    var networks: [Network]
+    var conversations: [ConversationState]
+    var selectedKey: ConversationKey?
+    var commandHistory: [String]
+
+    init(
+        schemaVersion: Int = AppState.currentSchemaVersion,
+        networks: [Network] = [],
+        conversations: [ConversationState] = [],
+        selectedKey: ConversationKey? = nil,
+        commandHistory: [String] = []
+    ) {
+        self.schemaVersion = schemaVersion
+        self.networks = networks
+        self.conversations = conversations
+        self.selectedKey = selectedKey
+        self.commandHistory = commandHistory
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, networks, conversations, selectedKey, commandHistory
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try c.decode(Int.self, forKey: .schemaVersion)
+        guard version == AppState.currentSchemaVersion else {
+            throw AppStateDecodingError.unsupportedSchemaVersion(version)
+        }
+        self.schemaVersion = version
+        self.networks = try c.decode([Network].self, forKey: .networks)
+        self.conversations = try c.decode([ConversationState].self, forKey: .conversations)
+        self.selectedKey = try c.decodeIfPresent(ConversationKey.self, forKey: .selectedKey)
+        self.commandHistory = try c.decode([String].self, forKey: .commandHistory)
+    }
+}
+
 struct ConversationState: Codable, Hashable {
     var key: ConversationKey
     var draft: String

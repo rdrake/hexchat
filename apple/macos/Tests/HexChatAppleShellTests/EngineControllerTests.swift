@@ -1790,6 +1790,75 @@ final class EngineControllerTests: XCTestCase {
         let back = try decoder.decode(ConversationState.self, from: data)
         XCTAssertEqual(original, back)
     }
+
+    // MARK: - Phase 6 — persistence (Task 5)
+
+    func testAppStateEmptyDefaults() {
+        let state = AppState()
+        XCTAssertEqual(state.schemaVersion, 1)
+        XCTAssertTrue(state.networks.isEmpty)
+        XCTAssertTrue(state.conversations.isEmpty)
+        XCTAssertNil(state.selectedKey)
+        XCTAssertTrue(state.commandHistory.isEmpty)
+    }
+
+    func testAppStateFullRoundTrip() throws {
+        let net = Network(
+            id: UUID(), displayName: "Example",
+            servers: [ServerEndpoint(host: "irc.example.net", port: 6697, useTLS: true)],
+            nicks: ["alice"], autoJoin: ["#hexchat"]
+        )
+        let keyA = ConversationKey(networkID: net.id, channel: "#a")
+        let keyB = ConversationKey(networkID: net.id, channel: "#b")
+        let original = AppState(
+            networks: [net],
+            conversations: [
+                ConversationState(
+                    key: keyA, draft: "hi", unread: 2,
+                    lastReadAt: Date(timeIntervalSince1970: 1_700_000_000)),
+                ConversationState(key: keyB),
+            ],
+            selectedKey: keyA,
+            commandHistory: ["/join #a", "/msg alice hi"]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(original)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let back = try decoder.decode(AppState.self, from: data)
+        XCTAssertEqual(original, back)
+    }
+
+    func testAppStateRejectsUnsupportedSchemaVersion() {
+        let blob = #"""
+            {"schemaVersion":2,"networks":[],"conversations":[],"commandHistory":[]}
+            """#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(AppState.self, from: blob)) { error in
+            guard case AppStateDecodingError.unsupportedSchemaVersion(let v) = error else {
+                return XCTFail("expected unsupportedSchemaVersion, got \(error)")
+            }
+            XCTAssertEqual(v, 2)
+        }
+    }
+
+    func testAppStateJSONIsByteStable() throws {
+        let net = Network(id: UUID(), displayName: "X")
+        let state = AppState(
+            networks: [net],
+            conversations: [
+                ConversationState(key: ConversationKey(networkID: net.id, channel: "#b")),
+                ConversationState(key: ConversationKey(networkID: net.id, channel: "#a")),
+            ]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let a = try encoder.encode(state)
+        let b = try encoder.encode(state)
+        XCTAssertEqual(a, b)
+    }
 }
 #else
 @testable import HexChatAppleShell
