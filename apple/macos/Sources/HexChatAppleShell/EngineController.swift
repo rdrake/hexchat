@@ -706,9 +706,6 @@ final class EngineController {
     @ObservationIgnored
     private let messageStore: MessageStore
     @ObservationIgnored
-    private static let messageWriteQueue = DispatchQueue(
-        label: "net.afternet.hexchat.messageStore", qos: .utility)
-    @ObservationIgnored
     nonisolated private static let messageStoreLog = Logger(
         subsystem: "net.afternet.hexchat", category: "messageStore")
 
@@ -1276,20 +1273,36 @@ final class EngineController {
     }
 
     private func append(_ message: ChatMessage) {
+        // Phase 7.5: storage decides whether this is a new row. The ring and
+        // global messages array follow only when the store reports the insert
+        // succeeded — that's the single dedup invariant for chathistory replays.
+        // System-pseudo-session messages bypass storage (they're console output)
+        // and always insert.
+        let storeInserted = writeThroughToMessageStore(message)
+        guard storeInserted else { return }
+
         messages.append(message)
         if messages.count > Self.messagesGlobalCap {
             messages.removeFirst(messages.count - Self.messagesGlobalCap)
         }
         if let key = conversationKey(for: message.sessionID) {
             var bucket = messageRing[key] ?? []
-            bucket.append(message)
+            // Insertion-sort by timestamp so out-of-order arrivals (chathistory
+            // replays carrying server-time tags from the past) land at the right
+            // slot. The fast path keeps live-message appends O(1).
+            if let last = bucket.last, message.timestamp >= last.timestamp {
+                bucket.append(message)
+            } else {
+                let insertAt = bucket.firstIndex { $0.timestamp > message.timestamp }
+                    ?? bucket.endIndex
+                bucket.insert(message, at: insertAt)
+            }
             if bucket.count > Self.messageRingPerConversation {
                 bucket.removeFirst(bucket.count - Self.messageRingPerConversation)
             }
             messageRing[key] = bucket
         }
         recordActivity(on: message.sessionID)
-        writeThroughToMessageStore(message)
     }
 
     func messageRingForTest(conversation: ConversationKey) -> [ChatMessage] {
@@ -1325,21 +1338,21 @@ final class EngineController {
         return page.count
     }
 
-    private func writeThroughToMessageStore(_ message: ChatMessage) {
-        // System-pseudo-session messages are console output and don't belong in
-        // the per-conversation message archive. Skip — same skip predicate as
-        // recordActivity.
+    /// Returns whether the in-memory ring should mutate. System-pseudo-session
+    /// messages (no `ConversationKey`) bypass storage and return `true` so they
+    /// always insert into the ring. Real conversation messages return whatever
+    /// the store says; if storage throws (a broken / read-only file system) we
+    /// log and return `false` so the ring stays consistent with what's durable.
+    private func writeThroughToMessageStore(_ message: ChatMessage) -> Bool {
         guard message.sessionID != systemSessionUUIDStorage,
             let key = conversationKey(for: message.sessionID)
-        else { return }
-        let store = messageStore
-        Self.messageWriteQueue.async {
-            do {
-                try store.append(message, conversation: key)
-            } catch {
-                Self.messageStoreLog.error(
-                    "messageStore.append failed: \(String(describing: error))")
-            }
+        else { return true }
+        do {
+            return try messageStore.append(message, conversation: key)
+        } catch {
+            Self.messageStoreLog.error(
+                "messageStore.append failed: \(String(describing: error))")
+            return false
         }
     }
 

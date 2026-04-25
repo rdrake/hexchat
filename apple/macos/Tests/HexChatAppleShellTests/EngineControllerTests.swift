@@ -2525,6 +2525,153 @@ final class EngineControllerTests: XCTestCase {
         controller.appendMessageForTest(
             ChatMessage(sessionID: UUID(), raw: "x", kind: .message(body: "x")))
     }
+
+    // MARK: - Phase 7.5 task-1b: sync write-through + ring insertion-sort
+
+    func testRingInsertionSortHandlesOutOfOrderAppend() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let sess = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        controller.appendMessageForTest(
+            ChatMessage(
+                sessionID: sess, raw: "a", kind: .message(body: "a"),
+                timestamp: t.addingTimeInterval(10)))
+        controller.appendMessageForTest(
+            ChatMessage(
+                sessionID: sess, raw: "b", kind: .message(body: "b"),
+                timestamp: t.addingTimeInterval(20)))
+        // Out-of-order replay: timestamp earlier than both above.
+        controller.appendMessageForTest(
+            ChatMessage(
+                sessionID: sess, raw: "c", kind: .message(body: "c"),
+                timestamp: t.addingTimeInterval(5)))
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        let ring = controller.messageRingForTest(conversation: key)
+        XCTAssertEqual(ring.map { $0.body }, ["c", "a", "b"])
+    }
+
+    func testRingTrimDropsOldestNotNewest() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let sess = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+        let cap = EngineController.messageRingPerConversation
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        for i in 0..<cap {
+            controller.appendMessageForTest(
+                ChatMessage(
+                    sessionID: sess, raw: "m\(i)", kind: .message(body: "m\(i)"),
+                    timestamp: t.addingTimeInterval(Double(i))))
+        }
+        controller.appendMessageForTest(
+            ChatMessage(
+                sessionID: sess, raw: "newest", kind: .message(body: "newest"),
+                timestamp: t.addingTimeInterval(Double(cap))))
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        let ring = controller.messageRingForTest(conversation: key)
+        XCTAssertEqual(ring.count, cap)
+        XCTAssertEqual(ring.first?.body, "m1", "oldest (m0) should have been trimmed")
+        XCTAssertEqual(ring.last?.body, "newest", "newest survives")
+    }
+
+    func testReplayDuplicateNeverReachesRing() throws {
+        let store = InMemoryMessageStore()
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: store, debounceInterval: .zero)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let sess = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+
+        controller.appendMessageForTest(
+            ChatMessage(
+                sessionID: sess, raw: "x", kind: .message(body: "x"),
+                timestamp: t, serverMsgID: "abc"))
+        XCTAssertEqual(controller.messageRingForTest(conversation: key).count, 1)
+        XCTAssertEqual(try store.count(conversation: key), 1)
+
+        // Logical replay: distinct ChatMessage.id but same (key, msgid, timestamp).
+        // The store rejects (false), and Task 1b's invariant says the ring must
+        // not mutate when the store rejects.
+        controller.appendMessageForTest(
+            ChatMessage(
+                sessionID: sess, raw: "x", kind: .message(body: "x"),
+                timestamp: t, serverMsgID: "abc"))
+        XCTAssertEqual(
+            controller.messageRingForTest(conversation: key).count, 1,
+            "ring must not gain a duplicate row")
+        XCTAssertEqual(try store.count(conversation: key), 1)
+    }
+
+    func testEmptyServerMsgIDDoesNotDedup() {
+        let store = InMemoryMessageStore()
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: store, debounceInterval: .zero)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let sess = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+
+        // Empty string serverMsgID: untagged content, two appends both insert.
+        controller.appendMessageForTest(
+            ChatMessage(
+                sessionID: sess, raw: "x", kind: .message(body: "x"),
+                timestamp: t, serverMsgID: ""))
+        controller.appendMessageForTest(
+            ChatMessage(
+                sessionID: sess, raw: "y", kind: .message(body: "y"),
+                timestamp: t, serverMsgID: ""))
+        XCTAssertEqual(controller.messageRingForTest(conversation: key).count, 2)
+        XCTAssertEqual(try store.count(conversation: key), 2)
+    }
+
+    func testBrokenStoreDoesNotMutateRing() {
+        struct BrokenStore: MessageStore {
+            func append(_ m: ChatMessage, conversation: ConversationKey) throws -> Bool {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            func page(conversation: ConversationKey, before: Date?, limit: Int) throws
+                -> [ChatMessage]
+            { [] }
+            func count(conversation: ConversationKey) throws -> Int { 0 }
+        }
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: BrokenStore(),
+            debounceInterval: .zero)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let sess = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: sess, raw: "x", kind: .message(body: "x")))
+        // Sync write-through threw; controller must not have mutated ring or messages.
+        XCTAssertTrue(controller.messageRingForTest(conversation: key).isEmpty)
+        XCTAssertTrue(
+            controller.messages.isEmpty,
+            "global messages array also must not contain a row whose write failed")
+    }
 }
 #else
 @testable import HexChatAppleShell
