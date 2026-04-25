@@ -1843,6 +1843,17 @@ final class EngineControllerTests: XCTestCase {
         }
     }
 
+    func testAppStateRejectsMissingSchemaVersion() {
+        let blob = #"""
+            {"networks":[],"conversations":[],"commandHistory":[]}
+            """#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(AppState.self, from: blob)) { error in
+            guard case DecodingError.keyNotFound = error else {
+                return XCTFail("expected keyNotFound, got \(error)")
+            }
+        }
+    }
+
     func testAppStateJSONIsByteStable() throws {
         let net = Network(id: UUID(), displayName: "X")
         let state = AppState(
