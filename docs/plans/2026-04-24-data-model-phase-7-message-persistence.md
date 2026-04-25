@@ -144,6 +144,7 @@ This split keeps Phase 7 about local durability + pagination; the network round-
 - System SQLite is linked via `linkerSettings: [.linkedLibrary("sqlite3")]` on the `HexChatAppleShell` target. No external Swift package dep.
 - `PRAGMA journal_mode = WAL` for write-during-read concurrency.
 - `PRAGMA synchronous = NORMAL` (FULL is overkill; the JSON state.json already takes the durability slot).
+- `PRAGMA temp_store = MEMORY` (small free perf win on temp B-trees).
 - `PRAGMA foreign_keys = ON` even though we don't have FKs yet (forward-compat).
 - `swift-format lint -r Sources Tests` must show zero new diagnostics before each commit.
 
@@ -233,15 +234,17 @@ A new `convenience init()` (used by tests) defaults to `InMemoryMessageStore`. `
 
 ### Task 7 — Per-conversation ring + bounded `messages` projection
 
-**Intent:** Replace the unbounded `messages: [ChatMessage]` with `messageRing: [ConversationKey: [ChatMessage]]` + a system-session bucket (the system pseudo-session is identified by its sessionID UUID and falls outside `ConversationKey` resolution). `messages` becomes a computed property that flattens the rings + system bucket, preserving the shape consumers expect. `visibleMessages` switches to read directly from `messageRing[key]` for the visible session — O(1) instead of O(N) filter.
+**Intent:** Replace the unbounded `messages: [ChatMessage]` with `messageRing: [ConversationKey?: [ChatMessage]]`. The `nil` key holds system-session messages — the system pseudo-session falls outside `ConversationKey` resolution, so `nil` becomes its bucket key without inventing a parallel data path. SQLite mirrors this with a sentinel `network_id = "system"` and `channel_lower = ""` for system rows, keeping a single insert/page code path.
 
-When a ring exceeds `messageRingPerConversation` (default 200), drop the oldest. Size cap is enforced at the back of `append`, never on a separate timer.
+`messages` becomes a computed property that flattens the rings preserving cross-conversation timestamp order. `visibleMessages` reads directly from `messageRing[currentConversationKey]` for the visible session — O(1) instead of O(N) filter.
+
+When a ring exceeds `messageRingPerConversation` (default 200), drop the oldest. Size cap is enforced at the back of `append`, never on a separate timer. `@Observable` correctly tracks reads-through-computed because the getter touches the `messageRing` stored property.
 
 **Tests:**
 - inserting 250 messages into one conversation caps the ring at 200
 - `messages` flattening preserves cross-conversation ordering by timestamp
 - `visibleMessages` matches `messageRing[key]` for the selected session
-- system-session messages don't get a ring; they live in a dedicated `systemMessages: [ChatMessage]` array (also bounded — same cap)
+- system-session messages bucket under the `nil` key; ring still capped
 
 **Commit:** `phase-7 task-7: per-conversation ring + bounded messages projection`
 
