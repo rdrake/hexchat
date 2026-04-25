@@ -421,7 +421,16 @@ final class EngineController {
     }
 
     var selectedSessionID: UUID? {
-        didSet { coordinator?.markDirty() }
+        didSet {
+            if let newID = selectedSessionID, let key = conversationKey(for: newID) {
+                var state = conversations[key] ?? ConversationState(key: key)
+                state.unread = 0
+                state.lastReadAt = Date()
+                conversations[key] = state
+            } else {
+                coordinator?.markDirty()
+            }
+        }
     }
     var activeSessionID: UUID?
 
@@ -1130,6 +1139,21 @@ final class EngineController {
     private func appendMessage(raw: String, kind: ChatMessageKind, event: RuntimeEvent? = nil) {
         let targetUUID = resolveMessageSessionID(event: event)
         messages.append(ChatMessage(sessionID: targetUUID, raw: raw, kind: kind))
+        recordActivity(on: targetUUID)
+    }
+
+    private func recordActivity(on sessionID: UUID) {
+        guard sessionID != selectedSessionID,
+            let key = conversationKey(for: sessionID)
+        else { return }
+        var state = conversations[key] ?? ConversationState(key: key)
+        state.unread += 1
+        conversations[key] = state
+    }
+
+    func appendMessageForTest(_ message: ChatMessage) {
+        messages.append(message)
+        recordActivity(on: message.sessionID)
     }
 
     func appendUnattributedForTest(raw: String, kind: ChatMessageKind) {

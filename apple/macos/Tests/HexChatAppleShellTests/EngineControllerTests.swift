@@ -2030,6 +2030,77 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.input, "")
         XCTAssertTrue(controller.conversations.isEmpty)
     }
+
+    // MARK: - Phase 6 — persistence (Task 9, unread bookkeeping)
+
+    func testIncomingMessageIncrementsUnreadWhenNotSelected() {
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
+        let netID = UUID()
+        let connID = UUID()
+        controller.networks[netID] = Network(id: netID, displayName: "Net")
+        controller.connections[connID] = Connection(
+            id: connID, networkID: netID, serverName: "Net", selfNick: nil)
+        let locA = SessionLocator.composed(connectionID: connID, channel: "#a")
+        let locB = SessionLocator.composed(connectionID: connID, channel: "#b")
+        let sessA = ChatSession(connectionID: connID, channel: "#a", isActive: true, locator: locA)
+        let sessB = ChatSession(connectionID: connID, channel: "#b", isActive: true, locator: locB)
+        controller.sessions = [sessA, sessB]
+        controller.selectedSessionID = sessB.id
+
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: sessA.id, raw: "hi", kind: .message(body: "hi")))
+
+        let keyA = ConversationKey(networkID: netID, channel: "#a")
+        XCTAssertEqual(controller.conversations[keyA]?.unread, 1)
+    }
+
+    func testSelectingSessionClearsUnreadAndSetsLastRead() {
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
+        let netID = UUID()
+        let connID = UUID()
+        controller.networks[netID] = Network(id: netID, displayName: "Net")
+        controller.connections[connID] = Connection(
+            id: connID, networkID: netID, serverName: "Net", selfNick: nil)
+        let locA = SessionLocator.composed(connectionID: connID, channel: "#a")
+        let sessA = ChatSession(connectionID: connID, channel: "#a", isActive: true, locator: locA)
+        controller.sessions = [sessA]
+        let keyA = ConversationKey(networkID: netID, channel: "#a")
+        controller.conversations[keyA] = ConversationState(key: keyA, unread: 3)
+
+        let before = Date()
+        controller.selectedSessionID = sessA.id
+        let after = Date()
+
+        XCTAssertEqual(controller.conversations[keyA]?.unread, 0)
+        let lastRead = controller.conversations[keyA]?.lastReadAt
+        XCTAssertNotNil(lastRead)
+        XCTAssertGreaterThanOrEqual(
+            lastRead!.timeIntervalSince1970, before.timeIntervalSince1970 - 0.1)
+        XCTAssertLessThanOrEqual(
+            lastRead!.timeIntervalSince1970, after.timeIntervalSince1970 + 0.1)
+    }
+
+    func testIncomingMessageForSelectedSessionDoesNotIncrementUnread() {
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
+        let netID = UUID()
+        let connID = UUID()
+        controller.networks[netID] = Network(id: netID, displayName: "Net")
+        controller.connections[connID] = Connection(
+            id: connID, networkID: netID, serverName: "Net", selfNick: nil)
+        let locA = SessionLocator.composed(connectionID: connID, channel: "#a")
+        let sessA = ChatSession(connectionID: connID, channel: "#a", isActive: true, locator: locA)
+        controller.sessions = [sessA]
+        controller.selectedSessionID = sessA.id
+
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: sessA.id, raw: "hi", kind: .message(body: "hi")))
+
+        let keyA = ConversationKey(networkID: netID, channel: "#a")
+        XCTAssertEqual(controller.conversations[keyA]?.unread ?? 0, 0)
+    }
 }
 #else
 @testable import HexChatAppleShell
