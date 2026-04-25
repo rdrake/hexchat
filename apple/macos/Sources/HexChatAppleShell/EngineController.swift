@@ -142,24 +142,49 @@ struct ServerEndpoint: Codable, Hashable {
 struct SASLConfig: Codable, Hashable {
     var mechanism: String
     var username: String
+    // TODO(phase-6+): plaintext on disk. Move to Keychain before shipping.
     var password: String
 }
 
 struct ConversationKey: Codable, Hashable {
     let networkID: UUID
     let channel: String
-
-    // Normalisation note: both == and hash route through `channel.lowercased()` so the
-    // Hashable contract holds for any String. This is Foundation locale-insensitive
-    // case-folding, not RFC 1459 IRC casemapping (`{}|^` ↔ `[]\~`); upgrading to
+    // Pre-lowered cache: `==` and `hash(into:)` are called on every dictionary lookup
+    // along the per-message-append path, so we avoid allocating a fresh lowercased
+    // String each time. Foundation case-folding, not RFC 1459 IRC casemapping —
     // server-advertised CASEMAPPING is a future-phase concern.
+    private let channelLowercased: String
+
+    init(networkID: UUID, channel: String) {
+        self.networkID = networkID
+        self.channel = channel
+        self.channelLowercased = channel.lowercased()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case networkID, channel
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let net = try c.decode(UUID.self, forKey: .networkID)
+        let ch = try c.decode(String.self, forKey: .channel)
+        self.init(networkID: net, channel: ch)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(networkID, forKey: .networkID)
+        try c.encode(channel, forKey: .channel)
+    }
+
     static func == (lhs: ConversationKey, rhs: ConversationKey) -> Bool {
-        lhs.networkID == rhs.networkID && lhs.channel.lowercased() == rhs.channel.lowercased()
+        lhs.networkID == rhs.networkID && lhs.channelLowercased == rhs.channelLowercased
     }
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(networkID)
-        hasher.combine(channel.lowercased())
+        hasher.combine(channelLowercased)
     }
 }
 
@@ -169,7 +194,7 @@ struct Network: Identifiable, Codable, Hashable {
     var servers: [ServerEndpoint]
     var nicks: [String]
     var sasl: SASLConfig?
-    var autoconnect: Bool
+    var autoConnect: Bool
     var autoJoin: [String]
     var onConnectCommands: [String]
 
@@ -179,7 +204,7 @@ struct Network: Identifiable, Codable, Hashable {
         servers: [ServerEndpoint] = [],
         nicks: [String] = [],
         sasl: SASLConfig? = nil,
-        autoconnect: Bool = false,
+        autoConnect: Bool = false,
         autoJoin: [String] = [],
         onConnectCommands: [String] = []
     ) {
@@ -188,7 +213,7 @@ struct Network: Identifiable, Codable, Hashable {
         self.servers = servers
         self.nicks = nicks
         self.sasl = sasl
-        self.autoconnect = autoconnect
+        self.autoConnect = autoConnect
         self.autoJoin = autoJoin
         self.onConnectCommands = onConnectCommands
     }

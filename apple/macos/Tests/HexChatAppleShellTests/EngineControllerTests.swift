@@ -1622,7 +1622,7 @@ final class EngineControllerTests: XCTestCase {
 
     // MARK: - Phase 6 — persistence (Task 1)
 
-    func testServerEndpointDefaults() {
+    func testServerEndpointConstruction() {
         let ep = ServerEndpoint(host: "irc.example.net", port: 6697, useTLS: true)
         XCTAssertEqual(ep.host, "irc.example.net")
         XCTAssertEqual(ep.port, 6697)
@@ -1633,6 +1633,7 @@ final class EngineControllerTests: XCTestCase {
         let cfg = SASLConfig(mechanism: "PLAIN", username: "alice", password: "hunter2")
         XCTAssertEqual(cfg.mechanism, "PLAIN")
         XCTAssertEqual(cfg.username, "alice")
+        XCTAssertEqual(cfg.password, "hunter2")
     }
 
     func testNetworkBackCompatInitializer() {
@@ -1640,7 +1641,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertTrue(net.servers.isEmpty)
         XCTAssertTrue(net.nicks.isEmpty)
         XCTAssertNil(net.sasl)
-        XCTAssertFalse(net.autoconnect)
+        XCTAssertFalse(net.autoConnect)
         XCTAssertTrue(net.autoJoin.isEmpty)
         XCTAssertTrue(net.onConnectCommands.isEmpty)
     }
@@ -1652,14 +1653,14 @@ final class EngineControllerTests: XCTestCase {
             servers: [ServerEndpoint(host: "irc.example.net", port: 6697, useTLS: true)],
             nicks: ["alice", "alice_"],
             sasl: SASLConfig(mechanism: "PLAIN", username: "alice", password: "pw"),
-            autoconnect: true,
+            autoConnect: true,
             autoJoin: ["#hexchat", "#dev"],
             onConnectCommands: ["/msg NickServ IDENTIFY pw"]
         )
         XCTAssertEqual(net.servers.count, 1)
         XCTAssertEqual(net.nicks, ["alice", "alice_"])
         XCTAssertEqual(net.sasl?.username, "alice")
-        XCTAssertTrue(net.autoconnect)
+        XCTAssertTrue(net.autoConnect)
         XCTAssertEqual(net.autoJoin, ["#hexchat", "#dev"])
         XCTAssertEqual(net.onConnectCommands.count, 1)
     }
@@ -1689,7 +1690,7 @@ final class EngineControllerTests: XCTestCase {
             ],
             nicks: ["alice"],
             sasl: SASLConfig(mechanism: "PLAIN", username: "alice", password: "pw"),
-            autoconnect: true, autoJoin: ["#hexchat"],
+            autoConnect: true, autoJoin: ["#hexchat"],
             onConnectCommands: ["/msg NickServ IDENTIFY pw"]
         )
         let encoder = JSONEncoder()
@@ -1706,13 +1707,15 @@ final class EngineControllerTests: XCTestCase {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let json = String(data: try encoder.encode(net), encoding: .utf8)!
+        XCTAssertTrue(json.contains("\"autoConnect\""))
         XCTAssertTrue(json.contains("\"autoJoin\""))
-        XCTAssertTrue(json.contains("\"autoconnect\""))
         XCTAssertTrue(json.contains("\"displayName\""))
         XCTAssertTrue(json.contains("\"id\""))
         XCTAssertTrue(json.contains("\"nicks\""))
         XCTAssertTrue(json.contains("\"onConnectCommands\""))
         XCTAssertTrue(json.contains("\"servers\""))
+        // Optional `sasl` is nil here; synthesised Codable should encodeIfPresent.
+        XCTAssertFalse(json.contains("\"sasl\""))
     }
 
     // MARK: - Phase 6 — persistence (Task 3)
