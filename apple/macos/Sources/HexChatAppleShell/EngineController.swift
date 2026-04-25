@@ -644,6 +644,10 @@ final class EngineController {
         )
     }
 
+    /// Apply state read from the persistence store. Caller is responsible for
+    /// ensuring the coordinator is nil while this runs — every assignment below
+    /// fires a didSet that would otherwise schedule a save of the just-loaded
+    /// state. Today's only caller is init(persistence:debounceInterval:).
     private func apply(_ state: AppState) {
         networks = Dictionary(
             state.networks.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
@@ -1138,12 +1142,19 @@ final class EngineController {
 
     private func appendMessage(raw: String, kind: ChatMessageKind, event: RuntimeEvent? = nil) {
         let targetUUID = resolveMessageSessionID(event: event)
-        messages.append(ChatMessage(sessionID: targetUUID, raw: raw, kind: kind))
-        recordActivity(on: targetUUID)
+        append(ChatMessage(sessionID: targetUUID, raw: raw, kind: kind))
+    }
+
+    private func append(_ message: ChatMessage) {
+        messages.append(message)
+        recordActivity(on: message.sessionID)
     }
 
     private func recordActivity(on sessionID: UUID) {
-        guard sessionID != selectedSessionID,
+        // Skip the system pseudo-session — its messages are local console output,
+        // not unread-bearing conversation activity.
+        guard sessionID != systemSessionUUIDStorage,
+            sessionID != selectedSessionID,
             let key = conversationKey(for: sessionID)
         else { return }
         var state = conversations[key] ?? ConversationState(key: key)
@@ -1152,8 +1163,7 @@ final class EngineController {
     }
 
     func appendMessageForTest(_ message: ChatMessage) {
-        messages.append(message)
-        recordActivity(on: message.sessionID)
+        append(message)
     }
 
     func appendUnattributedForTest(raw: String, kind: ChatMessageKind) {
@@ -1362,7 +1372,7 @@ final class EngineController {
         let timestamp = event.timestampSeconds == 0
             ? Date()
             : Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds))
-        messages.append(ChatMessage(
+        append(ChatMessage(
             sessionID: sessionID, raw: raw, kind: kind,
             author: author, timestamp: timestamp))
     }
@@ -1386,7 +1396,7 @@ final class EngineController {
         let timestamp = event.timestampSeconds == 0
             ? Date()
             : Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds))
-        messages.append(ChatMessage(
+        append(ChatMessage(
             sessionID: sessionID,
             raw: "* \(oldNick) is now known as \(newNick)",
             kind: .nickChange(from: oldNick, to: newNick),
@@ -1410,7 +1420,7 @@ final class EngineController {
         let timestamp = event.timestampSeconds == 0
             ? Date()
             : Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds))
-        messages.append(ChatMessage(
+        append(ChatMessage(
             sessionID: sessionID,
             raw: "* \(actor) sets mode \(modes)\(event.modesArgs.map { " " + $0 } ?? "")",
             kind: .modeChange(modes: modes, args: event.modesArgs),

@@ -1973,6 +1973,24 @@ final class EngineControllerTests: XCTestCase {
             controller.commandHistory.last, "/cmd\(EngineController.commandHistoryCap + 4)")
     }
 
+    func testCommandHistoryCapPersistsThroughStore() async throws {
+        // Regression guard for recursive didSet on the cap trim: the trim assignment
+        // inside commandHistory.didSet must itself fire didSet again so markDirty()
+        // is called and the trimmed array lands on disk.
+        let store = InMemoryPersistenceStore()
+        let controller = EngineController(persistence: store, debounceInterval: .zero)
+        for i in 0..<(EngineController.commandHistoryCap + 5) {
+            controller.recordCommand("/cmd\(i)")
+        }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(
+            try store.load()?.commandHistory.count, EngineController.commandHistoryCap)
+        XCTAssertEqual(
+            try store.load()?.commandHistory.last,
+            "/cmd\(EngineController.commandHistoryCap + 4)")
+    }
+
     func testSelectedSessionIDMutationSchedulesSave() async throws {
         let store = CountingStore()
         let controller = EngineController(persistence: store, debounceInterval: .zero)
@@ -2080,6 +2098,49 @@ final class EngineControllerTests: XCTestCase {
             lastRead!.timeIntervalSince1970, before.timeIntervalSince1970 - 0.1)
         XCTAssertLessThanOrEqual(
             lastRead!.timeIntervalSince1970, after.timeIntervalSince1970 + 0.1)
+    }
+
+    func testNickChangeEventIncrementsUnreadWhenNotSelected() {
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
+            connectionID: 1)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#b",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let netID = controller.connections[conn]!.networkID
+        let sessB = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#b"))!
+        controller.selectedSessionID = sessB
+
+        controller.applyNickChangeForTest(
+            network: "Libera", channel: "#a",
+            oldNick: "alice", newNick: "alice_", connectionID: 1)
+
+        let keyA = ConversationKey(networkID: netID, channel: "#a")
+        XCTAssertEqual(controller.conversations[keyA]?.unread, 1)
+    }
+
+    func testSystemSessionMessagesDoNotIncrementUnread() {
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
+        // Force the system session into existence via an unattributed append. With a
+        // non-system selectedSessionID, the system session would (incorrectly) be
+        // considered "not selected" and bump unread without the explicit guard.
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        controller.selectedSessionID = controller.sessionUUID(
+            for: .composed(connectionID: conn, channel: "#a"))
+
+        controller.appendUnattributedForTest(
+            raw: "console line", kind: .notice(body: "console line"))
+
+        XCTAssertTrue(
+            controller.conversations.allSatisfy { $0.value.unread == 0 },
+            "system-session activity must not bump any conversation's unread count")
     }
 
     func testIncomingMessageForSelectedSessionDoesNotIncrementUnread() {
