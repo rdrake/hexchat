@@ -2444,6 +2444,65 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.messages.last?.body, "m\(cap + 24)")
     }
 
+    // MARK: - Phase 7 — message persistence (Task 8, loadOlder)
+
+    func testLoadOlderPrependsFromStore() throws {
+        let store = InMemoryMessageStore()
+        let netID = UUID()
+        let key = ConversationKey(networkID: netID, channel: "#a")
+        // Pre-seed 50 messages spanning timestamps t..t+49.
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        for i in 0..<50 {
+            let m = ChatMessage(
+                sessionID: UUID(), raw: "m\(i)", kind: .message(body: "m\(i)"),
+                timestamp: t.addingTimeInterval(Double(i)))
+            try store.append(m, conversation: key)
+        }
+        // Construct controller; it doesn't load from the store on init (Phase 7 leaves
+        // the cold-start cache empty by design — fast-path is incoming messages, not
+        // disk reads).
+        let controller = EngineController(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: store, debounceInterval: .zero)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 1, selfNick: "me")
+        // After SESSION_ACTIVATE we have a network — but it's a fresh UUID, not netID
+        // above. Re-key the seeded data to match the runtime network so lookups land.
+        let runtimeNet = controller.connectionsByServerID[1].flatMap {
+            controller.connections[$0]?.networkID
+        }!
+        let runtimeKey = ConversationKey(networkID: runtimeNet, channel: "#a")
+        for i in 0..<50 {
+            let m = ChatMessage(
+                sessionID: UUID(), raw: "m\(i)", kind: .message(body: "m\(i)"),
+                timestamp: t.addingTimeInterval(Double(i)))
+            try store.append(m, conversation: runtimeKey)
+        }
+
+        // Append one current-session message (sets ring oldest to t+100).
+        let conn = controller.connectionsByServerID[1]!
+        let sess = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+        controller.appendMessageForTest(
+            ChatMessage(
+                sessionID: sess, raw: "current", kind: .message(body: "current"),
+                timestamp: t.addingTimeInterval(100)))
+        XCTAssertEqual(controller.messageRingForTest(conversation: runtimeKey).count, 1)
+
+        let loaded = try controller.loadOlder(forConversation: runtimeKey, limit: 30)
+        XCTAssertEqual(loaded, 30)
+        XCTAssertEqual(controller.messageRingForTest(conversation: runtimeKey).count, 31)
+        // Prepended in ascending timestamp order; "current" stays last.
+        XCTAssertEqual(
+            controller.messageRingForTest(conversation: runtimeKey).last?.body, "current")
+    }
+
+    func testLoadOlderReturnsZeroWhenStoreEmpty() throws {
+        let controller = EngineController()
+        let key = ConversationKey(networkID: UUID(), channel: "#empty")
+        XCTAssertEqual(try controller.loadOlder(forConversation: key, limit: 50), 0)
+    }
+
     func testEngineControllerToleratesBrokenMessageStore() {
         struct BrokenMessageStore: MessageStore {
             func append(_ m: ChatMessage, conversation: ConversationKey) throws {

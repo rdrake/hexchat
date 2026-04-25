@@ -1288,6 +1288,35 @@ final class EngineController {
         messageRing[conversation] ?? []
     }
 
+    /// Page older history for a conversation from the message store. Returns the
+    /// number of rows loaded (0 means there's nothing more older than what's
+    /// currently in the ring). The fetched rows are prepended to the ring in
+    /// ascending timestamp order so the UI can render them at the top.
+    ///
+    /// Synchronous on @MainActor for now — SQLite reads are fast at this scale,
+    /// and FULLMUTEX makes the connection safe to call into from main while a
+    /// background write may be in flight. If profiling shows hot-path pain we
+    /// can move to async in a follow-up.
+    @discardableResult
+    func loadOlder(forConversation key: ConversationKey, limit: Int) throws -> Int {
+        guard limit > 0 else { return 0 }
+        let oldestInRing = messageRing[key]?.first?.timestamp
+        let page = try messageStore.page(
+            conversation: key, before: oldestInRing, limit: limit)
+        guard !page.isEmpty else { return 0 }
+        var bucket = messageRing[key] ?? []
+        bucket.insert(contentsOf: page, at: 0)
+        // Allow loadOlder to push the ring up to 2x the per-conversation cap so
+        // the UI has room to scroll without an immediate trim discarding the
+        // newly-prepended rows.
+        let upperBound = Self.messageRingPerConversation * 2
+        if bucket.count > upperBound {
+            bucket.removeFirst(bucket.count - upperBound)
+        }
+        messageRing[key] = bucket
+        return page.count
+    }
+
     private func writeThroughToMessageStore(_ message: ChatMessage) {
         // System-pseudo-session messages are console output and don't belong in
         // the per-conversation message archive. Skip — same skip predicate as
