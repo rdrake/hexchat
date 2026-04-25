@@ -1262,7 +1262,7 @@ Each phase gets its own plan doc dated when its predecessor ships. Current order
 - **Phase 5 — Structured `Message`.** Typed `MessageKind` cases for join/part/quit/kick/mode/nick-change with structured fields. C-side emits new `hc_apple_event_kind` variants to bypass heuristic text-parsing.
 - **Phase 6 — Config & state persistence.** `Codable` + JSON for `Network`, `ConversationState`, `AppState`. Atomic writes, debounced on-change saves.
 - **Phase 7 — Message persistence + pagination** ✅ shipped. SQLite via system `sqlite3` (no Swift package dep), per-conversation in-memory ring (200/conv) plus globally-capped `messages` (5000), paginated `loadOlder` back-fill. See [phase 7 plan](2026-04-24-data-model-phase-7-message-persistence.md).
-- **Phase 7.5 — IRCv3 `draft/chathistory` server bridge.** Bridge `chathistory_request_before(server*, reference, limit)` from `src/common/chathistory.c` into a new `hc_apple_runtime_request_chathistory_before` C function and have `loadOlder` consult the connection's `have_chathistory` cap when local history runs out. Estimated: ~6 small tasks.
+- **Phase 7.5 — IRCv3 `draft/chathistory` server bridge.** Bridge `chathistory_request_before(server*, reference, limit)` from `src/common/chathistory.c` into a new `hc_apple_runtime_request_chathistory_before` C function and have `loadOlder` consult the connection's `have_chathistory` cap when local history runs out. Plan: [docs/plans/2026-04-25-data-model-phase-7-5-chathistory-bridge.md](2026-04-25-data-model-phase-7-5-chathistory-bridge.md). Estimated: 7 tasks.
 - **Phase 8 — Transferable + multi-window.** All entities conform to `Transferable`; drop destinations enumerated for product decisions. `WindowGroup` per scene with its own focused conversation.
 
 ---
