@@ -1024,6 +1024,8 @@ final class EngineController {
 
     func applyForTest(_ state: AppState) { apply(state) }
 
+    func snapshotForPersistence() -> AppState { currentAppState() }
+
     func upsertNetworkForTest(id: UUID, name: String) {
         upsertNetwork(id: id, name: name)
     }
@@ -1805,6 +1807,7 @@ final class EngineController {
             targetLocator = .composed(connectionID: connectionID, channel: channel)
         }
 
+        let resultID: UUID
         if let existing = sessionByLocator[locator],
            let idx = sessions.firstIndex(where: { $0.id == existing }) {
             let oldLocator = sessions[idx].locator
@@ -1820,20 +1823,21 @@ final class EngineController {
             if oldConnectionID != connectionID || oldChannel != channel {
                 sessions = sessions.sorted(by: sessionSort)
             }
-            resolvePendingLastFocusedIfMatches(uuid: existing)
-            return existing
+            resultID = existing
+        } else {
+            let new = ChatSession(
+                connectionID: connectionID,
+                channel: channel,
+                isActive: false,
+                locator: targetLocator)
+            sessions.append(new)
+            sessionByLocator[targetLocator] = new.id
+            sessions = sessions.sorted(by: sessionSort)
+            if selectedSessionID == nil { selectedSessionID = new.id }
+            resultID = new.id
         }
-        let new = ChatSession(
-            connectionID: connectionID,
-            channel: channel,
-            isActive: false,
-            locator: targetLocator)
-        sessions.append(new)
-        sessionByLocator[targetLocator] = new.id
-        sessions = sessions.sorted(by: sessionSort)
-        if selectedSessionID == nil { selectedSessionID = new.id }
-        resolvePendingLastFocusedIfMatches(uuid: new.id)
-        return new.id
+        resolvePendingLastFocusedIfMatches(uuid: resultID)
+        return resultID
     }
 
     private func resolvePendingLastFocusedIfMatches(uuid: UUID) {
