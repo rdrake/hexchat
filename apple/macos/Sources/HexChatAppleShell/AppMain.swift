@@ -13,7 +13,8 @@ struct HexChatAppleShellApp: App {
         // controller every launch.
         let c = HexChatAppleShellApp.makeController()
         _controller = State(initialValue: c)
-        _primaryWindow = State(initialValue: WindowSession(controller: c, isPrimary: true))
+        _primaryWindow = State(initialValue: WindowSession(
+            controller: c, initial: c.lastFocusedSessionID))
     }
 
     var body: some Scene {
@@ -23,28 +24,26 @@ struct HexChatAppleShellApp: App {
                 window: makeWindow(seed: seedSessionID))
         }
         .commands {
+            // Suppress the default Cmd+N. WindowGroup would otherwise open a
+            // fresh window with empty seed that aliases the primary window's
+            // focus state (confusingly). The supported "new window with focus"
+            // path is the explicit Cmd+Opt+T command below.
+            CommandGroup(replacing: .newItem) {}
             OpenInNewWindowCommands()
         }
     }
 
     @MainActor
     private func makeWindow(seed: UUID?) -> WindowSession {
-        // The first window opens with seed == nil; it gets the primary instance.
-        // Subsequent windows opened via `openWindow(value: UUID)` carry a non-nil
-        // seed and get a fresh non-primary WindowSession.
-        //
-        // NOTE: SwiftUI's default `Cmd+N` for a WindowGroup hits this branch with
-        // seed == nil and aliases `primaryWindow` (the second window shares focus
-        // state with the first). Task 5 wired `openWindow(id: "main", value: id)`
-        // for the explicit "Open in New Window" command (Cmd+Opt+T), which carries
-        // a non-nil seed and creates a fresh non-primary WindowSession.
-        //
-        // TODO(Phase-9): Either suppress the default Cmd+N
-        // (CommandGroup(replacing: .newItem) {}) so the only path is the explicit
-        // command, or switch to a "primary lives in the controller" model that
-        // makes per-window WindowSession unconditional.
+        // The first window opens with seed == nil; it gets the persisted
+        // primary instance (whose focusedSessionID was already seeded from
+        // controller.lastFocusedSessionID at init). Subsequent windows opened
+        // via openWindow(value: UUID) carry a non-nil seed and get a fresh
+        // WindowSession. Cmd+N is suppressed via CommandGroup(replacing:
+        // .newItem) {} so only the explicit Cmd+Opt+T path reaches the
+        // non-nil-seed branch.
         if seed == nil { return primaryWindow }
-        return WindowSession(controller: controller, initial: seed, isPrimary: false)
+        return WindowSession(controller: controller, initial: seed)
     }
 
     @MainActor
