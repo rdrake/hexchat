@@ -563,16 +563,27 @@ final class EngineController {
 
     var selectedSessionID: UUID? {
         didSet {
-            if let newID = selectedSessionID, let key = conversationKey(for: newID) {
-                var state = conversations[key] ?? ConversationState(key: key)
-                state.unread = 0
-                state.lastReadAt = Date()
-                conversations[key] = state
-            } else {
-                coordinator?.markDirty()
+            if let newID = selectedSessionID, markReadInternal(forSession: newID) {
+                return
             }
+            coordinator?.markDirty()
         }
     }
+
+    func markRead(forSession sessionID: UUID) {
+        markReadInternal(forSession: sessionID)
+    }
+
+    @discardableResult
+    private func markReadInternal(forSession sessionID: UUID) -> Bool {
+        guard let key = conversationKey(for: sessionID) else { return false }
+        var state = conversations[key] ?? ConversationState(key: key)
+        state.unread = 0
+        state.lastReadAt = Date()
+        conversations[key] = state
+        return true
+    }
+
     var activeSessionID: UUID?
 
     private(set) var sessionByLocator: [SessionLocator: UUID] = [:]

@@ -2974,6 +2974,68 @@ final class EngineControllerTests: XCTestCase {
             controller.messages.isEmpty,
             "global messages array also must not contain a row whose write failed")
     }
+
+    func testWindowSessionFocusFiresMarkRead() {
+        let controller = EngineController()
+        controller.upsertNetworkForTest(id: UUID(), name: "Libera")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
+        let connIDW = controller.connections.values.first!.id
+        let aID = controller.sessionUUID(for: .composed(connectionID: connIDW, channel: "#a"))!
+        let key = controller.conversationKey(for: aID)!
+        let bumped = ConversationState(key: key, draft: "", unread: 7, lastReadAt: nil)
+        controller.setConversationStateForTest(bumped)
+
+        let window = WindowSession(controller: controller)
+        window.focusedSessionID = aID
+
+        XCTAssertEqual(
+            controller.conversations[key]?.unread, 0,
+            "focusing a session must zero its unread count")
+        XCTAssertNotNil(controller.conversations[key]?.lastReadAt)
+    }
+
+    func testTwoWindowSessionsHoldDifferentFocus() {
+        let controller = EngineController()
+        controller.upsertNetworkForTest(id: UUID(), name: "Libera")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+        let connID = controller.connections.values.first!.id
+        let aID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
+        let bID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#b"))!
+
+        let win1 = WindowSession(controller: controller, initial: aID)
+        let win2 = WindowSession(controller: controller, initial: bID)
+
+        XCTAssertEqual(win1.focusedSessionID, aID)
+        XCTAssertEqual(win2.focusedSessionID, bID)
+        win1.focusedSessionID = bID
+        XCTAssertEqual(win1.focusedSessionID, bID)
+        XCTAssertEqual(win2.focusedSessionID, bID, "win2 was already on bID; unchanged")
+        win1.focusedSessionID = aID
+        XCTAssertEqual(win2.focusedSessionID, bID, "win2 must NOT follow win1")
+    }
+
+    func testMarkReadForSessionMatchesLegacyDidSetBehavior() {
+        let controller = EngineController()
+        controller.upsertNetworkForTest(id: UUID(), name: "Libera")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
+        let connID = controller.connections.values.first!.id
+        let aID = controller.sessionUUID(for: .composed(connectionID: connID, channel: "#a"))!
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(ConversationState(key: key, unread: 5))
+
+        // Path 1: explicit method call
+        controller.markRead(forSession: aID)
+        let after1 = controller.conversations[key]
+        XCTAssertEqual(after1?.unread, 0)
+
+        // Path 2: legacy selectedSessionID assignment (must be equivalent)
+        controller.setConversationStateForTest(ConversationState(key: key, unread: 5))
+        controller.selectedSessionID = aID
+        let after2 = controller.conversations[key]
+        XCTAssertEqual(after2?.unread, 0)
+        XCTAssertNotNil(after2?.lastReadAt)
+    }
 }
 #else
 @testable import HexChatAppleShell
