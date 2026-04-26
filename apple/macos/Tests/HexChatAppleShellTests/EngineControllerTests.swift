@@ -3827,6 +3827,88 @@ final class EngineControllerTests: XCTestCase {
                      "REMOVE must scrub the UUID key from every window's unread map")
         withExtendedLifetime(window) {}
     }
+
+    func testUnreadBadgeReturnsZeroWhenBothCountsAreZero() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+
+        let window = WindowSession(controller: controller, initial: aID)
+        XCTAssertEqual(controller.unreadBadge(forSession: aID, window: window), 0)
+        withExtendedLifetime(window) {}
+    }
+
+    func testUnreadBadgeFallsBackToGlobalOnColdLaunch() {
+        // Simulates: cold launch where the persisted ConversationState.unread is
+        // non-zero but the window has not yet received any activity (per-window
+        // map is empty).
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(
+            ConversationState(key: key, draft: "", unread: 5, lastReadAt: nil))
+
+        // Construct the window AFTER seeding global, with initial: nil so init's
+        // recordFocusTransition doesn't clear the global counter.
+        let window = WindowSession(controller: controller, initial: nil)
+        XCTAssertEqual(controller.unreadBadge(forSession: aID, window: window), 5,
+                       "cold-launch fallback: badge surfaces global when per-window is 0")
+        withExtendedLifetime(window) {}
+    }
+
+    func testUnreadBadgePrefersPerWindowWhenLarger() {
+        // Simulates: two windows; this window saw activity that another window's
+        // focus suppressed from the global counter.
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+
+        let window = WindowSession(controller: controller, initial: nil)
+        window.unread[aID] = 3
+        XCTAssertEqual(controller.unreadBadge(forSession: aID, window: window), 3)
+        withExtendedLifetime(window) {}
+    }
+
+    func testUnreadBadgeReturnsMaxWhenBothPositive() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(
+            ConversationState(key: key, draft: "", unread: 2, lastReadAt: nil))
+
+        let window = WindowSession(controller: controller, initial: nil)
+        window.unread[aID] = 5
+        XCTAssertEqual(controller.unreadBadge(forSession: aID, window: window), 5,
+                       "max(perWindow=5, global=2) = 5")
+        withExtendedLifetime(window) {}
+    }
+
+    func testUnreadBadgeReturnsGlobalWhenLargerThanPerWindowBothPositive() {
+        // Symmetric to testUnreadBadgeReturnsMaxWhenBothPositive: this case
+        // proves the operator is `max`, not "perWindow if non-zero, else global".
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(
+            ConversationState(key: key, draft: "", unread: 7, lastReadAt: nil))
+
+        let window = WindowSession(controller: controller, initial: nil)
+        window.unread[aID] = 3
+        XCTAssertEqual(controller.unreadBadge(forSession: aID, window: window), 7,
+                       "max(perWindow=3, global=7) = 7")
+        withExtendedLifetime(window) {}
+    }
+
+    func testUnreadBadgeForUnknownSessionUUIDReturnsZero() {
+        let controller = EngineController()
+        let window = WindowSession(controller: controller, initial: nil)
+        let strangerID = UUID()
+        XCTAssertEqual(controller.unreadBadge(forSession: strangerID, window: window), 0)
+        withExtendedLifetime(window) {}
+    }
 }
 #else
 @testable import HexChatAppleShell

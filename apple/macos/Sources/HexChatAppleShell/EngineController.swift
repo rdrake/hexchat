@@ -709,6 +709,16 @@ final class EngineController {
         return true
     }
 
+    /// Sidebar-facing unread count. Returns `max(perWindow, global)` so cold-
+    /// launch sidebars still show "you missed N" continuity from the persisted
+    /// global counter even though `WindowSession.unread` is volatile. See the
+    /// Phase 10 design doc, §6.
+    func unreadBadge(forSession sessionID: UUID, window: WindowSession) -> Int {
+        let perWindow = window.unread[sessionID, default: 0]
+        let global = conversationKey(for: sessionID).flatMap { conversations[$0]?.unread } ?? 0
+        return max(perWindow, global)
+    }
+
     // MARK: - Focus tracking
 
     /// The most-recently focused session UUID across all windows. Cold-launch hint:
