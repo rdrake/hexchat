@@ -73,6 +73,8 @@ struct ContentView: View {
                                 Text(session.channel)
                                     .font(.system(.body, design: .monospaced))
                                     .lineLimit(1)
+                                Spacer(minLength: 4)
+                                unreadBadge(for: session)
                             }
                             .tag(Optional(session.id))
                             .draggable(session)
@@ -243,6 +245,20 @@ struct ContentView: View {
         case .command: return Color(red: 0.18, green: 0.42, blue: 0.66)
         case .notice, .lifecycle, .action: return Color(red: 0.44, green: 0.46, blue: 0.49)
         case .message: return Color(red: 0.30, green: 0.33, blue: 0.36)
+        }
+    }
+
+    @ViewBuilder
+    private func unreadBadge(for session: ChatSession) -> some View {
+        let count = controller.unreadBadge(forSession: session.id, window: window)
+        if count > 0 {
+            Text(count > 99 ? "99+" : "\(count)")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.accentColor)
+                .clipShape(Capsule())
         }
     }
 }
