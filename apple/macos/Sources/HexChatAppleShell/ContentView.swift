@@ -141,24 +141,14 @@ struct ContentView: View {
 
             CommandInputView(
                 text: focusedDraft,
-                onSubmit: {
-                    let draft = focusedDraft
-                    controller.send(draft.wrappedValue, forSession: window.focusedSessionID)
-                    draft.wrappedValue = ""
-                },
+                onSubmit: sendAndClearDraft,
                 onHistory: { delta in
-                    // Intentionally calls the legacy global API; per-window history is a
-                    // Phase-9 follow-up. See EngineController.browseHistory's TODO.
-                    controller.browseHistory(delta: delta)
+                    controller.browseHistory(delta: delta, forSession: window.focusedSessionID)
                 }
             )
             .frame(minHeight: 72, maxHeight: 110)
             .overlay(alignment: .trailing) {
-                Button("Send") {
-                    let draft = focusedDraft
-                    controller.send(draft.wrappedValue, forSession: window.focusedSessionID)
-                    draft.wrappedValue = ""
-                }
+                Button("Send", action: sendAndClearDraft)
                 .buttonStyle(.borderedProminent)
                 .tint(Color(red: 0.13, green: 0.37, blue: 0.28))
                 .padding(10)
@@ -206,6 +196,12 @@ struct ContentView: View {
     private var isDraftEmpty: Bool {
         focusedDraft.wrappedValue
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func sendAndClearDraft() {
+        let draft = focusedDraft
+        controller.send(draft.wrappedValue, forSession: window.focusedSessionID)
+        draft.wrappedValue = ""
     }
 
     private var statusChip: some View {

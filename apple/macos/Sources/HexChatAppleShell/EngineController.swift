@@ -911,8 +911,8 @@ final class EngineController {
             coordinator?.markDirty()
         }
     }
-    private var historyCursor = 0
-    private var historyDraft = ""
+    private var historyCursorBySession: [UUID: Int] = [:]
+    private var historyDraftBySession: [UUID: String] = [:]
 
     @ObservationIgnored
     private var coordinator: PersistenceCoordinator?
@@ -1130,8 +1130,10 @@ final class EngineController {
             if commandHistory.last != trimmed {
                 recordCommand(trimmed)
             }
-            historyCursor = commandHistory.count
-            historyDraft = ""
+            if let id = sessionID {
+                historyCursorBySession[id] = commandHistory.count
+                historyDraftBySession[id] = ""
+            }
         }
 
         let targetSessionID: UInt64 = sessionID.map(numericRuntimeSessionID(forSelection:)) ?? 0
@@ -1153,31 +1155,31 @@ final class EngineController {
         draftBinding(for: sessionID).wrappedValue = "/msg \(nick) "
     }
 
-    /// TODO(Phase-9): `browseHistory` is not multi-window-safe. It reads/writes the
-    /// controller-global `historyDraft`/`historyCursor`. A secondary window calling
-    /// this method clobbers the primary window's draft. Fix: take a `forSession:`
-    /// parameter and scope `historyDraft`/`historyCursor` per-session, or attach
-    /// them to `WindowSession`.
-    func browseHistory(delta: Int) {
-        guard !commandHistory.isEmpty else {
+    func browseHistory(delta: Int, forSession sessionID: UUID?) {
+        guard let sessionID, !commandHistory.isEmpty else {
             return
         }
+
+        let draft = draftBinding(for: sessionID)
+        var cursor = historyCursorBySession[sessionID] ?? commandHistory.count
 
         if delta < 0 {
-            if historyCursor == commandHistory.count {
-                historyDraft = input
+            if cursor == commandHistory.count {
+                historyDraftBySession[sessionID] = draft.wrappedValue
             }
-            historyCursor = max(0, historyCursor - 1)
-            input = commandHistory[historyCursor]
+            cursor = max(0, cursor - 1)
+            draft.wrappedValue = commandHistory[cursor]
+            historyCursorBySession[sessionID] = cursor
             return
         }
 
-        historyCursor = min(commandHistory.count, historyCursor + 1)
-        if historyCursor == commandHistory.count {
-            input = historyDraft
+        cursor = min(commandHistory.count, cursor + 1)
+        if cursor == commandHistory.count {
+            draft.wrappedValue = historyDraftBySession[sessionID] ?? ""
         } else {
-            input = commandHistory[historyCursor]
+            draft.wrappedValue = commandHistory[cursor]
         }
+        historyCursorBySession[sessionID] = cursor
     }
 
     func applyUserlistForTest(
@@ -1478,18 +1480,21 @@ final class EngineController {
                 // user actually had when the engine stopped.
                 coordinator?.flushNow()
                 isRunning = false
+                // Clear runtime-only state. Persistable identity (`networks`,
+                // `networksByName`, `conversations`, `commandHistory`,
+                // `lastFocusedSessionID`, `pendingLastFocusedKey`) survives:
+                // network UUIDs must remain stable across STOPPED so reconnect
+                // (whether intra-process or cold-launch) produces the same
+                // ConversationKey, which is what `pendingLastFocusedKey`
+                // resolution relies on.
                 sessionByLocator = [:]
                 focusRefcount = [:]
-                networks = [:]
                 connections = [:]
-                networksByName = [:]
                 connectionsByServerID = [:]
                 membershipsBySession = [:]
                 users = [:]
                 usersByConnectionAndNick = [:]
-                if let old = systemSessionUUIDStorage {
-                    sessions.removeAll { $0.id == old }
-                }
+                sessions.removeAll()
                 systemSessionUUIDStorage = nil
                 systemConnectionUUIDStorage = nil
             }
@@ -1538,10 +1543,11 @@ final class EngineController {
         append(
             ChatMessage(
                 sessionID: targetUUID, raw: raw, kind: kind, timestamp: timestamp,
-                serverMsgID: serverMsgID))
+                serverMsgID: serverMsgID),
+            attributed: event != nil)
     }
 
-    private func append(_ message: ChatMessage) {
+    private func append(_ message: ChatMessage, attributed: Bool = true) {
         // Phase 7.5: storage decides whether this is a new row. The ring and
         // global messages array follow only when the store reports the insert
         // succeeded — that's the single dedup invariant for chathistory replays.
@@ -1571,7 +1577,12 @@ final class EngineController {
             }
             messageRing[key] = bucket
         }
-        recordActivity(on: message.sessionID)
+        // Local console output (command echoes, internal errors, lifecycle banners)
+        // arrives via appendMessage(event: nil) and must not bump unread on the
+        // active conversation. Server-driven messages always carry an event.
+        if attributed {
+            recordActivity(on: message.sessionID)
+        }
     }
 
     func messageRingForTest(conversation: ConversationKey) -> [ChatMessage] {
@@ -1735,6 +1746,8 @@ final class EngineController {
                 membershipsBySession[uuid] = nil
                 sessionByLocator[removed.locator] = nil
                 focusRefcount.removeValue(forKey: uuid)
+                historyCursorBySession.removeValue(forKey: uuid)
+                historyDraftBySession.removeValue(forKey: uuid)
                 if lastFocusedSessionID == uuid { lastFocusedSessionID = nil }
                 // Evaluated against the still-intact `sessions` array, before the removeAll call below.
                 if activeSessionID == uuid { activeSessionID = sessions.first(where: { $0.id != uuid })?.id }

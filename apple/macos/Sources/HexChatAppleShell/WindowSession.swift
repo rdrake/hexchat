@@ -28,14 +28,11 @@ final class WindowSession {
 
     init(controller: EngineController?, initial: UUID? = nil) {
         self.controller = controller
-        // Set the property *before* triggering recordFocusTransition so the
-        // controller observes the new state. didSet only fires when the value
-        // actually changes from oldValue (nil) to initial; if initial is nil
-        // the didSet short-circuits — desired.
+        // Optional stored properties are implicitly nil-initialized, so this
+        // assignment is a re-assignment from nil → initial and didSet fires —
+        // it routes through recordFocusTransition for us. A nil `initial`
+        // short-circuits inside didSet (oldValue == newValue == nil).
         self.focusedSessionID = initial
-        if let initial {
-            controller?.recordFocusTransition(from: nil, to: initial)
-        }
     }
 
     deinit {

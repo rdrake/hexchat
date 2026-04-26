@@ -88,17 +88,57 @@ final class EngineControllerTests: XCTestCase {
         controller.send("/msg alice hi", forSession: sessionID, trackHistory: true)
         controller.draftBinding(for: sessionID).wrappedValue = "/nick newname"
 
-        controller.browseHistory(delta: -1)
+        controller.browseHistory(delta: -1, forSession: sessionID)
         XCTAssertEqual(controller.draftBinding(for: sessionID).wrappedValue, "/msg alice hi")
 
-        controller.browseHistory(delta: -1)
+        controller.browseHistory(delta: -1, forSession: sessionID)
         XCTAssertEqual(controller.draftBinding(for: sessionID).wrappedValue, "/join #hexchat")
 
-        controller.browseHistory(delta: 1)
+        controller.browseHistory(delta: 1, forSession: sessionID)
         XCTAssertEqual(controller.draftBinding(for: sessionID).wrappedValue, "/msg alice hi")
 
-        controller.browseHistory(delta: 1)
+        controller.browseHistory(delta: 1, forSession: sessionID)
         XCTAssertEqual(controller.draftBinding(for: sessionID).wrappedValue, "/nick newname")
+    }
+
+    func testHistoryBrowseIsScopedPerSession() {
+        // Two sessions browsing history independently must not clobber each other's
+        // draft or cursor — this is the multi-window-safety contract that replaced
+        // the old controller-global historyDraft/historyCursor.
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
+            connectionID: 1)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b",
+            connectionID: 1)
+        let conn = controller.connectionsByServerID[1]!
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+        let bID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#b"))!
+
+        controller.send("/one", forSession: aID, trackHistory: true)
+        controller.send("/two", forSession: aID, trackHistory: true)
+        controller.draftBinding(for: aID).wrappedValue = "draft-a"
+        controller.draftBinding(for: bID).wrappedValue = "draft-b"
+
+        // Window A walks back into history; window B is untouched.
+        controller.browseHistory(delta: -1, forSession: aID)
+        XCTAssertEqual(controller.draftBinding(for: aID).wrappedValue, "/two")
+        XCTAssertEqual(controller.draftBinding(for: bID).wrappedValue, "draft-b")
+
+        // Window B walks back independently and lands on the same shared command,
+        // but A's cursor stays where it was.
+        controller.browseHistory(delta: -1, forSession: bID)
+        XCTAssertEqual(controller.draftBinding(for: bID).wrappedValue, "/two")
+        XCTAssertEqual(controller.draftBinding(for: aID).wrappedValue, "/two")
+
+        // A returns to its own cached draft, B keeps its own cached draft.
+        controller.browseHistory(delta: 1, forSession: aID)
+        XCTAssertEqual(controller.draftBinding(for: aID).wrappedValue, "draft-a")
+        XCTAssertEqual(controller.draftBinding(for: bID).wrappedValue, "/two")
+
+        controller.browseHistory(delta: 1, forSession: bID)
+        XCTAssertEqual(controller.draftBinding(for: bID).wrappedValue, "draft-b")
     }
 
     func testMessageClassifier() {
@@ -135,6 +175,7 @@ final class EngineControllerTests: XCTestCase {
             network: "Libera", channel: "#b", text: "message for b",
             connectionID: 1, selfNick: "me")
 
+        let conn = controller.connectionsByServerID[1]!
         let sessionA = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
         let sessionB = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#b"))!
         XCTAssertFalse(
@@ -824,7 +865,12 @@ final class EngineControllerTests: XCTestCase {
 
     // MARK: - Lifecycle teardown & system-session invariants
 
-    func testLifecycleStoppedClearsNetworksAndConnections() {
+    func testLifecycleStoppedClearsRuntimeStateButPreservesNetworkIdentity() {
+        // STOPPED clears runtime state (connections, sessions, locator/serverID
+        // indices) but preserves persistable network identity. This is what
+        // lets `pendingLastFocusedKey` resolve after reconnect — its networkID
+        // must remain stable across the teardown. See the STOPPED comment in
+        // the lifecycle handler.
         let controller = EngineController()
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
@@ -836,11 +882,16 @@ final class EngineControllerTests: XCTestCase {
 
         controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
 
-        XCTAssertTrue(controller.networks.isEmpty)
+        // Runtime state cleared.
         XCTAssertTrue(controller.connections.isEmpty)
-        XCTAssertTrue(controller.networksByName.isEmpty)
         XCTAssertTrue(controller.connectionsByServerID.isEmpty)
         XCTAssertTrue(controller.sessionByLocator.isEmpty)
+        XCTAssertTrue(controller.sessions.isEmpty, "all sessions cleared on STOPPED, including the system session")
+
+        // Persistable identity preserved: networks survive so reconnect re-uses
+        // the same UUIDs and `pendingLastFocusedKey` keeps resolving.
+        XCTAssertFalse(controller.networks.isEmpty)
+        XCTAssertFalse(controller.networksByName.isEmpty)
     }
 
     func testSelfNickRefreshesOnSubsequentEvent() {
@@ -3404,12 +3455,16 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
         let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
         let key = controller.conversationKey(for: aID)!
+        // Capture the network so the snapshot can carry the same UUID across the
+        // STOPPED → apply boundary; otherwise reconnect mints a fresh networkID
+        // and the pending key — keyed on the original UUID — never resolves.
+        let liberaNet = controller.networks[key.networkID]!
         // Tear down so we can simulate "snapshot has key but session not yet emitted":
         controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
 
         let snapshot = AppState(
             schemaVersion: AppState.currentSchemaVersion,
-            networks: [],
+            networks: [liberaNet],
             conversations: [],
             lastFocusedKey: key,
             commandHistory: [])
@@ -3438,11 +3493,12 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
         let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
         let key = controller.conversationKey(for: aID)!
+        let liberaNet = controller.networks[key.networkID]!
         controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
 
         let snapshot = AppState(
             schemaVersion: AppState.currentSchemaVersion,
-            networks: [], conversations: [], lastFocusedKey: key, commandHistory: [])
+            networks: [liberaNet], conversations: [], lastFocusedKey: key, commandHistory: [])
         controller.applyForTest(snapshot)
         // Hit STOPPED again before any session re-emitted — pending key must survive.
         controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
