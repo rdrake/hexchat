@@ -11180,6 +11180,15 @@ gtk_xtext_entry_add_reaction (xtext_buffer *buf, textentry *ent,
 		 * display_lines, tree weight, and num_lines by hand. */
 		if (ent->extra_lines_below == 0)
 		{
+			gboolean was_at_bottom = FALSE;
+			if (buf && buf->xtext && buf->xtext->buffer == buf)
+			{
+				gdouble v = gtk_adjustment_get_value (buf->xtext->adj);
+				gdouble u = gtk_adjustment_get_upper (buf->xtext->adj);
+				gdouble ps = gtk_adjustment_get_page_size (buf->xtext->adj);
+				was_at_bottom = buf->scroll_anchor.anchor_to_bottom
+					|| v >= u - ps - 1.0;
+			}
 			ent->extra_lines_below = 1;
 			ent->display_lines += 1;
 			if (buf && buf->entry_tree)
@@ -11190,10 +11199,13 @@ gtk_xtext_entry_add_reaction (xtext_buffer *buf, textentry *ent,
 				if (buf->xtext)
 				{
 					gtk_xtext_adjustment_set (buf, TRUE);
-					if (buf->scroll_anchor.anchor_to_bottom)
+					if (was_at_bottom)
+					{
+						buf->scroll_anchor.anchor_to_bottom = TRUE;
 						gtk_adjustment_set_value (buf->xtext->adj,
 							gtk_adjustment_get_upper (buf->xtext->adj) -
 							gtk_adjustment_get_page_size (buf->xtext->adj));
+					}
 				}
 			}
 		}
@@ -11298,6 +11310,15 @@ gtk_xtext_entry_set_reply (xtext_buffer *buf, textentry *ent,
 
 		if (delta != 0)
 		{
+			gboolean was_at_bottom = FALSE;
+			if (buf && buf->xtext && buf->xtext->buffer == buf)
+			{
+				gdouble v = gtk_adjustment_get_value (buf->xtext->adj);
+				gdouble u = gtk_adjustment_get_upper (buf->xtext->adj);
+				gdouble ps = gtk_adjustment_get_page_size (buf->xtext->adj);
+				was_at_bottom = buf->scroll_anchor.anchor_to_bottom
+					|| v >= u - ps - 1.0;
+			}
 			ent->display_lines += delta;
 			if (buf && buf->entry_tree)
 				update_weight234 (buf->entry_tree, ent, delta);
@@ -11307,10 +11328,13 @@ gtk_xtext_entry_set_reply (xtext_buffer *buf, textentry *ent,
 				if (buf->xtext)
 				{
 					gtk_xtext_adjustment_set (buf, TRUE);
-					if (buf->scroll_anchor.anchor_to_bottom)
+					if (was_at_bottom)
+					{
+						buf->scroll_anchor.anchor_to_bottom = TRUE;
 						gtk_adjustment_set_value (buf->xtext->adj,
 							gtk_adjustment_get_upper (buf->xtext->adj) -
 							gtk_adjustment_get_page_size (buf->xtext->adj));
+					}
 				}
 			}
 		}
