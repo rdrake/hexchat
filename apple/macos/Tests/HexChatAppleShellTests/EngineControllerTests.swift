@@ -3240,37 +3240,51 @@ final class EngineControllerTests: XCTestCase {
         }
     }
 
-    func testPrimaryWindowMirrorsFocusToControllerSelectedSessionID() {
+    func testWindowSessionFocusTransitionRegistersWithController() {
         let controller = EngineController()
-        controller.applySessionForTest(
-            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
-            sessionID: 1, connectionID: 1, selfNick: "me")
-        controller.applySessionForTest(
-            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b",
-            sessionID: 2, connectionID: 1, selfNick: "me")
-        let aID = controller.sessionUUID(for: .runtime(id: 1))!
-        let bID = controller.sessionUUID(for: .runtime(id: 2))!
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
 
-        // Primary window: mirror is on. Mutations must write through synchronously.
-        let primary = WindowSession(controller: controller, initial: aID, isPrimary: true)
-        XCTAssertEqual(
-            controller.selectedSessionID, aID,
-            "init with isPrimary must seed controller.selectedSessionID")
-        primary.focusedSessionID = bID
-        XCTAssertEqual(
-            controller.selectedSessionID, bID,
-            "primary window mutation must mirror to controller synchronously")
+        let window = WindowSession(controller: controller, initial: aID)
+        XCTAssertEqual(controller.focusRefcount[aID], 1, "init with non-nil initial registers a refcount")
+        XCTAssertEqual(controller.lastFocusedSessionID, aID)
 
-        // Secondary window: mirror is off. Mutations must NOT touch the controller.
-        let secondary = WindowSession(controller: controller, initial: aID, isPrimary: false)
-        XCTAssertEqual(
-            controller.selectedSessionID, bID,
-            "secondary window init must not move controller.selectedSessionID")
-        secondary.focusedSessionID = nil
-        XCTAssertNil(secondary.focusedSessionID, "secondary.focusedSessionID must update locally")
-        XCTAssertEqual(
-            controller.selectedSessionID, bID,
-            "secondary window mutation must not move controller.selectedSessionID")
+        _ = window  // keep window alive; suppress unused warning
+    }
+
+    func testTwoWindowSessionsTrackFocusIndependently() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let bID = controller.sessions.first(where: { $0.channel == "#b" })!.id
+
+        let win1 = WindowSession(controller: controller, initial: aID)
+        let win2 = WindowSession(controller: controller, initial: bID)
+        XCTAssertEqual(controller.focusRefcount[aID], 1)
+        XCTAssertEqual(controller.focusRefcount[bID], 1)
+
+        win1.focusedSessionID = bID
+        XCTAssertNil(controller.focusRefcount[aID])
+        XCTAssertEqual(controller.focusRefcount[bID], 2, "two windows on B contribute 2")
+        XCTAssertEqual(controller.lastFocusedSessionID, bID)
+
+        _ = win2
+    }
+
+    func testWindowSessionDeinitDecrementsRefcount() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+
+        do {
+            let window = WindowSession(controller: controller, initial: aID)
+            XCTAssertEqual(controller.focusRefcount[aID], 1)
+            _ = window
+        }  // window goes out of scope; deinit fires
+        XCTAssertNil(controller.focusRefcount[aID], "deinit must remove the refcount entry")
+        // lastFocusedSessionID survives deinit by design.
+        XCTAssertEqual(controller.lastFocusedSessionID, aID)
     }
 
     func testPrefillPrivateMessageInvokedFromDropPath() {

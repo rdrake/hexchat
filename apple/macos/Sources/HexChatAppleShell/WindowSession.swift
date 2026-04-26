@@ -5,48 +5,53 @@ import SwiftUI
 @MainActor
 @Observable
 final class WindowSession {
-    /// True for the *primary* (first-opened) window only. When true,
-    /// `focusedSessionID` writes through synchronously to
-    /// `controller.selectedSessionID` so the legacy single-window code path
-    /// (and its existing test corpus) keep working unchanged.
-    ///
-    /// TODO(Phase-9): If the primary window closes, `controller.selectedSessionID`
-    /// becomes stale (still pointing at the closed window's last focus). Phase 9
-    /// either decommissions the mirror entirely (preferred) or promotes a
-    /// secondary to primary on close.
-    var isPrimary: Bool = false
-
-    /// The conversation focused in this window. Mutating fires
-    /// `controller.markRead(forSession:)` for the new value (only when non-nil).
-    /// On the primary window, also mirrors the new value to
-    /// `controller.selectedSessionID`.
+    /// The conversation focused in this window. Mutating reports the transition
+    /// to the controller, which (a) updates `focusRefcount`, (b) updates
+    /// `lastFocusedSessionID`, and (c) calls `markReadInternal(forSession:)` for
+    /// the new value. Same-value writes short-circuit before the controller call.
     var focusedSessionID: UUID? {
         didSet {
             guard focusedSessionID != oldValue else { return }
-            if let id = focusedSessionID {
-                controller?.markRead(forSession: id)
-            }
-            if isPrimary {
-                controller?.selectedSessionID = focusedSessionID
-            }
+            controller?.recordFocusTransition(from: oldValue, to: focusedSessionID)
         }
     }
 
-    weak var controller: EngineController?
+    /// The controller this window reports focus changes to. Marked
+    /// `nonisolated(unsafe)` so `deinit` (which cannot be `@MainActor`-isolated
+    /// in Swift) can read it. Only ever mutated on `@MainActor`, so the
+    /// "unsafe" is reasoning-protected. Declared as a strong (not weak)
+    /// reference because `weak var` is implicitly `nonisolated` in Swift and
+    /// `nonisolated(unsafe)` cannot be applied to `weak` properties; the
+    /// controller structurally outlives all window sessions.
+    nonisolated(unsafe) var controller: EngineController?
 
-    init(controller: EngineController?, initial: UUID? = nil, isPrimary: Bool = false) {
+    init(controller: EngineController?, initial: UUID? = nil) {
         self.controller = controller
-        self.isPrimary = isPrimary
+        // Set the property *before* triggering recordFocusTransition so the
+        // controller observes the new state. didSet only fires when the value
+        // actually changes from oldValue (nil) to initial; if initial is nil
+        // the didSet short-circuits — desired.
         self.focusedSessionID = initial
-        // markRead is fired:
-        //   - via controller.selectedSessionID's didSet for primary windows
-        //     (the `if isPrimary` line below assigns it)
-        //   - via the explicit call here for secondary windows (no mirror)
-        if let initial, !isPrimary {
-            controller?.markRead(forSession: initial)
+        if let initial {
+            controller?.recordFocusTransition(from: nil, to: initial)
         }
-        if isPrimary {
-            controller?.selectedSessionID = initial
+    }
+
+    deinit {
+        // `deinit` cannot be `@MainActor`-isolated in Swift. Use
+        // `MainActor.assumeIsolated` to call the controller method
+        // synchronously — the alternative `Task { @MainActor in ... }` has a
+        // one-frame race where a message arriving in the next runloop turn
+        // could slip past the suppression. WindowSession is only ever
+        // released on @MainActor (SwiftUI scene teardown), so the assumption
+        // is sound.
+        //
+        // `controller` is nonisolated(unsafe) so it can be captured below.
+        // `focusedSessionID` is main-actor isolated, so it must be read inside
+        // the assumeIsolated block.
+        let controllerRef = controller
+        MainActor.assumeIsolated {
+            controllerRef?.recordFocusTransition(from: self.focusedSessionID, to: nil)
         }
     }
 }
