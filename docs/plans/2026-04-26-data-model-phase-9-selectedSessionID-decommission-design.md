@@ -241,6 +241,8 @@ Verify: `grep -rn 'selectedSessionID\|isPrimary\|bindToControllerAsPrimary' appl
 
 ## Manual Smoke Checklist (Task 8)
 
+> **Status:** Deferred to human verification — automated execution can't run a SwiftUI GUI. All items below remain to be validated against a built `.app` via Xcode before the PR merges.
+
 - [ ] Cold launch with no prior state → first session focuses, no crash.
 - [ ] Focus channel A, quit, relaunch → channel A focuses (via `lastFocusedKey` + deferred resolution on first re-emit).
 - [ ] Open second window via `Cmd+Opt+T`, focus channel B in window 2 while window 1 stays on A → both correct, independent.

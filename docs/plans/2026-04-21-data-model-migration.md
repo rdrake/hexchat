@@ -58,7 +58,7 @@ Conversation 1──1 ConversationState
 
 ---
 
-## Roadmap (8 phases)
+## Roadmap (9 phases)
 
 Each phase is independently shippable. The app remains fully functional between phases. Each phase gets its own dedicated plan document when its predecessor lands; this document expands **Phase 1** in full TDD detail.
 
@@ -73,6 +73,7 @@ Each phase is independently shippable. The app remains fully functional between 
 | 7 | **Message persistence + pagination** ✅ | SQLite-backed `messages.sqlite` with per-conversation in-memory ring + paginated `loadOlder` back-fill. IRCv3 `draft/chathistory` server bridge deferred to Phase 7.5. | Higher | [docs/plans/2026-04-24-data-model-phase-7-message-persistence.md](2026-04-24-data-model-phase-7-message-persistence.md) |
 | 7.5 | **IRCv3 `draft/chathistory` server bridge** ✅ | `loadOlder` becomes two-tier: SQLite first, then `CHATHISTORY BEFORE` over a new C shim when local rows fall short. SQLite schema v2 adds `(network_id, channel_lower, server_msgid, timestamp_ms)` UNIQUE INDEX so reconnect replays dedup. `MessageStore.append` returns Bool; ring insertion-sort handles out-of-order replays. | Med | [docs/plans/2026-04-25-data-model-phase-7-5-chathistory-bridge.md](2026-04-25-data-model-phase-7-5-chathistory-bridge.md) |
 | 8 | **Transferable + Multi-window** ✅ | Domain types conform to `Transferable` via `CodableRepresentation(.json) + ProxyRepresentation(\.plainText)`. Per-scene `WindowSession` holds focused conversation; primary window mirrors to `controller.selectedSessionID`. Drag a sidebar channel to refocus, drag a user nick into the input to prefill `/msg`. `Cmd+Opt+T` opens a fresh window seeded on the focused session via `@FocusedValue`. `@SceneStorage` round-trips per-window focus across window-state restoration. | Low | [docs/plans/2026-04-26-data-model-phase-8-transferable-multi-window.md](2026-04-26-data-model-phase-8-transferable-multi-window.md) |
+| 9 | **Decommission `selectedSessionID`** ✅ | `WindowSession.focusedSessionID` becomes the sole focus authority. Per-controller `[UUID: Int] focusRefcount` (maintained by `WindowSession` via `recordFocusTransition(from:to:)`) replaces the legacy `selectedSessionID`-equality check in unread suppression. `WindowSession.deinit` decrements synchronously via `MainActor.assumeIsolated`. New `lastFocusedSessionID` (persisted as `lastFocusedKey`) drives cold-launch focus restoration via `pendingLastFocusedKey` deferred resolution inside `upsertSession` — fixes a latent Phase 8 bug where the persisted focus key was decoded but never applied. `Cmd+N` suppressed via `CommandGroup(replacing: .newItem) {}`; `Cmd+Opt+T` is the supported new-window path. | Low | [docs/plans/2026-04-26-data-model-phase-9-selectedSessionID-decommission.md](2026-04-26-data-model-phase-9-selectedSessionID-decommission.md) |
 
 ### Explicit non-goals
 
