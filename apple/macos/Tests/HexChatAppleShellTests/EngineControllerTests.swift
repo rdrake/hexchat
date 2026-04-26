@@ -2976,6 +2976,8 @@ final class EngineControllerTests: XCTestCase {
             "global messages array also must not contain a row whose write failed")
     }
 
+    // MARK: - Phase 8 — WindowSession + multi-window helpers
+
     func testWindowSessionFocusFiresMarkRead() {
         let controller = EngineController()
         controller.upsertNetworkForTest(id: UUID(), name: "Libera")
@@ -3193,6 +3195,18 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(
             joinMsg.plainTextDescription, "alice has joined #a",
             "kinds without a body fall through to .raw")
+    }
+
+    func testNetworkTransferableExportsDisplayNameAsPlainText() {
+        let network = Network(id: UUID(), displayName: "Libera Chat")
+        XCTAssertEqual(network.plainTextDescription, "Libera Chat")
+    }
+
+    func testConnectionTransferableExportsServerNameAsPlainText() {
+        let conn = Connection(
+            id: UUID(), networkID: UUID(),
+            serverName: "irc.libera.chat", selfNick: nil, haveChathistory: false)
+        XCTAssertEqual(conn.plainTextDescription, "irc.libera.chat")
     }
 
     func testConnectionDecoderTreatsMissingHaveChathistoryAsFalse() throws {

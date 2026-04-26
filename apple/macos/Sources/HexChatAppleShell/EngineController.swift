@@ -1150,6 +1150,12 @@ final class EngineController {
         prefillPrivateMessage(to: nick, forSession: selectedSessionID)
     }
 
+    /// TODO(Phase-9): `browseHistory` is not multi-window-safe. It reads/writes the
+    /// controller-global `historyDraft`/`historyCursor` and routes through
+    /// `selectedSessionID` (the primary-window mirror). A secondary window calling
+    /// this method clobbers the primary window's draft. Fix: take a `forSession:`
+    /// parameter and scope `historyDraft`/`historyCursor` per-session, or attach
+    /// them to `WindowSession`.
     func browseHistory(delta: Int) {
         guard !commandHistory.isEmpty else {
             return

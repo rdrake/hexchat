@@ -113,6 +113,7 @@ struct ContentView: View {
                 .disabled(!controller.isRunning)
 
                 Button("Quit") {
+                    // Intentionally global: quit is connection-scoped, not window-scoped.
                     controller.send("quit")
                 }
                 .disabled(!controller.isRunning)
@@ -139,20 +140,22 @@ struct ContentView: View {
             .listStyle(.plain)
 
             CommandInputView(
-                text: controller.draftBinding(for: window.focusedSessionID),
+                text: focusedDraft,
                 onSubmit: {
-                    let draft = controller.draftBinding(for: window.focusedSessionID)
+                    let draft = focusedDraft
                     controller.send(draft.wrappedValue, forSession: window.focusedSessionID)
                     draft.wrappedValue = ""
                 },
                 onHistory: { delta in
+                    // Intentionally calls the legacy global API; per-window history is a
+                    // Phase-9 follow-up. See EngineController.browseHistory's TODO.
                     controller.browseHistory(delta: delta)
                 }
             )
             .frame(minHeight: 72, maxHeight: 110)
             .overlay(alignment: .trailing) {
                 Button("Send") {
-                    let draft = controller.draftBinding(for: window.focusedSessionID)
+                    let draft = focusedDraft
                     controller.send(draft.wrappedValue, forSession: window.focusedSessionID)
                     draft.wrappedValue = ""
                 }
@@ -196,8 +199,12 @@ struct ContentView: View {
         }
     }
 
+    private var focusedDraft: Binding<String> {
+        controller.draftBinding(for: window.focusedSessionID)
+    }
+
     private var isDraftEmpty: Bool {
-        controller.draftBinding(for: window.focusedSessionID).wrappedValue
+        focusedDraft.wrappedValue
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
