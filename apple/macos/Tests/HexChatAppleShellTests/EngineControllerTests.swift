@@ -83,23 +83,24 @@ final class EngineControllerTests: XCTestCase {
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#hexchat",
             connectionID: 1)
         let conn = controller.connectionsByServerID[1]!
-        controller.selectedSessionID = controller.sessionUUID(
+        let sessionID = controller.sessionUUID(
             for: .composed(connectionID: conn, channel: "#hexchat"))
-        controller.send("/join #hexchat")
-        controller.send("/msg alice hi")
-        controller.input = "/nick newname"
+        controller.selectedSessionID = sessionID
+        controller.send("/join #hexchat", forSession: sessionID, trackHistory: true)
+        controller.send("/msg alice hi", forSession: sessionID, trackHistory: true)
+        controller.draftBinding(for: sessionID).wrappedValue = "/nick newname"
 
         controller.browseHistory(delta: -1)
-        XCTAssertEqual(controller.input, "/msg alice hi")
+        XCTAssertEqual(controller.draftBinding(for: sessionID).wrappedValue, "/msg alice hi")
 
         controller.browseHistory(delta: -1)
-        XCTAssertEqual(controller.input, "/join #hexchat")
+        XCTAssertEqual(controller.draftBinding(for: sessionID).wrappedValue, "/join #hexchat")
 
         controller.browseHistory(delta: 1)
-        XCTAssertEqual(controller.input, "/msg alice hi")
+        XCTAssertEqual(controller.draftBinding(for: sessionID).wrappedValue, "/msg alice hi")
 
         controller.browseHistory(delta: 1)
-        XCTAssertEqual(controller.input, "/nick newname")
+        XCTAssertEqual(controller.draftBinding(for: sessionID).wrappedValue, "/nick newname")
     }
 
     func testMessageClassifier() {
@@ -256,50 +257,6 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertTrue(seen.contains(.composed(connectionID: conn1, channel: "#A")))
     }
 
-    func testVisibleSessionIDFallbackWhenNoSessions() {
-        let controller = EngineController()
-        XCTAssertTrue(controller.sessions.isEmpty)
-        // With no sessions, visibleSessionID must return the system session's composed key
-        // (UUID-based since the flip). Verify it is non-empty and consistent.
-        let id1 = controller.visibleSessionID
-        let id2 = controller.visibleSessionID
-        XCTAssertEqual(id1, id2, "visibleSessionID must be stable across calls")
-        XCTAssertFalse(id1.isEmpty, "visibleSessionID must not be empty")
-        XCTAssertTrue(id1.hasSuffix("::server"), "visibleSessionID must end with ::server for system session")
-        // And visibleMessages must simply be empty, not crash.
-        XCTAssertTrue(controller.visibleMessages.isEmpty)
-        XCTAssertTrue(controller.visibleUsers.isEmpty)
-    }
-
-    func testVisibleSessionIDPrefersSelectedOverActiveOverFirst() {
-        let controller = EngineController()
-        controller.applySessionForTest(
-            action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#a",
-            connectionID: 1, selfNick: "me")
-        controller.applySessionForTest(
-            action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#b",
-            connectionID: 1, selfNick: "me")
-
-        let conn = controller.connectionsByServerID[1]!
-        let aUUID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
-        controller.selectedSessionID = aUUID
-        XCTAssertEqual(
-            controller.visibleSessionID,
-            SessionLocator.composed(connectionID: conn, channel: "#a").composedKey,
-            "selected takes precedence over active")
-        controller.selectedSessionID = nil
-        XCTAssertEqual(
-            controller.visibleSessionID,
-            SessionLocator.composed(connectionID: conn, channel: "#b").composedKey,
-            "active chosen when selected is nil")
-        controller.activeSessionID = nil
-        // both selected and active are now nil — should fall back to sessions.first
-        // sessions are sorted so #a comes first alphabetically.
-        XCTAssertEqual(
-            controller.visibleSessionID,
-            SessionLocator.composed(connectionID: conn, channel: "#a").composedKey,
-            "first session used when both selected and active are nil")
-    }
 
     func testChatSessionCarriesStableUUIDAcrossMutations() {
         var session = ChatSession(connectionID: UUID(), channel: "#a", isActive: false)
@@ -2028,25 +1985,22 @@ final class EngineControllerTests: XCTestCase {
         let keyA = ConversationKey(networkID: netID, channel: "#a")
         let keyB = ConversationKey(networkID: netID, channel: "#b")
 
-        controller.selectedSessionID = sessA.id
-        controller.input = "typing in A"
+        controller.draftBinding(for: sessA.id).wrappedValue = "typing in A"
         XCTAssertEqual(controller.conversations[keyA]?.draft, "typing in A")
 
-        controller.selectedSessionID = sessB.id
-        XCTAssertEqual(controller.input, "")
-        controller.input = "typing in B"
+        XCTAssertEqual(controller.draftBinding(for: sessB.id).wrappedValue, "")
+        controller.draftBinding(for: sessB.id).wrappedValue = "typing in B"
         XCTAssertEqual(controller.conversations[keyB]?.draft, "typing in B")
 
-        controller.selectedSessionID = sessA.id
-        XCTAssertEqual(controller.input, "typing in A")
+        XCTAssertEqual(controller.draftBinding(for: sessA.id).wrappedValue, "typing in A")
     }
 
     func testInputWithNoSelectedSessionIsNoOp() {
         let controller = EngineController(
             persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
-        XCTAssertEqual(controller.input, "")
-        controller.input = "ignored"
-        XCTAssertEqual(controller.input, "")
+        XCTAssertEqual(controller.draftBinding(for: nil).wrappedValue, "")
+        controller.draftBinding(for: nil).wrappedValue = "ignored"
+        XCTAssertEqual(controller.draftBinding(for: nil).wrappedValue, "")
         XCTAssertTrue(controller.conversations.isEmpty)
     }
 
@@ -3063,12 +3017,6 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.visibleMessages(for: bID).map(\.raw), ["hello-b"])
         XCTAssertTrue(controller.visibleSessionTitle(for: aID).contains("#a"))
         XCTAssertTrue(controller.visibleSessionTitle(for: bID).contains("#b"))
-
-        // Legacy parameterless still delegates to selectedSessionID:
-        controller.selectedSessionID = aID
-        XCTAssertEqual(controller.visibleMessages.map(\.raw), ["hello-a"])
-        controller.selectedSessionID = bID
-        XCTAssertEqual(controller.visibleMessages.map(\.raw), ["hello-b"])
     }
 
     func testDraftBindingForSessionScopesPerSession() {

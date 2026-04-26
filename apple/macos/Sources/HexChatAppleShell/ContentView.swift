@@ -114,7 +114,7 @@ struct ContentView: View {
 
                 Button("Quit") {
                     // Intentionally global: quit is connection-scoped, not window-scoped.
-                    controller.send("quit")
+                    controller.send("quit", forSession: nil, trackHistory: false)
                 }
                 .disabled(!controller.isRunning)
             }
