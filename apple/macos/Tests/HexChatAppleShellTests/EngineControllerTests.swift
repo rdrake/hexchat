@@ -3668,6 +3668,147 @@ final class EngineControllerTests: XCTestCase {
         withExtendedLifetime(win1) {}
         withExtendedLifetime(win2) {}
     }
+
+    // MARK: - Task 3: Per-window unread bump in recordActivity
+
+    func testRecordActivityBumpsNonFocusedWindow() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let bID = controller.sessions.first(where: { $0.channel == "#b" })!.id
+
+        let window = WindowSession(controller: controller, initial: aID)
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: bID, raw: "ping", kind: .message(body: "ping")))
+        XCTAssertEqual(window.unread[bID, default: 0], 1,
+                       "non-focused session must bump per-window unread")
+        XCTAssertEqual(window.unread[aID, default: 0], 0,
+                       "focused session must not bump per-window unread")
+        withExtendedLifetime(window) {}
+    }
+
+    func testRecordActivityFocusedWindowStaysAtZero() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+
+        let window = WindowSession(controller: controller, initial: aID)
+        for i in 0..<10 {
+            controller.appendMessageForTest(
+                ChatMessage(sessionID: aID, raw: "msg \(i)", kind: .message(body: "msg \(i)")))
+        }
+        XCTAssertEqual(window.unread[aID, default: 0], 0,
+                       "10 messages in focused session must keep per-window unread at 0")
+        withExtendedLifetime(window) {}
+    }
+
+    func testRecordActivityTwoWindowsTrackIndependently() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let bID = controller.sessions.first(where: { $0.channel == "#b" })!.id
+
+        let winA = WindowSession(controller: controller, initial: aID)
+        let winB = WindowSession(controller: controller, initial: bID)
+
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: bID, raw: "ping b", kind: .message(body: "ping b")))
+        XCTAssertEqual(winA.unread[bID, default: 0], 1, "winA didn't focus B → bumps")
+        XCTAssertEqual(winB.unread[bID, default: 0], 0, "winB focused B → stays 0")
+
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: aID, raw: "ping a", kind: .message(body: "ping a")))
+        XCTAssertEqual(winA.unread[aID, default: 0], 0, "winA focused A → stays 0")
+        XCTAssertEqual(winB.unread[aID, default: 0], 1, "winB didn't focus A → bumps")
+        withExtendedLifetime(winA) {}
+        withExtendedLifetime(winB) {}
+    }
+
+    func testRecordActivityBothWindowsFocusedSameSessionStaysAtZero() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+
+        let winA = WindowSession(controller: controller, initial: aID)
+        let winB = WindowSession(controller: controller, initial: aID)
+
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: aID, raw: "ping", kind: .message(body: "ping")))
+        XCTAssertEqual(winA.unread[aID, default: 0], 0)
+        XCTAssertEqual(winB.unread[aID, default: 0], 0)
+        withExtendedLifetime(winA) {}
+        withExtendedLifetime(winB) {}
+    }
+
+    func testRecordActivityGlobalCounterStillSuppressedByAnyFocus() {
+        // Regression: existing focusRefcount-based global suppression must
+        // continue to work alongside the new per-window bump.
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+
+        let window = WindowSession(controller: controller, initial: aID)
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: aID, raw: "ping", kind: .message(body: "ping")))
+        XCTAssertEqual(controller.conversations[key]?.unread ?? 0, 0,
+                       "focusRefcount-based global suppression unchanged")
+        withExtendedLifetime(window) {}
+    }
+
+    func testRecordActivityGlobalCounterBumpsWhenNoWindowFocused() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let bID = controller.sessions.first(where: { $0.channel == "#b" })!.id
+        let bKey = controller.conversationKey(for: bID)!
+
+        let window = WindowSession(controller: controller, initial: aID)
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: bID, raw: "ping", kind: .message(body: "ping")))
+        XCTAssertEqual(controller.conversations[bKey]?.unread ?? 0, 1)
+        withExtendedLifetime(window) {}
+    }
+
+    func testRecordActivitySystemPseudoSessionDoesNotBumpAnyCounter() {
+        let controller = EngineController()
+        let window = WindowSession(controller: controller, initial: nil)
+
+        // Step 1: trigger creation of the system pseudo-session via an
+        // unattributed message. resolveMessageSessionID(event:nil) falls through
+        // to systemSessionUUID(), lazily populating systemSessionUUIDStorage.
+        controller.appendUnattributedForTest(
+            raw: "console banner",
+            kind: .lifecycle(phase: "info", body: "console banner"))
+
+        let systemConn = controller.systemConnectionUUIDForTest()
+        let systemUUID = controller.sessions.first(where: { $0.connectionID == systemConn })!.id
+
+        // Step 2: send an *attributed* message (attributed:true path) directly to
+        // the system-pseudo-session UUID. This is the code path that hits
+        // `recordActivity(on:)` — appendMessageForTest calls append(attributed:true)
+        // which calls recordActivity. The guard `sessionID != systemSessionUUIDStorage`
+        // must intercept and return without bumping any counter.
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: systemUUID, raw: "server banner",
+                        kind: .lifecycle(phase: "info", body: "server banner")))
+
+        XCTAssertTrue(window.unread.isEmpty,
+                      "system pseudo-session must not bump per-window unread")
+        let key = controller.conversationKey(for: systemUUID)
+        if let key {
+            XCTAssertEqual(controller.conversations[key]?.unread ?? 0, 0,
+                           "system pseudo-session must not bump global unread either")
+        }
+        // The system session may have no ConversationKey (system connection isn't
+        // a real network connection); in that case the global guard's
+        // `let key = conversationKey(for: sessionID)` would have bailed too. The
+        // per-window early-return is what makes the standalone guard correct.
+        withExtendedLifetime(window) {}
+    }
 }
 #else
 @testable import HexChatAppleShell
