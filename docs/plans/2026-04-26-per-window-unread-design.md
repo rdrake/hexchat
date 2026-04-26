@@ -1,6 +1,6 @@
 # Per-Window Unread Counts — Design
 
-**Status:** Draft for human review (2026-04-26).
+**Status:** Shipped (2026-04-26).
 **Phase:** Phase 10, item 1 (the Phase 8 follow-up listed at the bottom of [Phase 9 plan](2026-04-26-data-model-phase-9-selectedSessionID-decommission.md#done)).
 **Companion plan:** [2026-04-26-per-window-unread.md](2026-04-26-per-window-unread.md).
 
@@ -213,7 +213,7 @@ HStack(spacing: 8) {
 }
 ```
 
-Style is intentionally minimal — accent-colour pill, hidden when zero. Caps at no upper bound for now (we can clip to "99+" if it becomes a problem; YAGNI).
+Style is intentionally minimal — accent-colour pill, hidden when zero. Caps at "99+" via a `count > 99 ? "99+" : "\(count)"` ternary in the helper — cheap insurance against runaway counters in long-running sessions.
 
 ## 9. Testing strategy
 

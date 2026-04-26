@@ -3596,6 +3596,7 @@ final class EngineControllerTests: XCTestCase {
         let controller = EngineController()
         let window = WindowSession(controller: controller, initial: nil)
         XCTAssertTrue(window.unread.isEmpty)
+        withExtendedLifetime(window) {}
     }
 
     func testWindowSessionFocusClearsItsOwnUnread() {

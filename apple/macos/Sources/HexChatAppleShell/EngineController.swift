@@ -796,9 +796,10 @@ final class EngineController {
             if let window = box.window {
                 body(window)
             } else {
-                // Safe to mutate during iteration: Dictionary is CoW, so removeValue
-                // allocates a new buffer while the iterator continues traversing the
-                // old one. Boxes already visited are not revisited.
+                // Safe: Swift for-in over a Dictionary captures a copy of the value
+                // into the iterator at loop start (value-type copy semantics).
+                // Mutating self.weakWindows does not disturb the iterator's snapshot;
+                // entries already visited are not revisited.
                 weakWindows.removeValue(forKey: key)
             }
         }
