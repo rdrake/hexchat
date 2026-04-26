@@ -3639,6 +3639,35 @@ final class EngineControllerTests: XCTestCase {
                        "focus → nil is not mark-read; unread map is unchanged")
         withExtendedLifetime(window) {}
     }
+
+    func testWindowRegistryRegistersOnInit() {
+        let controller = EngineController()
+        XCTAssertEqual(controller.registeredWindowCountForTest, 0)
+        let window = WindowSession(controller: controller, initial: nil)
+        XCTAssertEqual(controller.registeredWindowCountForTest, 1)
+        withExtendedLifetime(window) {}
+    }
+
+    func testWindowRegistryUnregistersOnDeinit() {
+        let controller = EngineController()
+        do {
+            let window = WindowSession(controller: controller, initial: nil)
+            withExtendedLifetime(window) {
+                XCTAssertEqual(controller.registeredWindowCountForTest, 1)
+            }
+        }
+        XCTAssertEqual(controller.registeredWindowCountForTest, 0,
+                       "deinit must unregister synchronously via MainActor.assumeIsolated")
+    }
+
+    func testWindowRegistryTracksMultipleWindowsIndependently() {
+        let controller = EngineController()
+        let win1 = WindowSession(controller: controller, initial: nil)
+        let win2 = WindowSession(controller: controller, initial: nil)
+        XCTAssertEqual(controller.registeredWindowCountForTest, 2)
+        withExtendedLifetime(win1) {}
+        withExtendedLifetime(win2) {}
+    }
 }
 #else
 @testable import HexChatAppleShell

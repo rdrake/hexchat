@@ -749,6 +749,60 @@ final class EngineController {
         }
     }
 
+    // MARK: - Phase 10: per-window unread registry
+
+    /// Weak pointer wrapper. The controller holds non-owning references so window
+    /// lifetime is governed by SwiftUI scene teardown — the controller never
+    /// keeps a window alive past its scene.
+    private final class WeakWindowBox {
+        weak var window: WindowSession?
+        init(window: WindowSession) { self.window = window }
+    }
+
+    /// Registered `WindowSession`s, keyed by `ObjectIdentifier`. Mutated only on
+    /// `@MainActor`. Used by `recordActivity(on:)` to broadcast unread bumps and
+    /// by the REMOVE session-event branch to scrub stale UUID keys from each
+    /// window's `unread` map.
+    private var weakWindows: [ObjectIdentifier: WeakWindowBox] = [:]
+
+    /// Register a `WindowSession` with the controller. Called from
+    /// `WindowSession.init`. Idempotent on the same identity.
+    func registerWindow(_ window: WindowSession) {
+        weakWindows[ObjectIdentifier(window)] = WeakWindowBox(window: window)
+    }
+
+    /// Unregister a `WindowSession`. Called from `WindowSession.deinit` inside
+    /// `MainActor.assumeIsolated` so registry mutation is serialised with
+    /// `recordFocusTransition`.
+    func unregisterWindow(_ window: WindowSession) {
+        weakWindows.removeValue(forKey: ObjectIdentifier(window))
+    }
+
+    /// Iterate live registered windows. Lazily prunes any boxes whose weak ref
+    /// has been dropped (defensive — `unregisterWindow` should already have
+    /// fired).
+    private func iterateRegisteredWindows(_ body: (WindowSession) -> Void) {
+        for (key, box) in weakWindows {
+            if let window = box.window {
+                body(window)
+            } else {
+                // Safe to mutate during iteration: Dictionary is CoW, so removeValue
+                // allocates a new buffer while the iterator continues traversing the
+                // old one. Boxes already visited are not revisited.
+                weakWindows.removeValue(forKey: key)
+            }
+        }
+    }
+
+    /// Test-only. Returns the count of live registered windows, pruning any
+    /// boxes whose weak ref has been dropped as a side effect (because
+    /// `iterateRegisteredWindows` does the prune).
+    var registeredWindowCountForTest: Int {
+        var count = 0
+        iterateRegisteredWindows { _ in count += 1 }
+        return count
+    }
+
     var activeSessionID: UUID?
 
     private(set) var sessionByLocator: [SessionLocator: UUID] = [:]

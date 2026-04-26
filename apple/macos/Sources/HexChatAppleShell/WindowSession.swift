@@ -37,6 +37,7 @@ final class WindowSession {
 
     init(controller: EngineController?, initial: UUID? = nil) {
         self.controller = controller
+        controller?.registerWindow(self)
         // Optional stored properties are implicitly nil-initialized, so this
         // assignment is a re-assignment from nil → initial and didSet fires —
         // it routes through recordFocusTransition for us. A nil `initial`
@@ -58,6 +59,7 @@ final class WindowSession {
         // must be read inside the assumeIsolated block.
         let controllerRef = controller
         MainActor.assumeIsolated {
+            controllerRef?.unregisterWindow(self)
             controllerRef?.recordFocusTransition(from: self.focusedSessionID, to: nil)
         }
     }
