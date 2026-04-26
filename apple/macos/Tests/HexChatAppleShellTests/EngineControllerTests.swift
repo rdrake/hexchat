@@ -3809,6 +3809,24 @@ final class EngineControllerTests: XCTestCase {
         // per-window early-return is what makes the standalone guard correct.
         withExtendedLifetime(window) {}
     }
+
+    func testSessionRemoveScrubsStaleUUIDFromWindowUnread() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let bID = controller.sessions.first(where: { $0.channel == "#b" })!.id
+
+        let window = WindowSession(controller: controller, initial: aID)
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: bID, raw: "ping", kind: .message(body: "ping")))
+        XCTAssertEqual(window.unread[bID, default: 0], 1)
+
+        controller.applySessionForTest(action: HC_APPLE_SESSION_REMOVE, network: "Libera", channel: "#b")
+        XCTAssertNil(window.unread[bID],
+                     "REMOVE must scrub the UUID key from every window's unread map")
+        withExtendedLifetime(window) {}
+    }
 }
 #else
 @testable import HexChatAppleShell

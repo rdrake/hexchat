@@ -1810,6 +1810,10 @@ final class EngineController {
                 historyCursorBySession.removeValue(forKey: uuid)
                 historyDraftBySession.removeValue(forKey: uuid)
                 if lastFocusedSessionID == uuid { lastFocusedSessionID = nil }
+                // Phase 10: scrub stale UUID keys from per-window unread maps so they
+                // don't accumulate across REMOVE/UPSERT cycles. Sidebars only iterate
+                // current sessions, so the entries would be invisible — this is hygiene.
+                iterateRegisteredWindows { $0.unread.removeValue(forKey: uuid) }
                 // Evaluated against the still-intact `sessions` array, before the removeAll call below.
                 if activeSessionID == uuid { activeSessionID = sessions.first(where: { $0.id != uuid })?.id }
                 sessions.removeAll { $0.id == uuid }
