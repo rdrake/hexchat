@@ -396,25 +396,25 @@ struct AppState: Codable, Hashable {
     var schemaVersion: Int
     var networks: [Network]
     var conversations: [ConversationState]
-    var selectedKey: ConversationKey?
+    var lastFocusedKey: ConversationKey?
     var commandHistory: [String]
 
     init(
         schemaVersion: Int = AppState.currentSchemaVersion,
         networks: [Network] = [],
         conversations: [ConversationState] = [],
-        selectedKey: ConversationKey? = nil,
+        lastFocusedKey: ConversationKey? = nil,
         commandHistory: [String] = []
     ) {
         self.schemaVersion = schemaVersion
         self.networks = networks
         self.conversations = conversations
-        self.selectedKey = selectedKey
+        self.lastFocusedKey = lastFocusedKey
         self.commandHistory = commandHistory
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, networks, conversations, selectedKey, commandHistory
+        case schemaVersion, networks, conversations, lastFocusedKey, commandHistory
     }
 
     init(from decoder: Decoder) throws {
@@ -426,7 +426,7 @@ struct AppState: Codable, Hashable {
         self.schemaVersion = version
         self.networks = try c.decode([Network].self, forKey: .networks)
         self.conversations = try c.decode([ConversationState].self, forKey: .conversations)
-        self.selectedKey = try c.decodeIfPresent(ConversationKey.self, forKey: .selectedKey)
+        self.lastFocusedKey = try c.decodeIfPresent(ConversationKey.self, forKey: .lastFocusedKey)
         self.commandHistory = try c.decode([String].self, forKey: .commandHistory)
     }
 }
@@ -996,7 +996,7 @@ final class EngineController {
                 }
                 return $0.key.channel.lowercased() < $1.key.channel.lowercased()
             },
-            selectedKey: selectedSessionID.flatMap(conversationKey(for:)),
+            lastFocusedKey: lastFocusedSessionID.flatMap(conversationKey(for:)),
             commandHistory: commandHistory
         )
     }
@@ -1015,11 +1015,14 @@ final class EngineController {
             state.conversations.map { ($0.key, $0) },
             uniquingKeysWith: { _, last in last })
         commandHistory = state.commandHistory
+        pendingLastFocusedKey = state.lastFocusedKey
     }
 
     func recordCommand(_ cmd: String) {
         commandHistory.append(cmd)
     }
+
+    func applyForTest(_ state: AppState) { apply(state) }
 
     func upsertNetworkForTest(id: UUID, name: String) {
         upsertNetwork(id: id, name: name)
@@ -1519,6 +1522,7 @@ final class EngineController {
                 coordinator?.flushNow()
                 isRunning = false
                 sessionByLocator = [:]
+                focusRefcount = [:]
                 networks = [:]
                 connections = [:]
                 networksByName = [:]
@@ -1816,6 +1820,7 @@ final class EngineController {
             if oldConnectionID != connectionID || oldChannel != channel {
                 sessions = sessions.sorted(by: sessionSort)
             }
+            resolvePendingLastFocusedIfMatches(uuid: existing)
             return existing
         }
         let new = ChatSession(
@@ -1827,7 +1832,16 @@ final class EngineController {
         sessionByLocator[targetLocator] = new.id
         sessions = sessions.sorted(by: sessionSort)
         if selectedSessionID == nil { selectedSessionID = new.id }
+        resolvePendingLastFocusedIfMatches(uuid: new.id)
         return new.id
+    }
+
+    private func resolvePendingLastFocusedIfMatches(uuid: UUID) {
+        guard let pending = pendingLastFocusedKey,
+              let key = conversationKey(for: uuid),
+              key == pending else { return }
+        lastFocusedSessionID = uuid
+        pendingLastFocusedKey = nil
     }
 
     @discardableResult

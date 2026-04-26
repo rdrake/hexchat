@@ -1824,7 +1824,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(state.schemaVersion, 1)
         XCTAssertTrue(state.networks.isEmpty)
         XCTAssertTrue(state.conversations.isEmpty)
-        XCTAssertNil(state.selectedKey)
+        XCTAssertNil(state.lastFocusedKey)
         XCTAssertTrue(state.commandHistory.isEmpty)
     }
 
@@ -1844,7 +1844,7 @@ final class EngineControllerTests: XCTestCase {
                     lastReadAt: Date(timeIntervalSince1970: 1_700_000_000)),
                 ConversationState(key: keyB),
             ],
-            selectedKey: keyA,
+            lastFocusedKey: keyA,
             commandHistory: ["/join #a", "/msg alice hi"]
         )
         let encoder = JSONEncoder()
@@ -1928,7 +1928,7 @@ final class EngineControllerTests: XCTestCase {
                     key: keyA, draft: "halfway through a thought",
                     unread: 2, lastReadAt: nil)
             ],
-            selectedKey: keyA,
+            lastFocusedKey: keyA,
             commandHistory: ["/join #a"]
         )
         let store = InMemoryPersistenceStore(initial: seeded)
@@ -3418,6 +3418,86 @@ final class EngineControllerTests: XCTestCase {
         controller.recordFocusTransition(from: aID, to: aID)
         XCTAssertEqual(controller.focusRefcount[aID], 1, "self-transition must not perturb refcount")
         XCTAssertEqual(controller.lastFocusedSessionID, aID, "self-transition must not erase lastFocusedSessionID")
+    }
+
+    func testSnapshotEmitsLastFocusedKeyFromLastFocusedSessionID() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.recordFocusTransition(from: nil, to: aID)
+
+        let snapshot = controller.snapshotForPersistence()
+        XCTAssertEqual(snapshot.lastFocusedKey, key)
+    }
+
+    func testApplyStoresLastFocusedKeyAsPendingAndUpsertResolves() {
+        let controller = EngineController()
+        // Build a snapshot whose lastFocusedKey points at a session not yet emitted.
+        // The ConversationKey shape uses (networkID, channel) — see ConversationKey
+        // definition near struct ConversationState in EngineController.swift.
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        // Tear down so we can simulate "snapshot has key but session not yet emitted":
+        controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
+
+        let snapshot = AppState(
+            schemaVersion: AppState.currentSchemaVersion,
+            networks: [],
+            conversations: [],
+            lastFocusedKey: key,
+            commandHistory: [])
+        controller.applyForTest(snapshot)
+
+        XCTAssertNil(controller.lastFocusedSessionID, "no session re-emitted yet — pending only")
+        // The C core re-emits the session:
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let resolvedID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        XCTAssertEqual(controller.lastFocusedSessionID, resolvedID, "deferred resolution must fire on first matching upsert")
+    }
+
+    func testApplyWithNoLastFocusedKeyLeavesPendingNil() {
+        let controller = EngineController()
+        let snapshot = AppState(
+            schemaVersion: AppState.currentSchemaVersion,
+            networks: [], conversations: [], lastFocusedKey: nil, commandHistory: [])
+        controller.applyForTest(snapshot)
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        XCTAssertNil(controller.lastFocusedSessionID, "no pending key — no resolution")
+    }
+
+    func testPendingLastFocusedKeySurvivesLifecycleStopped() {
+        let controller = EngineController()
+        // Set up a key that matches a future Libera/#a session.
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
+
+        let snapshot = AppState(
+            schemaVersion: AppState.currentSchemaVersion,
+            networks: [], conversations: [], lastFocusedKey: key, commandHistory: [])
+        controller.applyForTest(snapshot)
+        // Hit STOPPED again before any session re-emitted — pending key must survive.
+        controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
+        // After STOPPED, simulate reconnect: ACTIVATE the same channel.
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let resolvedID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        XCTAssertEqual(controller.lastFocusedSessionID, resolvedID, "pending key must survive STOPPED")
+    }
+
+    func testLifecycleStoppedClearsFocusRefcount() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        controller.recordFocusTransition(from: nil, to: aID)
+        XCTAssertEqual(controller.focusRefcount[aID], 1)
+
+        controller.applyLifecycleForTest(phase: HC_APPLE_LIFECYCLE_STOPPED)
+        XCTAssertTrue(controller.focusRefcount.isEmpty, "STOPPED clears refcount; live windows re-add on next focus change")
+        // lastFocusedSessionID survives STOPPED.
+        XCTAssertEqual(controller.lastFocusedSessionID, aID)
     }
 }
 #else
