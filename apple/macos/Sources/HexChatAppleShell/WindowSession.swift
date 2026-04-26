@@ -12,9 +12,18 @@ final class WindowSession {
     var focusedSessionID: UUID? {
         didSet {
             guard focusedSessionID != oldValue else { return }
+            if let new = focusedSessionID { unread[new] = 0 }
             controller?.recordFocusTransition(from: oldValue, to: focusedSessionID)
         }
     }
+
+    /// Per-window unread counts, keyed by session UUID. Bumped by
+    /// `EngineController.recordActivity(on:)` for every registered window that
+    /// does not currently focus the activity's session. Cleared for `new` in
+    /// `focusedSessionID didSet`. **Volatile** — not persisted across launches;
+    /// the global `ConversationState.unread` is the cold-launch fallback (see
+    /// the Phase 10 design doc, §5–6).
+    var unread: [UUID: Int] = [:]
 
     /// The controller this window reports focus changes to. Marked
     /// `nonisolated(unsafe)` so `deinit` (which cannot be `@MainActor`-isolated)

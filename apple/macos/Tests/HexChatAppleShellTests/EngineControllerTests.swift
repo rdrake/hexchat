@@ -3591,6 +3591,54 @@ final class EngineControllerTests: XCTestCase {
 
         withExtendedLifetime(win1) {}
     }
+
+    func testWindowSessionUnreadStartsEmpty() {
+        let controller = EngineController()
+        let window = WindowSession(controller: controller, initial: nil)
+        XCTAssertTrue(window.unread.isEmpty)
+    }
+
+    func testWindowSessionFocusClearsItsOwnUnread() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+
+        let window = WindowSession(controller: controller, initial: nil)
+        window.unread[aID] = 7
+        window.focusedSessionID = aID
+        XCTAssertEqual(window.unread[aID, default: 0], 0,
+                       "focus transition must clear this window's unread for the new session")
+        withExtendedLifetime(window) {}
+    }
+
+    func testWindowSessionSameValueWriteDoesNotClearOtherUnread() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let bID = controller.sessions.first(where: { $0.channel == "#b" })!.id
+
+        let window = WindowSession(controller: controller, initial: aID)
+        window.unread[bID] = 3
+        // Same-value write — didSet short-circuits.
+        window.focusedSessionID = aID
+        XCTAssertEqual(window.unread[bID, default: 0], 3,
+                       "didSet short-circuit must not touch unread for other sessions")
+        withExtendedLifetime(window) {}
+    }
+
+    func testWindowSessionFocusToNilLeavesUnreadAlone() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+
+        let window = WindowSession(controller: controller, initial: aID)
+        window.unread[aID] = 5
+        window.focusedSessionID = nil
+        XCTAssertEqual(window.unread[aID, default: 0], 5,
+                       "focus → nil is not mark-read; unread map is unchanged")
+        withExtendedLifetime(window) {}
+    }
 }
 #else
 @testable import HexChatAppleShell
