@@ -1,7 +1,8 @@
+import AppleAdapterBridge
 import Foundation
 import Observation
+import SwiftUI
 import os
-import AppleAdapterBridge
 
 struct ChatSession: Identifiable, Hashable {
     let id: UUID
@@ -541,20 +542,8 @@ final class EngineController {
     var sessions: [ChatSession] = []
 
     var input: String {
-        get {
-            guard let key = currentConversationKey else { return "" }
-            return conversations[key]?.draft ?? ""
-        }
-        set {
-            guard let key = currentConversationKey else { return }
-            var state = conversations[key] ?? ConversationState(key: key)
-            state.draft = newValue
-            conversations[key] = state
-        }
-    }
-
-    private var currentConversationKey: ConversationKey? {
-        selectedSessionID.flatMap(conversationKey(for:))
+        get { draftBinding(for: selectedSessionID).wrappedValue }
+        set { draftBinding(for: selectedSessionID).wrappedValue = newValue }
     }
 
     var conversations: [ConversationKey: ConversationState] = [:] {
@@ -886,24 +875,47 @@ final class EngineController {
         return session.composedKey
     }
 
-    var visibleMessages: [ChatMessage] {
-        guard let uuid = visibleSessionUUID else { return [] }
-        return messages.filter { $0.sessionID == uuid }
+    var visibleMessages: [ChatMessage] { visibleMessages(for: visibleSessionUUID) }
+    var visibleUsers: [ChatUser] { visibleUsers(for: visibleSessionUUID) }
+    var visibleSessionTitle: String { visibleSessionTitle(for: visibleSessionUUID) }
+
+    func visibleMessages(for sessionID: UUID?) -> [ChatMessage] {
+        guard let id = sessionID else { return [] }
+        return messages.filter { $0.sessionID == id }
     }
 
-    var visibleUsers: [ChatUser] {
-        guard let uuid = visibleSessionUUID else { return [] }
-        return usersBySession[uuid] ?? []
+    func visibleUsers(for sessionID: UUID?) -> [ChatUser] {
+        guard let id = sessionID else { return [] }
+        return usersBySession[id] ?? []
     }
 
-    var visibleSessionTitle: String {
-        guard let uuid = visibleSessionUUID,
-              let session = sessions.first(where: { $0.id == uuid }),
+    func visibleSessionTitle(for sessionID: UUID?) -> String {
+        guard let id = sessionID,
+              let session = sessions.first(where: { $0.id == id }),
               let name = networkDisplayName(for: session.connectionID)
         else {
             return "No Session"
         }
         return "\(name) • \(session.channel)"
+    }
+
+    func draftBinding(for sessionID: UUID?) -> Binding<String> {
+        Binding(
+            get: { [weak self] in
+                guard let self, let id = sessionID,
+                      let key = self.conversationKey(for: id)
+                else { return "" }
+                return self.conversations[key]?.draft ?? ""
+            },
+            set: { [weak self] newValue in
+                guard let self, let id = sessionID,
+                      let key = self.conversationKey(for: id)
+                else { return }
+                var state = self.conversations[key] ?? ConversationState(key: key)
+                state.draft = newValue
+                self.conversations[key] = state
+            }
+        )
     }
 
     var networkSections: [NetworkSection] {
@@ -946,7 +958,7 @@ final class EngineController {
         hc_apple_runtime_stop()
     }
 
-    func send(_ command: String, trackHistory: Bool = true) {
+    func send(_ command: String, forSession sessionID: UUID?, trackHistory: Bool = true) {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return
@@ -960,10 +972,7 @@ final class EngineController {
             historyDraft = ""
         }
 
-        let targetSessionID: UInt64 = {
-            guard let uuid = selectedSessionID else { return 0 }
-            return numericRuntimeSessionID(forSelection: uuid)
-        }()
+        let targetSessionID: UInt64 = sessionID.map(numericRuntimeSessionID(forSelection:)) ?? 0
         appendMessage(raw: "> \(trimmed)", kind: .command(body: trimmed))
         trimmed.withCString { cString in
             let code: Int32
@@ -978,8 +987,16 @@ final class EngineController {
         }
     }
 
+    func send(_ command: String, trackHistory: Bool = true) {
+        send(command, forSession: selectedSessionID, trackHistory: trackHistory)
+    }
+
+    func prefillPrivateMessage(to nick: String, forSession sessionID: UUID?) {
+        draftBinding(for: sessionID).wrappedValue = "/msg \(nick) "
+    }
+
     func prefillPrivateMessage(to nick: String) {
-        input = "/msg \(nick) "
+        prefillPrivateMessage(to: nick, forSession: selectedSessionID)
     }
 
     func browseHistory(delta: Int) {
@@ -1531,8 +1548,8 @@ final class EngineController {
     }
 
     private func resolveEventSessionID(_ event: RuntimeEvent) -> UUID? {
-        guard let connectionID = registerConnection(from: event),
-              let channel = event.channel else { return nil }
+        guard let connectionID = registerConnection(from: event) else { return nil }
+        guard let channel = event.channel else { return nil }
         let locator: SessionLocator = event.sessionID > 0
             ? .runtime(id: event.sessionID)
             : .composed(connectionID: connectionID, channel: channel)

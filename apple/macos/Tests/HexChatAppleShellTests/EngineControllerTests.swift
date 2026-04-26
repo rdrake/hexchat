@@ -3036,6 +3036,87 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(after2?.unread, 0)
         XCTAssertNotNil(after2?.lastReadAt)
     }
+
+    func testVisibleHelpersHonorSessionParameter() {
+        let controller = EngineController()
+        controller.upsertNetworkForTest(id: UUID(), name: "Libera")
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b",
+            sessionID: 2, connectionID: 1, selfNick: "me")
+        let aID = controller.sessionUUID(for: .runtime(id: 1))!
+        let bID = controller.sessionUUID(for: .runtime(id: 2))!
+
+        controller.applyLogLineForTest(
+            network: "Libera", channel: "#a", text: "hello-a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        controller.applyLogLineForTest(
+            network: "Libera", channel: "#b", text: "hello-b",
+            sessionID: 2, connectionID: 1, selfNick: "me")
+
+        XCTAssertEqual(controller.visibleMessages(for: aID).map(\.raw), ["hello-a"])
+        XCTAssertEqual(controller.visibleMessages(for: bID).map(\.raw), ["hello-b"])
+        XCTAssertTrue(controller.visibleSessionTitle(for: aID).contains("#a"))
+        XCTAssertTrue(controller.visibleSessionTitle(for: bID).contains("#b"))
+
+        // Legacy parameterless still delegates to selectedSessionID:
+        controller.selectedSessionID = aID
+        XCTAssertEqual(controller.visibleMessages.map(\.raw), ["hello-a"])
+        controller.selectedSessionID = bID
+        XCTAssertEqual(controller.visibleMessages.map(\.raw), ["hello-b"])
+    }
+
+    func testDraftBindingForSessionScopesPerSession() {
+        let controller = EngineController()
+        controller.upsertNetworkForTest(id: UUID(), name: "Libera")
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b",
+            sessionID: 2, connectionID: 1, selfNick: "me")
+        let aID = controller.sessionUUID(for: .runtime(id: 1))!
+        let bID = controller.sessionUUID(for: .runtime(id: 2))!
+
+        let aBinding = controller.draftBinding(for: aID)
+        let bBinding = controller.draftBinding(for: bID)
+
+        aBinding.wrappedValue = "draft-for-a"
+        bBinding.wrappedValue = "draft-for-b"
+
+        XCTAssertEqual(aBinding.wrappedValue, "draft-for-a")
+        XCTAssertEqual(bBinding.wrappedValue, "draft-for-b")
+        XCTAssertEqual(controller.draftBinding(for: aID).wrappedValue, "draft-for-a")
+        XCTAssertEqual(controller.draftBinding(for: bID).wrappedValue, "draft-for-b")
+    }
+
+    func testDraftBindingForNilSessionReadsAndWritesEmpty() {
+        let controller = EngineController()
+        let nilBinding = controller.draftBinding(for: nil)
+        XCTAssertEqual(nilBinding.wrappedValue, "")
+        nilBinding.wrappedValue = "ignored"
+        XCTAssertEqual(nilBinding.wrappedValue, "")
+        XCTAssertTrue(controller.conversations.isEmpty, "nil binding must not create conversation state")
+    }
+
+    func testPrefillPrivateMessageForSessionTargetsTheRightDraft() {
+        let controller = EngineController()
+        controller.upsertNetworkForTest(id: UUID(), name: "Libera")
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b",
+            sessionID: 2, connectionID: 1, selfNick: "me")
+        let aID = controller.sessionUUID(for: .runtime(id: 1))!
+        let bID = controller.sessionUUID(for: .runtime(id: 2))!
+
+        controller.prefillPrivateMessage(to: "alice", forSession: aID)
+        XCTAssertEqual(controller.draftBinding(for: aID).wrappedValue, "/msg alice ")
+        XCTAssertEqual(controller.draftBinding(for: bID).wrappedValue, "")
+    }
 }
 #else
 @testable import HexChatAppleShell
