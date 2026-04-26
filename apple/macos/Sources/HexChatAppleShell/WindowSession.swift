@@ -17,13 +17,14 @@ final class WindowSession {
     }
 
     /// The controller this window reports focus changes to. Marked
-    /// `nonisolated(unsafe)` so `deinit` (which cannot be `@MainActor`-isolated
-    /// in Swift) can read it. Only ever mutated on `@MainActor`, so the
-    /// "unsafe" is reasoning-protected. Declared as a strong (not weak)
-    /// reference because `weak var` is implicitly `nonisolated` in Swift and
-    /// `nonisolated(unsafe)` cannot be applied to `weak` properties; the
-    /// controller structurally outlives all window sessions.
-    nonisolated(unsafe) var controller: EngineController?
+    /// `nonisolated(unsafe)` so `deinit` (which cannot be `@MainActor`-isolated)
+    /// can read it without an `assumeIsolated` hop for the read itself. Plain
+    /// `nonisolated` is rejected by the compiler on a mutable stored property;
+    /// `nonisolated(unsafe)` is reasoning-protected because the property is
+    /// only mutated on `@MainActor`. `weak` matches the "child holds
+    /// non-owning ref to parent" convention; the controller structurally
+    /// outlives every window so the absence of a retain cycle is guaranteed.
+    nonisolated(unsafe) weak var controller: EngineController?
 
     init(controller: EngineController?, initial: UUID? = nil) {
         self.controller = controller
@@ -46,9 +47,9 @@ final class WindowSession {
         // released on @MainActor (SwiftUI scene teardown), so the assumption
         // is sound.
         //
-        // `controller` is nonisolated(unsafe) so it can be captured below.
-        // `focusedSessionID` is main-actor isolated, so it must be read inside
-        // the assumeIsolated block.
+        // `controller` is `weak` (implicitly nonisolated), so it can be
+        // captured below. `focusedSessionID` is main-actor isolated, so it
+        // must be read inside the assumeIsolated block.
         let controllerRef = controller
         MainActor.assumeIsolated {
             controllerRef?.recordFocusTransition(from: self.focusedSessionID, to: nil)
