@@ -1,10 +1,12 @@
 import AppleAdapterBridge
+import CoreTransferable
 import Foundation
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 import os
 
-struct ChatSession: Identifiable, Hashable {
+struct ChatSession: Identifiable, Hashable, Codable, Transferable {
     let id: UUID
     var connectionID: UUID
     var channel: String
@@ -29,6 +31,47 @@ struct ChatSession: Identifiable, Hashable {
 
     var isChannel: Bool {
         channel.hasPrefix("#") || channel.hasPrefix("&")
+    }
+
+    var plainTextDescription: String { channel }
+
+    /// Codable shape: `{ id, connectionID, channel, isActive }` — `locator` is
+    /// intentionally NOT encoded. Transfer round-trips re-derive the locator on
+    /// decode as `.composed(connectionID, channel)`, so a session originally
+    /// created with `.runtime(id: …)` decodes with a different locator.
+    ///
+    /// This is safe for Phase 8 drop integrations because they use the
+    /// preserved `id: UUID` to look up live sessions
+    /// (`controller.sessions.contains { $0.id == dropped.id }`), NOT the locator.
+    /// Future code that wants to resolve a transferred session via
+    /// `sessionByLocator[…]` must reconcile this — `upsertSession` registers
+    /// exactly one locator per session, so a lookup keyed on the decoded
+    /// `.composed(…)` locator may miss a session originally registered as
+    /// `.runtime(id:)`.
+    private enum CodingKeys: String, CodingKey {
+        case id, connectionID, channel, isActive
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try c.decode(UUID.self, forKey: .id)
+        let connectionID = try c.decode(UUID.self, forKey: .connectionID)
+        let channel = try c.decode(String.self, forKey: .channel)
+        let isActive = try c.decode(Bool.self, forKey: .isActive)
+        self.init(id: id, connectionID: connectionID, channel: channel, isActive: isActive, locator: nil)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(connectionID, forKey: .connectionID)
+        try c.encode(channel, forKey: .channel)
+        try c.encode(isActive, forKey: .isActive)
+    }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+        ProxyRepresentation(exporting: \.plainTextDescription)
     }
 }
 
@@ -203,12 +246,22 @@ struct ChatMessage: Codable, Identifiable {
     }
 }
 
+extension ChatMessage: Transferable {
+    var plainTextDescription: String { body ?? raw }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+        ProxyRepresentation(exporting: \.plainTextDescription)
+    }
+}
+
 /// View-facing DTO assembled on demand from `User` + `ChannelMembership` via the
-/// computed `usersBySession` projection. `id` is the lowercased `nick` and is valid
-/// only within one channel's roster (for SwiftUI `ForEach` diffing). Stable cross-
+/// computed `usersBySession` projection. `id` is `"\(connectionID)::\(nick.lowercased())"`,
+/// which is unique per connection and case-insensitive on nick. Stable cross-
 /// channel identity lives on `User.id` (UUID), looked up through
 /// `usersByConnectionAndNick`.
-struct ChatUser: Identifiable, Hashable {
+struct ChatUser: Identifiable, Hashable, Codable, Transferable {
+    var connectionID: UUID
     var nick: String
     var modePrefix: Character?
     var account: String?
@@ -217,6 +270,7 @@ struct ChatUser: Identifiable, Hashable {
     var isAway: Bool
 
     init(
+        connectionID: UUID,
         nick: String,
         modePrefix: Character? = nil,
         account: String? = nil,
@@ -224,6 +278,7 @@ struct ChatUser: Identifiable, Hashable {
         isMe: Bool = false,
         isAway: Bool = false
     ) {
+        self.connectionID = connectionID
         self.nick = nick
         self.modePrefix = modePrefix
         self.account = account
@@ -232,7 +287,48 @@ struct ChatUser: Identifiable, Hashable {
         self.isAway = isAway
     }
 
-    var id: String { nick.lowercased() }
+    var id: String { "\(connectionID.uuidString.lowercased())::\(nick.lowercased())" }
+    var plainTextDescription: String { nick }
+
+    private enum CodingKeys: String, CodingKey {
+        case connectionID, nick, modePrefix, account, host, isMe, isAway
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.connectionID = try c.decode(UUID.self, forKey: .connectionID)
+        self.nick = try c.decode(String.self, forKey: .nick)
+        if let s = try c.decodeIfPresent(String.self, forKey: .modePrefix) {
+            guard s.count == 1 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .modePrefix, in: c,
+                    debugDescription: "modePrefix must be a single character")
+            }
+            self.modePrefix = s.first
+        } else {
+            self.modePrefix = nil
+        }
+        self.account = try c.decodeIfPresent(String.self, forKey: .account)
+        self.host = try c.decodeIfPresent(String.self, forKey: .host)
+        self.isMe = try c.decode(Bool.self, forKey: .isMe)
+        self.isAway = try c.decode(Bool.self, forKey: .isAway)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(connectionID, forKey: .connectionID)
+        try c.encode(nick, forKey: .nick)
+        try c.encodeIfPresent(modePrefix.map(String.init), forKey: .modePrefix)
+        try c.encodeIfPresent(account, forKey: .account)
+        try c.encodeIfPresent(host, forKey: .host)
+        try c.encode(isMe, forKey: .isMe)
+        try c.encode(isAway, forKey: .isAway)
+    }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+        ProxyRepresentation(exporting: \.plainTextDescription)
+    }
 }
 
 struct ServerEndpoint: Codable, Hashable {
@@ -385,7 +481,16 @@ struct Network: Identifiable, Codable, Hashable {
     }
 }
 
-struct Connection: Identifiable, Hashable {
+extension Network: Transferable {
+    var plainTextDescription: String { displayName }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+        ProxyRepresentation(exporting: \.plainTextDescription)
+    }
+}
+
+struct Connection: Identifiable, Hashable, Codable, Transferable {
     let id: UUID
     let networkID: UUID
     var serverName: String
@@ -394,7 +499,52 @@ struct Connection: Identifiable, Hashable {
     /// connection is observed in; flips on CAP NEW/DEL or full reconnect. The
     /// Phase 7.5 `loadOlder` path gates the chathistory bridge dispatch on
     /// this flag.
-    var haveChathistory: Bool = false
+    var haveChathistory: Bool
+
+    init(
+        id: UUID,
+        networkID: UUID,
+        serverName: String,
+        selfNick: String? = nil,
+        haveChathistory: Bool = false
+    ) {
+        self.id = id
+        self.networkID = networkID
+        self.serverName = serverName
+        self.selfNick = selfNick
+        self.haveChathistory = haveChathistory
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, networkID, serverName, selfNick, haveChathistory
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.networkID = try c.decode(UUID.self, forKey: .networkID)
+        self.serverName = try c.decode(String.self, forKey: .serverName)
+        self.selfNick = try c.decodeIfPresent(String.self, forKey: .selfNick)
+        // Missing key decodes to false: an unknown/missing capability is the
+        // safe-default value. This matches the property's = false initializer.
+        self.haveChathistory = try c.decodeIfPresent(Bool.self, forKey: .haveChathistory) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(networkID, forKey: .networkID)
+        try c.encode(serverName, forKey: .serverName)
+        try c.encodeIfPresent(selfNick, forKey: .selfNick)
+        try c.encode(haveChathistory, forKey: .haveChathistory)
+    }
+
+    var plainTextDescription: String { serverName }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+        ProxyRepresentation(exporting: \.plainTextDescription)
+    }
 }
 
 /// Result of `EngineController.loadOlder(forConversation:limit:)`. Phase 7.5
@@ -598,6 +748,7 @@ final class EngineController {
                 }
                 roster.append(
                     ChatUser(
+                        connectionID: user.connectionID,
                         nick: user.nick, modePrefix: m.modePrefix,
                         account: user.account, host: user.hostmask,
                         isMe: user.isMe, isAway: user.isAway))

@@ -478,18 +478,19 @@ final class EngineControllerTests: XCTestCase {
     }
 
     func testChatUserIdentityIsCaseInsensitiveNick() {
+        let connID = UUID()
         let a = ChatUser(
-            nick: "Alice", modePrefix: "@", account: "alice_acct",
+            connectionID: connID, nick: "Alice", modePrefix: "@", account: "alice_acct",
             host: "host.example", isMe: false, isAway: false)
         let b = ChatUser(
-            nick: "alice", modePrefix: nil, account: nil, host: nil,
+            connectionID: connID, nick: "alice", modePrefix: nil, account: nil, host: nil,
             isMe: true, isAway: true)
         XCTAssertEqual(a.id, b.id, "ChatUser identity must be case-insensitive on nick")
         XCTAssertNotEqual(a, b, "Equality is field-by-field; identity is nick alone")
     }
 
     func testChatUserDefaultsAreSafe() {
-        let user = ChatUser(nick: "bob")
+        let user = ChatUser(connectionID: UUID(), nick: "bob")
         XCTAssertNil(user.modePrefix)
         XCTAssertNil(user.account)
         XCTAssertNil(user.host)
@@ -3116,6 +3117,113 @@ final class EngineControllerTests: XCTestCase {
         controller.prefillPrivateMessage(to: "alice", forSession: aID)
         XCTAssertEqual(controller.draftBinding(for: aID).wrappedValue, "/msg alice ")
         XCTAssertEqual(controller.draftBinding(for: bID).wrappedValue, "")
+    }
+
+    // MARK: - Phase 8 Task 3 — Transferable + Codable
+
+    func testChatUserCarriesConnectionIDAndUniqueID() {
+        let controller = EngineController()
+        controller.upsertNetworkForTest(id: UUID(), name: "Libera")
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        controller.applyUserlistForTest(
+            action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a", nick: "alice",
+            sessionID: 1, connectionID: 1)
+        let user = controller.usersBySession.values.flatMap { $0 }.first { $0.nick == "alice" }!
+        XCTAssertNotEqual(user.connectionID, UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
+        XCTAssertTrue(user.id.contains(user.connectionID.uuidString.lowercased()))
+        XCTAssertTrue(user.id.hasSuffix("::alice"))
+    }
+
+    func testChatSessionRoundTripsThroughTransferable() throws {
+        let session = ChatSession(connectionID: UUID(), channel: "#a", isActive: true)
+        let data = try JSONEncoder().encode(session)
+        let decoded = try JSONDecoder().decode(ChatSession.self, from: data)
+        XCTAssertEqual(decoded.id, session.id)
+        XCTAssertEqual(decoded.connectionID, session.connectionID)
+        XCTAssertEqual(decoded.channel, session.channel)
+        XCTAssertEqual(decoded.isActive, session.isActive)
+    }
+
+    func testChatUserRoundTripsThroughTransferable() throws {
+        let user = ChatUser(
+            connectionID: UUID(), nick: "alice", modePrefix: "@",
+            account: "alicea", host: "alice@example.com", isMe: false, isAway: true)
+        let data = try JSONEncoder().encode(user)
+        let decoded = try JSONDecoder().decode(ChatUser.self, from: data)
+        XCTAssertEqual(decoded.connectionID, user.connectionID)
+        XCTAssertEqual(decoded.nick, "alice")
+        XCTAssertEqual(decoded.modePrefix, "@")
+        XCTAssertEqual(decoded.account, "alicea")
+        XCTAssertEqual(decoded.host, "alice@example.com")
+        XCTAssertFalse(decoded.isMe)
+        XCTAssertTrue(decoded.isAway)
+    }
+
+    func testConnectionRoundTripsThroughTransferable() throws {
+        let conn = Connection(
+            id: UUID(), networkID: UUID(),
+            serverName: "irc.libera.chat", selfNick: "me", haveChathistory: true)
+        let data = try JSONEncoder().encode(conn)
+        let decoded = try JSONDecoder().decode(Connection.self, from: data)
+        XCTAssertEqual(decoded.id, conn.id)
+        XCTAssertEqual(decoded.networkID, conn.networkID)
+        XCTAssertEqual(decoded.serverName, "irc.libera.chat")
+        XCTAssertEqual(decoded.selfNick, "me")
+        XCTAssertTrue(decoded.haveChathistory)
+    }
+
+    func testChatSessionTransferableExportsPlainText() {
+        let session = ChatSession(connectionID: UUID(), channel: "#a", isActive: false)
+        XCTAssertEqual(session.plainTextDescription, "#a")
+    }
+
+    func testChatUserTransferableExportsNickAsPlainText() {
+        let user = ChatUser(connectionID: UUID(), nick: "alice")
+        XCTAssertEqual(user.plainTextDescription, "alice")
+    }
+
+    func testChatMessageTransferableExportsBodyAsPlainText() {
+        let m = ChatMessage(
+            sessionID: UUID(), raw: "hello world", kind: .message(body: "hello world"))
+        XCTAssertEqual(m.plainTextDescription, "hello world")
+        let joinMsg = ChatMessage(
+            sessionID: UUID(), raw: "alice has joined #a", kind: .join)
+        XCTAssertEqual(
+            joinMsg.plainTextDescription, "alice has joined #a",
+            "kinds without a body fall through to .raw")
+    }
+
+    func testConnectionDecoderTreatsMissingHaveChathistoryAsFalse() throws {
+        let id = UUID().uuidString
+        let networkID = UUID().uuidString
+        let json = """
+            {
+                "id": "\(id)",
+                "networkID": "\(networkID)",
+                "serverName": "irc.libera.chat"
+            }
+            """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(Connection.self, from: json)
+        XCTAssertEqual(decoded.serverName, "irc.libera.chat")
+        XCTAssertNil(decoded.selfNick)
+        XCTAssertFalse(decoded.haveChathistory, "missing key must decode to false")
+    }
+
+    func testChatUserDecoderRejectsMultiCharacterModePrefix() {
+        // Construct a JSON payload by hand so we can inject an invalid modePrefix.
+        let connID = UUID().uuidString
+        let jsonStr =
+            "{\"connectionID\":\"\(connID)\",\"nick\":\"alice\","
+            + "\"modePrefix\":\"@@\",\"isMe\":false,\"isAway\":false}"
+        let json = jsonStr.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(ChatUser.self, from: json)) { error in
+            guard case DecodingError.dataCorrupted = error else {
+                XCTFail("expected DecodingError.dataCorrupted, got \(error)")
+                return
+            }
+        }
     }
 }
 #else
