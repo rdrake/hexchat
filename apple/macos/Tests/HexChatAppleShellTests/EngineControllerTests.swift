@@ -3225,6 +3225,39 @@ final class EngineControllerTests: XCTestCase {
             }
         }
     }
+
+    func testPrimaryWindowMirrorsFocusToControllerSelectedSessionID() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b",
+            sessionID: 2, connectionID: 1, selfNick: "me")
+        let aID = controller.sessionUUID(for: .runtime(id: 1))!
+        let bID = controller.sessionUUID(for: .runtime(id: 2))!
+
+        // Primary window: mirror is on. Mutations must write through synchronously.
+        let primary = WindowSession(controller: controller, initial: aID, isPrimary: true)
+        XCTAssertEqual(
+            controller.selectedSessionID, aID,
+            "init with isPrimary must seed controller.selectedSessionID")
+        primary.focusedSessionID = bID
+        XCTAssertEqual(
+            controller.selectedSessionID, bID,
+            "primary window mutation must mirror to controller synchronously")
+
+        // Secondary window: mirror is off. Mutations must NOT touch the controller.
+        let secondary = WindowSession(controller: controller, initial: aID, isPrimary: false)
+        XCTAssertEqual(
+            controller.selectedSessionID, bID,
+            "secondary window init must not move controller.selectedSessionID")
+        secondary.focusedSessionID = nil
+        XCTAssertNil(secondary.focusedSessionID, "secondary.focusedSessionID must update locally")
+        XCTAssertEqual(
+            controller.selectedSessionID, bID,
+            "secondary window mutation must not move controller.selectedSessionID")
+    }
 }
 #else
 @testable import HexChatAppleShell

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var controller: EngineController
+    @Bindable var window: WindowSession
 
     var body: some View {
         ZStack {
@@ -42,7 +43,7 @@ struct ContentView: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(.secondary)
 
-            List(selection: $controller.selectedSessionID) {
+            List(selection: $window.focusedSessionID) {
                 ForEach(controller.networkSections) { section in
                     Section(section.name.uppercased()) {
                         ForEach(section.sessions) { session in
@@ -69,7 +70,7 @@ struct ContentView: View {
     private var chatPane: some View {
         VStack(spacing: 12) {
             HStack {
-                Text(controller.visibleSessionTitle)
+                Text(controller.visibleSessionTitle(for: window.focusedSessionID))
                     .font(.system(size: 18, weight: .semibold, design: .rounded))
 
                 statusChip
@@ -93,7 +94,7 @@ struct ContentView: View {
             }
             .padding(.horizontal, 6)
 
-            List(controller.visibleMessages) { message in
+            List(controller.visibleMessages(for: window.focusedSessionID)) { message in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(messagePrefix(message.kind))
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -113,10 +114,11 @@ struct ContentView: View {
             .listStyle(.plain)
 
             CommandInputView(
-                text: $controller.input,
+                text: controller.draftBinding(for: window.focusedSessionID),
                 onSubmit: {
-                    controller.send(controller.input)
-                    controller.input = ""
+                    let draft = controller.draftBinding(for: window.focusedSessionID)
+                    controller.send(draft.wrappedValue, forSession: window.focusedSessionID)
+                    draft.wrappedValue = ""
                 },
                 onHistory: { delta in
                     controller.browseHistory(delta: delta)
@@ -125,23 +127,24 @@ struct ContentView: View {
             .frame(minHeight: 72, maxHeight: 110)
             .overlay(alignment: .trailing) {
                 Button("Send") {
-                    controller.send(controller.input)
-                    controller.input = ""
+                    let draft = controller.draftBinding(for: window.focusedSessionID)
+                    controller.send(draft.wrappedValue, forSession: window.focusedSessionID)
+                    draft.wrappedValue = ""
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color(red: 0.13, green: 0.37, blue: 0.28))
                 .padding(10)
-                .disabled(!controller.isRunning || controller.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!controller.isRunning || isDraftEmpty)
             }
         }
     }
 
     private var userPane: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Users (\(controller.visibleUsers.count))")
+            Text("Users (\(controller.visibleUsers(for: window.focusedSessionID).count))")
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
 
-            List(controller.visibleUsers) { user in
+            List(controller.visibleUsers(for: window.focusedSessionID)) { user in
                 HStack(spacing: 8) {
                     Text(user.modePrefix.map(String.init) ?? "")
                         .font(.system(.caption, design: .monospaced))
@@ -152,12 +155,17 @@ struct ContentView: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
-                    controller.prefillPrivateMessage(to: user.nick)
+                    controller.prefillPrivateMessage(to: user.nick, forSession: window.focusedSessionID)
                 }
             }
             .scrollContentBackground(.hidden)
             .listStyle(.inset)
         }
+    }
+
+    private var isDraftEmpty: Bool {
+        controller.draftBinding(for: window.focusedSessionID).wrappedValue
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var statusChip: some View {

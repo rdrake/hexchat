@@ -3,12 +3,38 @@ import SwiftUI
 
 @main
 struct HexChatAppleShellApp: App {
-    @State private var controller = HexChatAppleShellApp.makeController()
+    @State private var controller: EngineController
+    @State private var primaryWindow: WindowSession
+
+    @MainActor
+    init() {
+        // Construct exactly once. Do NOT also default-initialize @State
+        // controllers at the property level — that would build a second
+        // controller every launch.
+        let c = HexChatAppleShellApp.makeController()
+        _controller = State(initialValue: c)
+        _primaryWindow = State(initialValue: WindowSession(controller: c, isPrimary: true))
+    }
 
     var body: some Scene {
-        WindowGroup {
-            ContentView(controller: controller)
+        WindowGroup(id: "main", for: UUID.self) { $seedSessionID in
+            ContentView(
+                controller: controller,
+                window: makeWindow(seed: seedSessionID))
         }
+    }
+
+    @MainActor
+    private func makeWindow(seed: UUID?) -> WindowSession {
+        // The first window opens with seed == nil; it gets the primary instance.
+        // Subsequent windows opened via `openWindow(value: UUID)` carry a non-nil
+        // seed and get a fresh non-primary WindowSession.
+        //
+        // TODO(Task-5): Until `openWindow(id: "main", value: focusedSessionID)` is
+        // wired, a plain Cmd+N opens with seed == nil and reaches this branch — so
+        // a second Cmd+N window aliases `primaryWindow`. Task 5 wires the seed.
+        if seed == nil { return primaryWindow }
+        return WindowSession(controller: controller, initial: seed, isPrimary: false)
     }
 
     @MainActor
