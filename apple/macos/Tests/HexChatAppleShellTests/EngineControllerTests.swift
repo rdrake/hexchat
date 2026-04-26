@@ -37,18 +37,18 @@ final class EngineControllerTests: XCTestCase {
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#hexchat",
             nick: "bob", modePrefix: "+", connectionID: 1)
 
-        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["alice", "bob"])
-        XCTAssertEqual(controller.visibleUsers.map(\.modePrefix), ["@", "+"])
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["alice", "bob"])
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.modePrefix), ["@", "+"])
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_REMOVE, network: "Libera", channel: "#hexchat",
             nick: "bob", connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["alice"])
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["alice"])
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_CLEAR, network: "Libera", channel: "#hexchat",
             nick: nil, connectionID: 1)
-        XCTAssertTrue(controller.visibleUsers.isEmpty)
+        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).isEmpty)
     }
 
     func testChannelScopedUserlistsDoNotBleed() {
@@ -69,10 +69,10 @@ final class EngineControllerTests: XCTestCase {
 
         let conn = controller.connectionsByServerID[1]!
         controller.selectedSessionID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
-        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["alice"])
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["alice"])
 
         controller.selectedSessionID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#b"))
-        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["bob"])
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["bob"])
     }
 
     func testHistoryBrowseUpDownRestoresDraft() {
@@ -203,11 +203,11 @@ final class EngineControllerTests: XCTestCase {
             nick: "bob", modePrefix: "@", sessionID: 2, connectionID: 1)
 
         controller.selectedSessionID = controller.sessionUUID(for: .runtime(id: 1))
-        XCTAssertTrue(controller.visibleUsers.isEmpty)
+        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).isEmpty)
 
         controller.selectedSessionID = controller.sessionUUID(for: .runtime(id: 2))
-        XCTAssertEqual(controller.visibleUsers.map(\.nick), ["bob", "alice"])
-        XCTAssertEqual(controller.visibleUsers.map(\.modePrefix), ["@", nil])
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["bob", "alice"])
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.modePrefix), ["@", nil])
     }
 
     func testServerAndChannelMessagesRemainRoutedToOwnSessions() {
@@ -468,7 +468,7 @@ final class EngineControllerTests: XCTestCase {
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "bob", modePrefix: "+", isMe: true, isAway: false, connectionID: 1)
 
-        let users = controller.visibleUsers
+        let users = controller.visibleUsers(for: controller.selectedSessionID)
         XCTAssertEqual(users.map(\.nick), ["alice", "bob"], "ops then voiced; identical-rank sorted by name")
         XCTAssertEqual(users.first?.modePrefix, "@")
         XCTAssertEqual(users.first?.account, "alice_acct")
@@ -517,14 +517,14 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "alice", modePrefix: "@", isAway: false, connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers.first?.isAway, false)
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).first?.isAway, false)
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
             nick: "alice", modePrefix: "@", isAway: true, connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers.count, 1, "UPDATE must not duplicate the user")
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).count, 1, "UPDATE must not duplicate the user")
         XCTAssertEqual(
-            controller.visibleUsers.first?.isAway, true,
+            controller.visibleUsers(for: controller.selectedSessionID).first?.isAway, true,
             "UPDATE overwrites the prior record with fresh state")
     }
 
@@ -536,14 +536,14 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "alice", connectionID: 1)
-        XCTAssertNil(controller.visibleUsers.first?.account)
-        XCTAssertNil(controller.visibleUsers.first?.host)
+        XCTAssertNil(controller.visibleUsers(for: controller.selectedSessionID).first?.account)
+        XCTAssertNil(controller.visibleUsers(for: controller.selectedSessionID).first?.host)
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
             nick: "alice", account: "alice_acct", host: "alice.example", connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers.first?.account, "alice_acct")
-        XCTAssertEqual(controller.visibleUsers.first?.host, "alice.example")
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).first?.account, "alice_acct")
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).first?.host, "alice.example")
     }
 
     func testUserlistUpdateClearsAccountToNil() {
@@ -557,13 +557,13 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "alice", account: "alice_acct", connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers.first?.account, "alice_acct")
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).first?.account, "alice_acct")
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
             nick: "alice", account: nil, connectionID: 1)
         XCTAssertNil(
-            controller.visibleUsers.first?.account, "logout / account-clear must overwrite, not merge")
+            controller.visibleUsers(for: controller.selectedSessionID).first?.account, "logout / account-clear must overwrite, not merge")
     }
 
     func testUserlistInsertCarriesIsMe() {
@@ -574,7 +574,7 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "me", isMe: true, connectionID: 1)
-        XCTAssertTrue(controller.visibleUsers.first?.isMe ?? false)
+        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).first?.isMe ?? false)
     }
 
     func testUserlistRemoveByNickIsCaseInsensitive() {
@@ -588,7 +588,7 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_REMOVE, network: "Libera", channel: "#a",
             nick: "ALICE", connectionID: 1)
-        XCTAssertTrue(controller.visibleUsers.isEmpty)
+        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).isEmpty)
     }
 
     func testUserlistEmptyNickIsIgnored() {
@@ -601,7 +601,7 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "", connectionID: 1)
-        XCTAssertTrue(controller.visibleUsers.isEmpty)
+        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).isEmpty)
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
@@ -610,7 +610,7 @@ final class EngineControllerTests: XCTestCase {
             action: HC_APPLE_USERLIST_REMOVE, network: "Libera", channel: "#a",
             nick: "", connectionID: 1)
         XCTAssertEqual(
-            controller.visibleUsers.map(\.nick), ["alice"], "empty REMOVE must not delete real users")
+            controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["alice"], "empty REMOVE must not delete real users")
     }
 
     func testUserlistFallsBackToSystemSessionWhenNetworkOrChannelMissing() {
@@ -702,13 +702,13 @@ final class EngineControllerTests: XCTestCase {
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
             nick: "alice", isMe: true, connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers.count, 1)
-        XCTAssertTrue(controller.visibleUsers.first?.isMe ?? false)
+        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).count, 1)
+        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).first?.isMe ?? false)
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
             nick: "alice", isMe: false, connectionID: 1)
-        XCTAssertFalse(controller.visibleUsers.first?.isMe ?? true)
+        XCTAssertFalse(controller.visibleUsers(for: controller.selectedSessionID).first?.isMe ?? true)
     }
 
     func testNetworkCarriesStableIDAndDisplayName() {
@@ -3530,6 +3530,6 @@ func _hexchatAppleShellTestsCompileProbe() {
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#probe",
         nick: "alice", modePrefix: "@")
-    _ = controller.visibleUsers
+    _ = controller.visibleUsers(for: controller.selectedSessionID)
 }
 #endif
