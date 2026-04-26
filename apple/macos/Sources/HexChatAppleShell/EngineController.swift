@@ -711,8 +711,7 @@ final class EngineController {
 
     /// Sidebar-facing unread count. Returns `max(perWindow, global)` so cold-
     /// launch sidebars still show "you missed N" continuity from the persisted
-    /// global counter even though `WindowSession.unread` is volatile. See the
-    /// Phase 10 design doc, §6.
+    /// global counter even though `WindowSession.unread` is volatile.
     func unreadBadge(forSession sessionID: UUID, window: WindowSession) -> Int {
         let perWindow = window.unread[sessionID, default: 0]
         let global = conversationKey(for: sessionID).flatMap { conversations[$0]?.unread } ?? 0
@@ -761,36 +760,26 @@ final class EngineController {
 
     // MARK: - Per-window unread registry
 
-    /// Weak pointer wrapper. The controller holds non-owning references so window
-    /// lifetime is governed by SwiftUI scene teardown — the controller never
-    /// keeps a window alive past its scene.
+    /// Non-owning ref so window lifetime stays governed by SwiftUI scene teardown.
     private final class WeakWindowBox {
         weak var window: WindowSession?
         init(window: WindowSession) { self.window = window }
     }
 
-    /// Registered `WindowSession`s, keyed by `ObjectIdentifier`. Mutated only on
-    /// `@MainActor`. Used by `recordActivity(on:)` to broadcast unread bumps and
-    /// by the REMOVE session-event branch to scrub stale UUID keys from each
-    /// window's `unread` map.
     private var weakWindows: [ObjectIdentifier: WeakWindowBox] = [:]
 
-    /// Register a `WindowSession` with the controller. Called from
-    /// `WindowSession.init`. Idempotent on the same identity.
     func registerWindow(_ window: WindowSession) {
         weakWindows[ObjectIdentifier(window)] = WeakWindowBox(window: window)
     }
 
-    /// Unregister a `WindowSession`. Called from `WindowSession.deinit` inside
-    /// `MainActor.assumeIsolated` so registry mutation is serialised with
-    /// `recordFocusTransition`.
+    /// Called inside `MainActor.assumeIsolated` so registry mutation serialises
+    /// with `recordFocusTransition`.
     func unregisterWindow(_ window: WindowSession) {
         weakWindows.removeValue(forKey: ObjectIdentifier(window))
     }
 
-    /// Iterate live registered windows. Lazily prunes any boxes whose weak ref
-    /// has been dropped (defensive — `unregisterWindow` should already have
-    /// fired).
+    /// Lazily prunes boxes whose weak ref has been dropped — defensive;
+    /// `unregisterWindow` should already have fired.
     private func iterateRegisteredWindows(_ body: (WindowSession) -> Void) {
         for (key, box) in weakWindows {
             if let window = box.window {
@@ -1738,19 +1727,17 @@ final class EngineController {
 
     private func recordActivity(on sessionID: UUID) {
         // System pseudo-session messages are local console output, not unread-
-        // bearing conversation activity. Skip for both per-window and global.
+        // bearing conversation activity.
         guard sessionID != systemSessionUUIDStorage else { return }
 
-        // Per-window: bump every registered window that does NOT currently focus
-        // this session.
         iterateRegisteredWindows { window in
             if window.focusedSessionID != sessionID {
                 window.unread[sessionID, default: 0] += 1
             }
         }
 
-        // Global: existing semantics. Suppressed when any window currently
-        // focuses this session (Phase 9's focusRefcount).
+        // Global counter is suppressed when any window currently focuses this
+        // session (focusRefcount).
         guard focusRefcount[sessionID, default: 0] == 0,
             let key = conversationKey(for: sessionID)
         else { return }
@@ -1819,10 +1806,15 @@ final class EngineController {
                 historyCursorBySession.removeValue(forKey: uuid)
                 historyDraftBySession.removeValue(forKey: uuid)
                 if lastFocusedSessionID == uuid { lastFocusedSessionID = nil }
-                // Hygiene: scrub stale UUID keys from per-window unread maps so they
-                // don't accumulate across REMOVE/UPSERT cycles. Sidebars only iterate
-                // current sessions, so the entries would be invisible if left behind.
-                iterateRegisteredWindows { $0.unread.removeValue(forKey: uuid) }
+                // Scrub stale UUID keys from per-window unread maps; entries would be
+                // invisible (sidebars only iterate current sessions) but accumulate
+                // across REMOVE/UPSERT cycles. Membership-guarded to avoid spurious
+                // @Observable invalidation on windows that never saw this UUID.
+                iterateRegisteredWindows { window in
+                    if window.unread[uuid] != nil {
+                        window.unread.removeValue(forKey: uuid)
+                    }
+                }
                 // Evaluated against the still-intact `sessions` array, before the removeAll call below.
                 if activeSessionID == uuid { activeSessionID = sessions.first(where: { $0.id != uuid })?.id }
                 sessions.removeAll { $0.id == uuid }

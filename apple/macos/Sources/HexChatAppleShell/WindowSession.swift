@@ -21,12 +21,8 @@ final class WindowSession {
         }
     }
 
-    /// Per-window unread counts, keyed by session UUID. Bumped by
-    /// `EngineController.recordActivity(on:)` for every registered window that
-    /// does not currently focus the activity's session. Cleared for `new` in
-    /// `focusedSessionID didSet`. Volatile (not persisted across launches);
-    /// `ConversationState.unread` is the cross-launch fallback that surfaces
-    /// in the sidebar via `EngineController.unreadBadge(forSession:window:)`.
+    /// Volatile per-window unread counts. Merged with the persisted global
+    /// counter via `EngineController.unreadBadge(forSession:window:)`.
     var unread: [UUID: Int] = [:]
 
     /// The controller this window reports focus changes to. Marked
