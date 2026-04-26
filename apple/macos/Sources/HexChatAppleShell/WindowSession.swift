@@ -51,6 +51,23 @@ final class WindowSession {
     }
 }
 
+extension WindowSession {
+    /// Encodes a focused session UUID as a string for `@SceneStorage`. Nil
+    /// encodes to the empty string, which `decode(focused:)` round-trips back
+    /// to nil. SceneStorage doesn't support `UUID?` directly, hence the
+    /// String shim.
+    nonisolated static func encode(focused id: UUID?) -> String {
+        id?.uuidString ?? ""
+    }
+
+    /// Inverse of `encode(focused:)`. Returns nil for empty strings AND for
+    /// non-UUID strings — defensive against corruption or older formats.
+    nonisolated static func decode(focused string: String) -> UUID? {
+        guard !string.isEmpty else { return nil }
+        return UUID(uuidString: string)
+    }
+}
+
 struct FocusedSessionIDKey: FocusedValueKey {
     typealias Value = UUID
 }

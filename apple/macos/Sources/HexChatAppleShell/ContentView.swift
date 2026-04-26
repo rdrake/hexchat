@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var controller: EngineController
     @Bindable var window: WindowSession
+    @SceneStorage("focusedSessionID") private var storedFocus: String = ""
 
     var body: some View {
         ZStack {
@@ -36,6 +37,21 @@ struct ContentView: View {
         }
         .frame(minWidth: 1080, minHeight: 620)
         .focusedSceneValue(\.focusedSessionID, window.focusedSessionID)
+        .onAppear {
+            if window.focusedSessionID == nil,
+                let restored = WindowSession.decode(focused: storedFocus)
+            {
+                // Only restore if the restored UUID still corresponds to a known
+                // session. Otherwise leave focusedSessionID at nil so the controller
+                // falls back to its first session.
+                if controller.sessions.contains(where: { $0.id == restored }) {
+                    window.focusedSessionID = restored
+                }
+            }
+        }
+        .onChange(of: window.focusedSessionID) { _, newValue in
+            storedFocus = WindowSession.encode(focused: newValue)
+        }
     }
 
     private var sidebar: some View {

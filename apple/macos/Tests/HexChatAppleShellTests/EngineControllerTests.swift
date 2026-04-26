@@ -3312,6 +3312,17 @@ final class EngineControllerTests: XCTestCase {
         }
         XCTAssertEqual(window.focusedSessionID, aID, "unknown session must not refocus the window")
     }
+
+    func testWindowSessionUUIDStringEncodingRoundTrips() {
+        let original = UUID()
+        let encoded = WindowSession.encode(focused: original)
+        XCTAssertFalse(encoded.isEmpty, "non-nil UUID must encode to non-empty string")
+        XCTAssertEqual(WindowSession.decode(focused: encoded), original)
+
+        XCTAssertEqual(WindowSession.encode(focused: nil), "", "nil UUID encodes as empty string")
+        XCTAssertNil(WindowSession.decode(focused: ""), "empty string decodes as nil")
+        XCTAssertNil(WindowSession.decode(focused: "garbage"), "non-UUID string decodes as nil")
+    }
 }
 #else
 @testable import HexChatAppleShell
