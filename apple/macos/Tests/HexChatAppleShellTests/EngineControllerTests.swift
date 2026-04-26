@@ -3337,6 +3337,62 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertNil(WindowSession.decode(focused: ""), "empty string decodes as nil")
         XCTAssertNil(WindowSession.decode(focused: "garbage"), "non-UUID string decodes as nil")
     }
+
+    // MARK: - Phase 9 Task 1: recordFocusTransition / focusRefcount / lastFocusedSessionID
+
+    func testRecordFocusTransitionFromNilToASetsRefcountAndLastFocused() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        controller.recordFocusTransition(from: nil, to: aID)
+        XCTAssertEqual(controller.focusRefcount[aID], 1)
+        XCTAssertEqual(controller.lastFocusedSessionID, aID)
+    }
+
+    func testRecordFocusTransitionAToBMovesRefcountAndLastFocused() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let bID = controller.sessions.first(where: { $0.channel == "#b" })!.id
+        controller.recordFocusTransition(from: nil, to: aID)
+        controller.recordFocusTransition(from: aID, to: bID)
+        XCTAssertNil(controller.focusRefcount[aID], "old session removed from refcount when count reaches 0")
+        XCTAssertEqual(controller.focusRefcount[bID], 1)
+        XCTAssertEqual(controller.lastFocusedSessionID, bID)
+    }
+
+    func testRecordFocusTransitionTwoWindowsSameSessionRefcounts() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        controller.recordFocusTransition(from: nil, to: aID)
+        controller.recordFocusTransition(from: nil, to: aID)
+        XCTAssertEqual(controller.focusRefcount[aID], 2)
+        controller.recordFocusTransition(from: aID, to: nil)
+        XCTAssertEqual(controller.focusRefcount[aID], 1, "one window still focused — refcount stays positive")
+    }
+
+    func testRecordFocusTransitionToNilLeavesLastFocusedAlone() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        controller.recordFocusTransition(from: nil, to: aID)
+        XCTAssertEqual(controller.lastFocusedSessionID, aID)
+        controller.recordFocusTransition(from: aID, to: nil)
+        XCTAssertEqual(controller.lastFocusedSessionID, aID, "nil-target focus must not erase cold-launch hint")
+        XCTAssertNil(controller.focusRefcount[aID])
+    }
+
+    func testRecordFocusTransitionToNonNilTriggersMarkRead() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(ConversationState(key: key, draft: "", unread: 5, lastReadAt: nil))
+        controller.recordFocusTransition(from: nil, to: aID)
+        XCTAssertEqual(controller.conversations[key]?.unread, 0, "transitioning focus onto a session must clear unread")
+    }
 }
 #else
 @testable import HexChatAppleShell

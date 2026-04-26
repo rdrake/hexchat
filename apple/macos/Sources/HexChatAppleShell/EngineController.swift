@@ -723,6 +723,45 @@ final class EngineController {
         return true
     }
 
+    // MARK: - Phase 9: focus authority moved to WindowSession
+
+    /// The most-recently focused session UUID across all windows. Cold-launch hint:
+    /// `AppMain` seeds the primary `WindowSession.focusedSessionID` from this value
+    /// when no `@SceneStorage` state exists. **Survives `LIFECYCLE_STOPPED`** — it is
+    /// not runtime state.
+    private(set) var lastFocusedSessionID: UUID?
+
+    /// Number of `WindowSession`s currently focused on each session UUID. A session
+    /// in this map (with non-zero count) suppresses unread incrementing in
+    /// `recordActivity`. **Cleared on `LIFECYCLE_STOPPED`** because all sessions
+    /// are torn down; live windows re-register on next focus change.
+    private(set) var focusRefcount: [UUID: Int] = [:]
+
+    /// Set during `apply(_:)` if the persisted snapshot named a `lastFocusedKey`
+    /// whose session has not yet been re-emitted by the C core. Resolved inside
+    /// `upsertSession` on first matching emit. **Survives `LIFECYCLE_STOPPED`** so
+    /// reconnect-after-stop still honours the hint.
+    private var pendingLastFocusedKey: ConversationKey?
+
+    /// Single mutation entry point for focus state. `WindowSession.focusedSessionID
+    /// didSet` calls this with `from: oldValue, to: newValue`. `WindowSession.deinit`
+    /// calls this with `from: focusedSessionID, to: nil` (synchronously, via
+    /// `MainActor.assumeIsolated`).
+    func recordFocusTransition(from old: UUID?, to new: UUID?) {
+        if let old, let count = focusRefcount[old] {
+            if count <= 1 {
+                focusRefcount.removeValue(forKey: old)
+            } else {
+                focusRefcount[old] = count - 1
+            }
+        }
+        if let new {
+            focusRefcount[new, default: 0] += 1
+            lastFocusedSessionID = new
+            _ = markReadInternal(forSession: new)
+        }
+    }
+
     var activeSessionID: UUID?
 
     private(set) var sessionByLocator: [SessionLocator: UUID] = [:]
