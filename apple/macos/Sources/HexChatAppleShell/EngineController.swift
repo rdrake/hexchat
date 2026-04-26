@@ -709,7 +709,7 @@ final class EngineController {
         return true
     }
 
-    // MARK: - Phase 9: focus authority moved to WindowSession
+    // MARK: - Focus tracking
 
     /// The most-recently focused session UUID across all windows. Cold-launch hint:
     /// `AppMain` seeds the primary `WindowSession.focusedSessionID` from this value
@@ -745,9 +745,7 @@ final class EngineController {
         if let new {
             focusRefcount[new, default: 0] += 1
             lastFocusedSessionID = new
-            // markReadInternal returns true when conversation state mutated; the focus
-            // transition itself dirties via lastFocusedSessionID, so the result is moot.
-            _ = markReadInternal(forSession: new)
+            markReadInternal(forSession: new)
         }
     }
 

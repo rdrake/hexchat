@@ -394,7 +394,7 @@ final class EngineControllerTests: XCTestCase {
         // Exactly one session should have isActive == true, and it should be #b.
         let actives = controller.sessions.filter { $0.isActive }
         XCTAssertEqual(actives.map(\.id), [bUUID])
-        _ = win  // keep win alive through end of test so deinit doesn't fire mid-test
+        withExtendedLifetime(win) {}
     }
 
     func testNumericRuntimeSessionIDResolvesFromUUID() {
@@ -3213,7 +3213,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.focusRefcount[aID], 1, "init with non-nil initial registers a refcount")
         XCTAssertEqual(controller.lastFocusedSessionID, aID)
 
-        _ = window  // keep window alive; suppress unused warning
+        withExtendedLifetime(window) {}
     }
 
     func testTwoWindowSessionsTrackFocusIndependently() {
@@ -3233,7 +3233,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.focusRefcount[bID], 2, "two windows on B contribute 2")
         XCTAssertEqual(controller.lastFocusedSessionID, bID)
 
-        _ = win2
+        withExtendedLifetime(win2) {}
     }
 
     func testWindowSessionDeinitDecrementsRefcount() {
@@ -3243,8 +3243,9 @@ final class EngineControllerTests: XCTestCase {
 
         do {
             let window = WindowSession(controller: controller, initial: aID)
-            XCTAssertEqual(controller.focusRefcount[aID], 1)
-            _ = window
+            withExtendedLifetime(window) {
+                XCTAssertEqual(controller.focusRefcount[aID], 1)
+            }
         }  // window goes out of scope; deinit fires
         XCTAssertNil(controller.focusRefcount[aID], "deinit must remove the refcount entry")
         // lastFocusedSessionID survives deinit by design.
@@ -3477,7 +3478,7 @@ final class EngineControllerTests: XCTestCase {
             ChatMessage(sessionID: aID, raw: "hello", kind: .message(body: "hello")))
         XCTAssertEqual(controller.conversations[key]?.unread ?? 0, 0)
 
-        _ = window
+        withExtendedLifetime(window) {}
     }
 
     func testTenSequentialMessagesInFocusedSessionLeaveUnreadAtZero() {
@@ -3495,7 +3496,7 @@ final class EngineControllerTests: XCTestCase {
             controller.conversations[key]?.unread ?? 0, 0,
             "regression: didSet only fires on focus change, but refcount must keep suppression alive")
 
-        _ = window
+        withExtendedLifetime(window) {}
     }
 
     func testUnfocusedSessionStillIncrementsUnread() {
@@ -3511,7 +3512,7 @@ final class EngineControllerTests: XCTestCase {
             ChatMessage(sessionID: bID, raw: "ping", kind: .message(body: "ping")))
         XCTAssertEqual(controller.conversations[bKey]?.unread ?? 0, 1)
 
-        _ = window
+        withExtendedLifetime(window) {}
     }
 
     func testTwoWindowsOneClosedKeepsSuppression() {
@@ -3523,7 +3524,7 @@ final class EngineControllerTests: XCTestCase {
         let win1 = WindowSession(controller: controller, initial: aID)
         do {
             let win2 = WindowSession(controller: controller, initial: aID)
-            _ = win2
+            withExtendedLifetime(win2) {}
         }  // win2 deinit → refcount goes from 2 to 1
 
         controller.appendMessageForTest(
@@ -3532,7 +3533,7 @@ final class EngineControllerTests: XCTestCase {
             controller.conversations[key]?.unread ?? 0, 0,
             "win1 still focused on A — suppression must hold")
 
-        _ = win1
+        withExtendedLifetime(win1) {}
     }
 }
 #else
