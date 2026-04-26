@@ -22,6 +22,9 @@ struct HexChatAppleShellApp: App {
                 controller: controller,
                 window: makeWindow(seed: seedSessionID))
         }
+        .commands {
+            OpenInNewWindowCommands()
+        }
     }
 
     @MainActor
@@ -30,9 +33,16 @@ struct HexChatAppleShellApp: App {
         // Subsequent windows opened via `openWindow(value: UUID)` carry a non-nil
         // seed and get a fresh non-primary WindowSession.
         //
-        // TODO(Task-5): Until `openWindow(id: "main", value: focusedSessionID)` is
-        // wired, a plain Cmd+N opens with seed == nil and reaches this branch — so
-        // a second Cmd+N window aliases `primaryWindow`. Task 5 wires the seed.
+        // NOTE: SwiftUI's default `Cmd+N` for a WindowGroup hits this branch with
+        // seed == nil and aliases `primaryWindow` (the second window shares focus
+        // state with the first). Task 5 wired `openWindow(id: "main", value: id)`
+        // for the explicit "Open in New Window" command (Cmd+Opt+T), which carries
+        // a non-nil seed and creates a fresh non-primary WindowSession.
+        //
+        // TODO(Phase-9): Either suppress the default Cmd+N
+        // (CommandGroup(replacing: .newItem) {}) so the only path is the explicit
+        // command, or switch to a "primary lives in the controller" model that
+        // makes per-window WindowSession unconditional.
         if seed == nil { return primaryWindow }
         return WindowSession(controller: controller, initial: seed, isPrimary: false)
     }

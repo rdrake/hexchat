@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 @MainActor
 @Observable
@@ -47,5 +48,16 @@ final class WindowSession {
         if isPrimary {
             controller?.selectedSessionID = initial
         }
+    }
+}
+
+struct FocusedSessionIDKey: FocusedValueKey {
+    typealias Value = UUID
+}
+
+extension FocusedValues {
+    var focusedSessionID: UUID? {
+        get { self[FocusedSessionIDKey.self] }
+        set { self[FocusedSessionIDKey.self] = newValue }
     }
 }

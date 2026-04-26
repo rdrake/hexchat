@@ -35,6 +35,7 @@ struct ContentView: View {
             .padding(12)
         }
         .frame(minWidth: 1080, minHeight: 620)
+        .focusedSceneValue(\.focusedSessionID, window.focusedSessionID)
     }
 
     private var sidebar: some View {
@@ -58,12 +59,20 @@ struct ContentView: View {
                                     .lineLimit(1)
                             }
                             .tag(Optional(session.id))
+                            .draggable(session)
                         }
                     }
                 }
             }
             .scrollContentBackground(.hidden)
             .listStyle(.inset)
+            .dropDestination(for: ChatSession.self) { droppedSessions, _ in
+                guard let dropped = droppedSessions.first,
+                    controller.sessions.contains(where: { $0.id == dropped.id })
+                else { return false }
+                window.focusedSessionID = dropped.id
+                return true
+            }
         }
     }
 
@@ -136,6 +145,13 @@ struct ContentView: View {
                 .padding(10)
                 .disabled(!controller.isRunning || isDraftEmpty)
             }
+            .dropDestination(for: ChatUser.self) { droppedUsers, _ in
+                guard let dropped = droppedUsers.first,
+                    let sessionID = window.focusedSessionID
+                else { return false }
+                controller.prefillPrivateMessage(to: dropped.nick, forSession: sessionID)
+                return true
+            }
         }
     }
 
@@ -154,6 +170,7 @@ struct ContentView: View {
                         .font(.system(.body, design: .monospaced))
                 }
                 .contentShape(Rectangle())
+                .draggable(user)
                 .onTapGesture(count: 2) {
                     controller.prefillPrivateMessage(to: user.nick, forSession: window.focusedSessionID)
                 }

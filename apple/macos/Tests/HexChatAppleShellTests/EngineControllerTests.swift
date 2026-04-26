@@ -3258,6 +3258,60 @@ final class EngineControllerTests: XCTestCase {
             controller.selectedSessionID, bID,
             "secondary window mutation must not move controller.selectedSessionID")
     }
+
+    func testPrefillPrivateMessageInvokedFromDropPath() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        let aID = controller.sessionUUID(for: .runtime(id: 1))!
+        let connID = controller.connections.values.first!.id
+
+        // Simulate the drop callback's body — what ContentView's
+        // .dropDestination(for: ChatUser.self) closure will execute.
+        let dropped = ChatUser(connectionID: connID, nick: "alice")
+        controller.prefillPrivateMessage(to: dropped.nick, forSession: aID)
+
+        XCTAssertEqual(controller.draftBinding(for: aID).wrappedValue, "/msg alice ")
+    }
+
+    func testSidebarRefocusFromDropPath() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b",
+            sessionID: 2, connectionID: 1, selfNick: "me")
+        let aID = controller.sessionUUID(for: .runtime(id: 1))!
+        let bID = controller.sessionUUID(for: .runtime(id: 2))!
+
+        let window = WindowSession(controller: controller, initial: aID)
+        let droppedSession = controller.sessions.first { $0.id == bID }!
+
+        // Simulate the drop callback's body:
+        if controller.sessions.contains(where: { $0.id == droppedSession.id }) {
+            window.focusedSessionID = droppedSession.id
+        }
+        XCTAssertEqual(window.focusedSessionID, bID)
+    }
+
+    func testDroppedUnknownSessionIsNoOp() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a",
+            sessionID: 1, connectionID: 1, selfNick: "me")
+        let aID = controller.sessionUUID(for: .runtime(id: 1))!
+
+        let window = WindowSession(controller: controller, initial: aID)
+        let synthetic = ChatSession(connectionID: UUID(), channel: "#unknown", isActive: false)
+
+        // Simulate the typed-rejection guard in the drop callback:
+        if controller.sessions.contains(where: { $0.id == synthetic.id }) {
+            window.focusedSessionID = synthetic.id
+        }
+        XCTAssertEqual(window.focusedSessionID, aID, "unknown session must not refocus the window")
+    }
 }
 #else
 @testable import HexChatAppleShell
