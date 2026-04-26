@@ -26,6 +26,8 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#hexchat",
             connectionID: 1, selfNick: "me")
+        let conn = controller.connectionsByServerID[1]!
+        let sessionID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#hexchat"))
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#hexchat",
@@ -37,18 +39,18 @@ final class EngineControllerTests: XCTestCase {
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#hexchat",
             nick: "bob", modePrefix: "+", connectionID: 1)
 
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["alice", "bob"])
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.modePrefix), ["@", "+"])
+        XCTAssertEqual(controller.visibleUsers(for: sessionID).map(\.nick), ["alice", "bob"])
+        XCTAssertEqual(controller.visibleUsers(for: sessionID).map(\.modePrefix), ["@", "+"])
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_REMOVE, network: "Libera", channel: "#hexchat",
             nick: "bob", connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["alice"])
+        XCTAssertEqual(controller.visibleUsers(for: sessionID).map(\.nick), ["alice"])
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_CLEAR, network: "Libera", channel: "#hexchat",
             nick: nil, connectionID: 1)
-        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).isEmpty)
+        XCTAssertTrue(controller.visibleUsers(for: sessionID).isEmpty)
     }
 
     func testChannelScopedUserlistsDoNotBleed() {
@@ -68,24 +70,20 @@ final class EngineControllerTests: XCTestCase {
             nick: "bob", connectionID: 1)
 
         let conn = controller.connectionsByServerID[1]!
-        controller.selectedSessionID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["alice"])
-
-        controller.selectedSessionID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#b"))
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["bob"])
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
+        let bID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#b"))
+        XCTAssertEqual(controller.visibleUsers(for: aID).map(\.nick), ["alice"])
+        XCTAssertEqual(controller.visibleUsers(for: bID).map(\.nick), ["bob"])
     }
 
     func testHistoryBrowseUpDownRestoresDraft() {
         let controller = EngineController()
-        // Per-conversation drafts (Phase 6 task 8) require a selected session for `input`
-        // to land somewhere; seed a real session before exercising history navigation.
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#hexchat",
             connectionID: 1)
         let conn = controller.connectionsByServerID[1]!
         let sessionID = controller.sessionUUID(
             for: .composed(connectionID: conn, channel: "#hexchat"))
-        controller.selectedSessionID = sessionID
         controller.send("/join #hexchat", forSession: sessionID, trackHistory: true)
         controller.send("/msg alice hi", forSession: sessionID, trackHistory: true)
         controller.draftBinding(for: sessionID).wrappedValue = "/nick newname"
@@ -132,9 +130,6 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b",
             connectionID: 1, selfNick: "me")
-
-        let conn = controller.connectionsByServerID[1]!
-        controller.selectedSessionID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
 
         controller.applyLogLineForTest(
             network: "Libera", channel: "#b", text: "message for b",
@@ -202,12 +197,11 @@ final class EngineControllerTests: XCTestCase {
             action: HC_APPLE_USERLIST_INSERT, network: "AfterNET", channel: "#cybercafe",
             nick: "bob", modePrefix: "@", sessionID: 2, connectionID: 1)
 
-        controller.selectedSessionID = controller.sessionUUID(for: .runtime(id: 1))
-        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).isEmpty)
-
-        controller.selectedSessionID = controller.sessionUUID(for: .runtime(id: 2))
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["bob", "alice"])
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).map(\.modePrefix), ["@", nil])
+        let serverID = controller.sessionUUID(for: .runtime(id: 1))
+        let channelID = controller.sessionUUID(for: .runtime(id: 2))
+        XCTAssertTrue(controller.visibleUsers(for: serverID).isEmpty)
+        XCTAssertEqual(controller.visibleUsers(for: channelID).map(\.nick), ["bob", "alice"])
+        XCTAssertEqual(controller.visibleUsers(for: channelID).map(\.modePrefix), ["@", nil])
     }
 
     func testServerAndChannelMessagesRemainRoutedToOwnSessions() {
@@ -364,7 +358,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.messages.last?.sessionID, controller.sessions.first?.id)
     }
 
-    func testSessionRemoveReselectsActiveAndClearsSelectedWhenMatching() {
+    func testSessionRemoveDropsFocusRefcountAndLastFocused() {
         let controller = EngineController()
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "AfterNET", channel: "#a",
@@ -376,7 +370,10 @@ final class EngineControllerTests: XCTestCase {
         let conn = controller.connectionsByServerID[1]!
         let aUUID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
         let bUUID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#b"))!
-        controller.selectedSessionID = aUUID
+
+        // A window focused on #a contributes to focusRefcount.
+        let win = WindowSession(controller: controller, initial: aUUID)
+        XCTAssertEqual(controller.focusRefcount[aUUID], 1)
         XCTAssertEqual(controller.activeSessionID, aUUID)
 
         // Put users in #a so we can assert the cleanup.
@@ -390,21 +387,22 @@ final class EngineControllerTests: XCTestCase {
             connectionID: 1, selfNick: "me")
 
         XCTAssertFalse(controller.sessions.contains(where: { $0.id == aUUID }), "#a must be gone")
-        XCTAssertNil(controller.selectedSessionID, "selected must clear when its session is removed")
+        XCTAssertNil(controller.focusRefcount[aUUID], "focusRefcount entry must be cleared on REMOVE")
+        XCTAssertNil(controller.lastFocusedSessionID, "lastFocusedSessionID must clear when its session is removed")
         XCTAssertEqual(controller.activeSessionID, bUUID, "active must reassign to a remaining session")
         XCTAssertNil(controller.usersBySession[aUUID], "usersBySession entry must be cleaned up")
         // Exactly one session should have isActive == true, and it should be #b.
         let actives = controller.sessions.filter { $0.isActive }
         XCTAssertEqual(actives.map(\.id), [bUUID])
+        _ = win  // keep win alive through end of test so deinit doesn't fire mid-test
     }
 
-    func testSelectedSessionIDIsUUIDAndRoutesRuntimeCommands() {
+    func testNumericRuntimeSessionIDResolvesFromUUID() {
         let controller = EngineController()
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_UPSERT, network: "AfterNET", channel: "#same",
             sessionID: 7, connectionID: 1, selfNick: "me")
         let uuid = controller.sessionUUID(for: .runtime(id: 7))!
-        controller.selectedSessionID = uuid
         XCTAssertEqual(controller.numericRuntimeSessionID(forSelection: uuid), 7)
     }
 
@@ -460,6 +458,8 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
             connectionID: 1, selfNick: "me")
+        let conn = controller.connectionsByServerID[1]!
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "alice", modePrefix: "@", account: "alice_acct", isMe: false, isAway: false,
@@ -468,7 +468,7 @@ final class EngineControllerTests: XCTestCase {
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "bob", modePrefix: "+", isMe: true, isAway: false, connectionID: 1)
 
-        let users = controller.visibleUsers(for: controller.selectedSessionID)
+        let users = controller.visibleUsers(for: aID)
         XCTAssertEqual(users.map(\.nick), ["alice", "bob"], "ops then voiced; identical-rank sorted by name")
         XCTAssertEqual(users.first?.modePrefix, "@")
         XCTAssertEqual(users.first?.account, "alice_acct")
@@ -514,17 +514,19 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
             connectionID: 1, selfNick: "me")
+        let conn = controller.connectionsByServerID[1]!
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "alice", modePrefix: "@", isAway: false, connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).first?.isAway, false)
+        XCTAssertEqual(controller.visibleUsers(for: aID).first?.isAway, false)
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
             nick: "alice", modePrefix: "@", isAway: true, connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).count, 1, "UPDATE must not duplicate the user")
+        XCTAssertEqual(controller.visibleUsers(for: aID).count, 1, "UPDATE must not duplicate the user")
         XCTAssertEqual(
-            controller.visibleUsers(for: controller.selectedSessionID).first?.isAway, true,
+            controller.visibleUsers(for: aID).first?.isAway, true,
             "UPDATE overwrites the prior record with fresh state")
     }
 
@@ -533,17 +535,19 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
             connectionID: 1, selfNick: "me")
+        let conn = controller.connectionsByServerID[1]!
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "alice", connectionID: 1)
-        XCTAssertNil(controller.visibleUsers(for: controller.selectedSessionID).first?.account)
-        XCTAssertNil(controller.visibleUsers(for: controller.selectedSessionID).first?.host)
+        XCTAssertNil(controller.visibleUsers(for: aID).first?.account)
+        XCTAssertNil(controller.visibleUsers(for: aID).first?.host)
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
             nick: "alice", account: "alice_acct", host: "alice.example", connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).first?.account, "alice_acct")
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).first?.host, "alice.example")
+        XCTAssertEqual(controller.visibleUsers(for: aID).first?.account, "alice_acct")
+        XCTAssertEqual(controller.visibleUsers(for: aID).first?.host, "alice.example")
     }
 
     func testUserlistUpdateClearsAccountToNil() {
@@ -554,16 +558,18 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
             connectionID: 1, selfNick: "me")
+        let conn = controller.connectionsByServerID[1]!
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "alice", account: "alice_acct", connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).first?.account, "alice_acct")
+        XCTAssertEqual(controller.visibleUsers(for: aID).first?.account, "alice_acct")
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
             nick: "alice", account: nil, connectionID: 1)
         XCTAssertNil(
-            controller.visibleUsers(for: controller.selectedSessionID).first?.account, "logout / account-clear must overwrite, not merge")
+            controller.visibleUsers(for: aID).first?.account, "logout / account-clear must overwrite, not merge")
     }
 
     func testUserlistInsertCarriesIsMe() {
@@ -571,10 +577,12 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
             connectionID: 1, selfNick: "me")
+        let conn = controller.connectionsByServerID[1]!
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "me", isMe: true, connectionID: 1)
-        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).first?.isMe ?? false)
+        XCTAssertTrue(controller.visibleUsers(for: aID).first?.isMe ?? false)
     }
 
     func testUserlistRemoveByNickIsCaseInsensitive() {
@@ -582,13 +590,15 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
             connectionID: 1, selfNick: "me")
+        let conn = controller.connectionsByServerID[1]!
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "Alice", modePrefix: "@", connectionID: 1)
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_REMOVE, network: "Libera", channel: "#a",
             nick: "ALICE", connectionID: 1)
-        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).isEmpty)
+        XCTAssertTrue(controller.visibleUsers(for: aID).isEmpty)
     }
 
     func testUserlistEmptyNickIsIgnored() {
@@ -598,10 +608,12 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
             connectionID: 1, selfNick: "me")
+        let conn = controller.connectionsByServerID[1]!
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "", connectionID: 1)
-        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).isEmpty)
+        XCTAssertTrue(controller.visibleUsers(for: aID).isEmpty)
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
@@ -610,7 +622,7 @@ final class EngineControllerTests: XCTestCase {
             action: HC_APPLE_USERLIST_REMOVE, network: "Libera", channel: "#a",
             nick: "", connectionID: 1)
         XCTAssertEqual(
-            controller.visibleUsers(for: controller.selectedSessionID).map(\.nick), ["alice"], "empty REMOVE must not delete real users")
+            controller.visibleUsers(for: aID).map(\.nick), ["alice"], "empty REMOVE must not delete real users")
     }
 
     func testUserlistFallsBackToSystemSessionWhenNetworkOrChannelMissing() {
@@ -696,19 +708,21 @@ final class EngineControllerTests: XCTestCase {
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
             connectionID: 1, selfNick: "me")
+        let conn = controller.connectionsByServerID[1]!
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#a",
             nick: "alice", isMe: false, connectionID: 1)
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
             nick: "alice", isMe: true, connectionID: 1)
-        XCTAssertEqual(controller.visibleUsers(for: controller.selectedSessionID).count, 1)
-        XCTAssertTrue(controller.visibleUsers(for: controller.selectedSessionID).first?.isMe ?? false)
+        XCTAssertEqual(controller.visibleUsers(for: aID).count, 1)
+        XCTAssertTrue(controller.visibleUsers(for: aID).first?.isMe ?? false)
 
         controller.applyUserlistForTest(
             action: HC_APPLE_USERLIST_UPDATE, network: "Libera", channel: "#a",
             nick: "alice", isMe: false, connectionID: 1)
-        XCTAssertFalse(controller.visibleUsers(for: controller.selectedSessionID).first?.isMe ?? true)
+        XCTAssertFalse(controller.visibleUsers(for: aID).first?.isMe ?? true)
     }
 
     func testNetworkCarriesStableIDAndDisplayName() {
@@ -1949,10 +1963,17 @@ final class EngineControllerTests: XCTestCase {
             "/cmd\(EngineController.commandHistoryCap + 4)")
     }
 
-    func testSelectedSessionIDMutationSchedulesSave() async throws {
+    func testFocusTransitionSchedulesSave() async throws {
         let store = CountingStore()
         let controller = EngineController(persistence: store, debounceInterval: .zero)
-        controller.selectedSessionID = UUID()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
+            connectionID: 1, selfNick: "me")
+        let conn = controller.connectionsByServerID[1]!
+        let aID = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#a"))!
+        // recordFocusTransition updates lastFocusedSessionID and calls markReadInternal,
+        // which mutates conversations (didSet → markDirty → schedules save).
+        controller.recordFocusTransition(from: nil, to: aID)
         await Task.yield()
         try? await Task.sleep(for: .milliseconds(20))
         XCTAssertGreaterThanOrEqual(store.saveCount, 1)
@@ -2006,7 +2027,7 @@ final class EngineControllerTests: XCTestCase {
 
     // MARK: - Phase 6 — persistence (Task 9, unread bookkeeping)
 
-    func testIncomingMessageIncrementsUnreadWhenNotSelected() {
+    func testIncomingMessageIncrementsUnreadWhenNotFocused() {
         let controller = EngineController(
             persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
         let netID = UUID()
@@ -2015,11 +2036,9 @@ final class EngineControllerTests: XCTestCase {
         controller.connections[connID] = Connection(
             id: connID, networkID: netID, serverName: "Net", selfNick: nil)
         let locA = SessionLocator.composed(connectionID: connID, channel: "#a")
-        let locB = SessionLocator.composed(connectionID: connID, channel: "#b")
         let sessA = ChatSession(connectionID: connID, channel: "#a", isActive: true, locator: locA)
-        let sessB = ChatSession(connectionID: connID, channel: "#b", isActive: true, locator: locB)
-        controller.sessions = [sessA, sessB]
-        controller.selectedSessionID = sessB.id
+        controller.sessions = [sessA]
+        // No window has focusRefcount > 0 for sessA, so incoming messages increment unread.
 
         controller.appendMessageForTest(
             ChatMessage(sessionID: sessA.id, raw: "hi", kind: .message(body: "hi")))
@@ -2028,7 +2047,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.conversations[keyA]?.unread, 1)
     }
 
-    func testSelectingSessionClearsUnreadAndSetsLastRead() {
+    func testFocusingSessionClearsUnreadAndSetsLastRead() {
         let controller = EngineController(
             persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
         let netID = UUID()
@@ -2043,7 +2062,7 @@ final class EngineControllerTests: XCTestCase {
         controller.conversations[keyA] = ConversationState(key: keyA, unread: 3)
 
         let before = Date()
-        controller.selectedSessionID = sessA.id
+        controller.recordFocusTransition(from: nil, to: sessA.id)
         let after = Date()
 
         XCTAssertEqual(controller.conversations[keyA]?.unread, 0)
@@ -2055,7 +2074,7 @@ final class EngineControllerTests: XCTestCase {
             lastRead!.timeIntervalSince1970, after.timeIntervalSince1970 + 0.1)
     }
 
-    func testNickChangeEventIncrementsUnreadWhenNotSelected() {
+    func testNickChangeEventIncrementsUnreadWhenNotFocused() {
         let controller = EngineController(
             persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
         controller.applySessionForTest(
@@ -2066,8 +2085,7 @@ final class EngineControllerTests: XCTestCase {
             connectionID: 1)
         let conn = controller.connectionsByServerID[1]!
         let netID = controller.connections[conn]!.networkID
-        let sessB = controller.sessionUUID(for: .composed(connectionID: conn, channel: "#b"))!
-        controller.selectedSessionID = sessB
+        // No window is focused on #a, so nick changes there increment unread.
 
         controller.applyNickChangeForTest(
             network: "Libera", channel: "#a",
@@ -2080,15 +2098,12 @@ final class EngineControllerTests: XCTestCase {
     func testSystemSessionMessagesDoNotIncrementUnread() {
         let controller = EngineController(
             persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
-        // Force the system session into existence via an unattributed append. With a
-        // non-system selectedSessionID, the system session would (incorrectly) be
-        // considered "not selected" and bump unread without the explicit guard.
+        // Force the system session into existence via an unattributed append. The
+        // recordActivity guard explicitly skips the system session regardless of focus,
+        // so system-session messages must never bump conversation unread counts.
         controller.applySessionForTest(
             action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a",
             connectionID: 1)
-        let conn = controller.connectionsByServerID[1]!
-        controller.selectedSessionID = controller.sessionUUID(
-            for: .composed(connectionID: conn, channel: "#a"))
 
         controller.appendUnattributedForTest(
             raw: "console line", kind: .notice(body: "console line"))
@@ -2116,7 +2131,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(store.saveCount, 1)
     }
 
-    func testIncomingMessageForSelectedSessionDoesNotIncrementUnread() {
+    func testIncomingMessageForFocusedSessionDoesNotIncrementUnread() {
         let controller = EngineController(
             persistence: InMemoryPersistenceStore(), debounceInterval: .zero)
         let netID = UUID()
@@ -2127,7 +2142,8 @@ final class EngineControllerTests: XCTestCase {
         let locA = SessionLocator.composed(connectionID: connID, channel: "#a")
         let sessA = ChatSession(connectionID: connID, channel: "#a", isActive: true, locator: locA)
         controller.sessions = [sessA]
-        controller.selectedSessionID = sessA.id
+        // Register a window focused on sessA — focusRefcount suppresses unread.
+        controller.recordFocusTransition(from: nil, to: sessA.id)
 
         controller.appendMessageForTest(
             ChatMessage(sessionID: sessA.id, raw: "hi", kind: .message(body: "hi")))
@@ -2972,7 +2988,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(win2.focusedSessionID, bID, "win2 must NOT follow win1")
     }
 
-    func testMarkReadForSessionMatchesLegacyDidSetBehavior() {
+    func testMarkReadAndFocusTransitionBothClearUnread() {
         let controller = EngineController()
         controller.upsertNetworkForTest(id: UUID(), name: "Libera")
         controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#a")
@@ -2981,14 +2997,14 @@ final class EngineControllerTests: XCTestCase {
         let key = controller.conversationKey(for: aID)!
         controller.setConversationStateForTest(ConversationState(key: key, unread: 5))
 
-        // Path 1: explicit method call
+        // Path 1: explicit markRead call
         controller.markRead(forSession: aID)
         let after1 = controller.conversations[key]
         XCTAssertEqual(after1?.unread, 0)
 
-        // Path 2: legacy selectedSessionID assignment (must be equivalent)
+        // Path 2: recordFocusTransition (WindowSession focus change) — must be equivalent
         controller.setConversationStateForTest(ConversationState(key: key, unread: 5))
-        controller.selectedSessionID = aID
+        controller.recordFocusTransition(from: nil, to: aID)
         let after2 = controller.conversations[key]
         XCTAssertEqual(after2?.unread, 0)
         XCTAssertNotNil(after2?.lastReadAt)
@@ -3530,6 +3546,6 @@ func _hexchatAppleShellTestsCompileProbe() {
     controller.applyUserlistForTest(
         action: HC_APPLE_USERLIST_INSERT, network: "Libera", channel: "#probe",
         nick: "alice", modePrefix: "@")
-    _ = controller.visibleUsers(for: controller.selectedSessionID)
+    _ = controller.visibleUsers(for: controller.activeSessionID)
 }
 #endif

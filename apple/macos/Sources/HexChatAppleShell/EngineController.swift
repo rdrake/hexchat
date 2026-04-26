@@ -691,22 +691,8 @@ final class EngineController {
     private var messageRing: [ConversationKey: [ChatMessage]] = [:]
     var sessions: [ChatSession] = []
 
-    var input: String {
-        get { draftBinding(for: selectedSessionID).wrappedValue }
-        set { draftBinding(for: selectedSessionID).wrappedValue = newValue }
-    }
-
     var conversations: [ConversationKey: ConversationState] = [:] {
         didSet { coordinator?.markDirty() }
-    }
-
-    var selectedSessionID: UUID? {
-        didSet {
-            if let newID = selectedSessionID, markReadInternal(forSession: newID) {
-                return
-            }
-            coordinator?.markDirty()
-        }
     }
 
     func markRead(forSession sessionID: UUID) {
@@ -1057,26 +1043,6 @@ final class EngineController {
 
     private var callbackUserdata: UnsafeMutableRawPointer?
 
-    var visibleSessionUUID: UUID? {
-        if let selectedSessionID { return selectedSessionID }
-        if let activeSessionID { return activeSessionID }
-        return sessions.first?.id
-    }
-
-    var visibleSessionID: String {
-        guard let uuid = visibleSessionUUID,
-              let session = sessions.first(where: { $0.id == uuid })
-        else {
-            let connID = systemConnectionUUID()
-            return SessionLocator.composed(connectionID: connID, channel: SystemSession.channel).composedKey
-        }
-        return session.composedKey
-    }
-
-    var visibleMessages: [ChatMessage] { visibleMessages(for: visibleSessionUUID) }
-    var visibleUsers: [ChatUser] { visibleUsers(for: visibleSessionUUID) }
-    var visibleSessionTitle: String { visibleSessionTitle(for: visibleSessionUUID) }
-
     func visibleMessages(for sessionID: UUID?) -> [ChatMessage] {
         guard let id = sessionID else { return [] }
         return messages.filter { $0.sessionID == id }
@@ -1185,21 +1151,12 @@ final class EngineController {
         }
     }
 
-    func send(_ command: String, trackHistory: Bool = true) {
-        send(command, forSession: selectedSessionID, trackHistory: trackHistory)
-    }
-
     func prefillPrivateMessage(to nick: String, forSession sessionID: UUID?) {
         draftBinding(for: sessionID).wrappedValue = "/msg \(nick) "
     }
 
-    func prefillPrivateMessage(to nick: String) {
-        prefillPrivateMessage(to: nick, forSession: selectedSessionID)
-    }
-
     /// TODO(Phase-9): `browseHistory` is not multi-window-safe. It reads/writes the
-    /// controller-global `historyDraft`/`historyCursor` and routes through
-    /// `selectedSessionID` (the primary-window mirror). A secondary window calling
+    /// controller-global `historyDraft`/`historyCursor`. A secondary window calling
     /// this method clobbers the primary window's draft. Fix: take a `forSession:`
     /// parameter and scope `historyDraft`/`historyCursor` per-session, or attach
     /// them to `WindowSession`.
@@ -1731,15 +1688,14 @@ final class EngineController {
         appendMessage(raw: raw, kind: kind, event: nil)
     }
 
-    // Safety: `activeSessionID`/`selectedSessionID` always reference a session currently
-    // in `sessions`. Each engine event is dispatched as its own `Task { @MainActor }` block,
-    // so a LOG_LINE cannot interleave with `HC_APPLE_SESSION_REMOVE` mid-handler. The REMOVE
-    // path updates these UUIDs before `sessions.removeAll` runs, so by the next event tick
-    // both invariants are re-established.
+    // Safety: `activeSessionID` always references a session currently in `sessions`.
+    // Each engine event is dispatched as its own `Task { @MainActor }` block, so a
+    // LOG_LINE cannot interleave with `HC_APPLE_SESSION_REMOVE` mid-handler. The REMOVE
+    // path updates `activeSessionID` before `sessions.removeAll` runs, so by the next
+    // event tick the invariant is re-established.
     private func resolveMessageSessionID(event: RuntimeEvent?) -> UUID {
         if let event, let resolved = resolveEventSessionID(event) { return resolved }
         if let act = activeSessionID { return act }
-        if let sel = selectedSessionID { return sel }
         if let first = sessions.first?.id { return first }
         return systemSessionUUID()
     }
@@ -1780,7 +1736,8 @@ final class EngineController {
                let removed = sessions.first(where: { $0.id == uuid }) {
                 membershipsBySession[uuid] = nil
                 sessionByLocator[removed.locator] = nil
-                if selectedSessionID == uuid { selectedSessionID = nil }
+                focusRefcount.removeValue(forKey: uuid)
+                if lastFocusedSessionID == uuid { lastFocusedSessionID = nil }
                 // Evaluated against the still-intact `sessions` array, before the removeAll call below.
                 if activeSessionID == uuid { activeSessionID = sessions.first(where: { $0.id != uuid })?.id }
                 sessions.removeAll { $0.id == uuid }
@@ -1788,7 +1745,6 @@ final class EngineController {
         case HC_APPLE_SESSION_ACTIVATE:
             let uuid = upsertSession(locator: locator, connectionID: connectionID, channel: channel)
             activeSessionID = uuid
-            if selectedSessionID == nil { selectedSessionID = uuid }
         default:
             break
         }
@@ -1837,7 +1793,6 @@ final class EngineController {
             sessions.append(new)
             sessionByLocator[targetLocator] = new.id
             sessions = sessions.sorted(by: sessionSort)
-            if selectedSessionID == nil { selectedSessionID = new.id }
             resultID = new.id
         }
         resolvePendingLastFocusedIfMatches(uuid: resultID)
