@@ -73,7 +73,7 @@ struct ContentView: View {
                                 Text(session.channel)
                                     .font(.system(.body, design: .monospaced))
                                     .lineLimit(1)
-                                Spacer(minLength: 4)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 unreadBadge(for: session)
                             }
                             .tag(Optional(session.id))

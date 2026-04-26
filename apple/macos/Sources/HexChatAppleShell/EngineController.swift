@@ -759,7 +759,7 @@ final class EngineController {
         }
     }
 
-    // MARK: - Phase 10: per-window unread registry
+    // MARK: - Per-window unread registry
 
     /// Weak pointer wrapper. The controller holds non-owning references so window
     /// lifetime is governed by SwiftUI scene teardown — the controller never
@@ -796,10 +796,8 @@ final class EngineController {
             if let window = box.window {
                 body(window)
             } else {
-                // Safe: Swift for-in over a Dictionary captures a copy of the value
-                // into the iterator at loop start (value-type copy semantics).
-                // Mutating self.weakWindows does not disturb the iterator's snapshot;
-                // entries already visited are not revisited.
+                // Dictionary for-in iterates over a value-type copy; mutating
+                // weakWindows mid-loop is safe.
                 weakWindows.removeValue(forKey: key)
             }
         }
@@ -1744,7 +1742,7 @@ final class EngineController {
         guard sessionID != systemSessionUUIDStorage else { return }
 
         // Per-window: bump every registered window that does NOT currently focus
-        // this session. Phase 10 design §4.2.
+        // this session.
         iterateRegisteredWindows { window in
             if window.focusedSessionID != sessionID {
                 window.unread[sessionID, default: 0] += 1
@@ -1821,9 +1819,9 @@ final class EngineController {
                 historyCursorBySession.removeValue(forKey: uuid)
                 historyDraftBySession.removeValue(forKey: uuid)
                 if lastFocusedSessionID == uuid { lastFocusedSessionID = nil }
-                // Phase 10: scrub stale UUID keys from per-window unread maps so they
+                // Hygiene: scrub stale UUID keys from per-window unread maps so they
                 // don't accumulate across REMOVE/UPSERT cycles. Sidebars only iterate
-                // current sessions, so the entries would be invisible — this is hygiene.
+                // current sessions, so the entries would be invisible if left behind.
                 iterateRegisteredWindows { $0.unread.removeValue(forKey: uuid) }
                 // Evaluated against the still-intact `sessions` array, before the removeAll call below.
                 if activeSessionID == uuid { activeSessionID = sessions.first(where: { $0.id != uuid })?.id }

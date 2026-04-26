@@ -12,7 +12,11 @@ final class WindowSession {
     var focusedSessionID: UUID? {
         didSet {
             guard focusedSessionID != oldValue else { return }
-            if let new = focusedSessionID { unread[new] = 0 }
+            // Guard the write so @Observable doesn't fire a spurious redraw
+            // when re-focusing a session whose unread was already zero.
+            if let new = focusedSessionID, unread[new, default: 0] != 0 {
+                unread[new] = 0
+            }
             controller?.recordFocusTransition(from: oldValue, to: focusedSessionID)
         }
     }
@@ -20,9 +24,9 @@ final class WindowSession {
     /// Per-window unread counts, keyed by session UUID. Bumped by
     /// `EngineController.recordActivity(on:)` for every registered window that
     /// does not currently focus the activity's session. Cleared for `new` in
-    /// `focusedSessionID didSet`. **Volatile** — not persisted across launches;
-    /// the global `ConversationState.unread` is the cold-launch fallback (see
-    /// the Phase 10 design doc, §5–6).
+    /// `focusedSessionID didSet`. Volatile (not persisted across launches);
+    /// `ConversationState.unread` is the cross-launch fallback that surfaces
+    /// in the sidebar via `EngineController.unreadBadge(forSession:window:)`.
     var unread: [UUID: Int] = [:]
 
     /// The controller this window reports focus changes to. Marked
