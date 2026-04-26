@@ -748,6 +748,7 @@ final class EngineController {
     /// calls this with `from: focusedSessionID, to: nil` (synchronously, via
     /// `MainActor.assumeIsolated`).
     func recordFocusTransition(from old: UUID?, to new: UUID?) {
+        guard old != new else { return }
         if let old, let count = focusRefcount[old] {
             if count <= 1 {
                 focusRefcount.removeValue(forKey: old)
@@ -758,6 +759,8 @@ final class EngineController {
         if let new {
             focusRefcount[new, default: 0] += 1
             lastFocusedSessionID = new
+            // markReadInternal returns true when conversation state mutated; the focus
+            // transition itself dirties via lastFocusedSessionID, so the result is moot.
             _ = markReadInternal(forSession: new)
         }
     }

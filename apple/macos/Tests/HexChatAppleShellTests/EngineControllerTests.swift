@@ -3393,6 +3393,18 @@ final class EngineControllerTests: XCTestCase {
         controller.recordFocusTransition(from: nil, to: aID)
         XCTAssertEqual(controller.conversations[key]?.unread, 0, "transitioning focus onto a session must clear unread")
     }
+
+    func testRecordFocusTransitionSelfTransitionIsNoOp() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        controller.recordFocusTransition(from: nil, to: aID)
+        XCTAssertEqual(controller.focusRefcount[aID], 1)
+
+        controller.recordFocusTransition(from: aID, to: aID)
+        XCTAssertEqual(controller.focusRefcount[aID], 1, "self-transition must not perturb refcount")
+        XCTAssertEqual(controller.lastFocusedSessionID, aID, "self-transition must not erase lastFocusedSessionID")
+    }
 }
 #else
 @testable import HexChatAppleShell
