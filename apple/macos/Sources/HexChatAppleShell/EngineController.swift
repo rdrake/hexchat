@@ -1710,8 +1710,12 @@ final class EngineController {
     private func recordActivity(on sessionID: UUID) {
         // Skip the system pseudo-session — its messages are local console output,
         // not unread-bearing conversation activity.
+        // Suppress unread when any window currently focuses this session.
+        // markRead fires from WindowSession.focusedSessionID didSet, but only
+        // on focus change — sequential messages in a focused session need the
+        // refcount check to keep unread at 0.
         guard sessionID != systemSessionUUIDStorage,
-            sessionID != selectedSessionID,
+            focusRefcount[sessionID, default: 0] == 0,
             let key = conversationKey(for: sessionID)
         else { return }
         var state = conversations[key] ?? ConversationState(key: key)

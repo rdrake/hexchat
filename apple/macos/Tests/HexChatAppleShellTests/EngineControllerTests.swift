@@ -3499,6 +3499,77 @@ final class EngineControllerTests: XCTestCase {
         // lastFocusedSessionID survives STOPPED.
         XCTAssertEqual(controller.lastFocusedSessionID, aID)
     }
+
+    // MARK: - Phase 9 Task 5: focusRefcount-based unread suppression
+
+    func testFocusedWindowSuppressesUnread() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        let window = WindowSession(controller: controller, initial: aID)
+
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: aID, raw: "hello", kind: .message(body: "hello")))
+        XCTAssertEqual(controller.conversations[key]?.unread ?? 0, 0)
+
+        _ = window
+    }
+
+    func testTenSequentialMessagesInFocusedSessionLeaveUnreadAtZero() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        let window = WindowSession(controller: controller, initial: aID)
+
+        for i in 0..<10 {
+            controller.appendMessageForTest(
+                ChatMessage(sessionID: aID, raw: "msg \(i)", kind: .message(body: "msg \(i)")))
+        }
+        XCTAssertEqual(
+            controller.conversations[key]?.unread ?? 0, 0,
+            "regression: didSet only fires on focus change, but refcount must keep suppression alive")
+
+        _ = window
+    }
+
+    func testUnfocusedSessionStillIncrementsUnread() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let bID = controller.sessions.first(where: { $0.channel == "#b" })!.id
+        let bKey = controller.conversationKey(for: bID)!
+        let window = WindowSession(controller: controller, initial: aID)
+
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: bID, raw: "ping", kind: .message(body: "ping")))
+        XCTAssertEqual(controller.conversations[bKey]?.unread ?? 0, 1)
+
+        _ = window
+    }
+
+    func testTwoWindowsOneClosedKeepsSuppression() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+
+        let win1 = WindowSession(controller: controller, initial: aID)
+        do {
+            let win2 = WindowSession(controller: controller, initial: aID)
+            _ = win2
+        }  // win2 deinit → refcount goes from 2 to 1
+
+        controller.appendMessageForTest(
+            ChatMessage(sessionID: aID, raw: "hi", kind: .message(body: "hi")))
+        XCTAssertEqual(
+            controller.conversations[key]?.unread ?? 0, 0,
+            "win1 still focused on A — suppression must hold")
+
+        _ = win1
+    }
 }
 #else
 @testable import HexChatAppleShell
