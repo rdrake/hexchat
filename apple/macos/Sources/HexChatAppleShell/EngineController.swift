@@ -718,6 +718,15 @@ final class EngineController {
         return max(perWindow, global)
     }
 
+    /// Dock-tile badge text: sum of all `ConversationState.unread`. Returns nil
+    /// for total 0 (clears the badge), the numeric string for 1–99, "99+" for
+    /// 100+. Read by `DockBadgeBinder` via `withObservationTracking`.
+    var dockBadgeText: String? {
+        let total = conversations.values.reduce(0) { $0 + $1.unread }
+        guard total > 0 else { return nil }
+        return total <= 99 ? "\(total)" : "99+"
+    }
+
     // MARK: - Focus tracking
 
     /// The most-recently focused session UUID across all windows. Cold-launch hint:

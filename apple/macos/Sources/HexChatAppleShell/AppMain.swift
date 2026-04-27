@@ -5,6 +5,7 @@ import SwiftUI
 struct HexChatAppleShellApp: App {
     @State private var controller: EngineController
     @State private var primaryWindow: WindowSession
+    @State private var dockBadge: DockBadgeBinder
 
     @MainActor
     init() {
@@ -15,6 +16,7 @@ struct HexChatAppleShellApp: App {
         _controller = State(initialValue: c)
         _primaryWindow = State(initialValue: WindowSession(
             controller: c, initial: c.lastFocusedSessionID))
+        _dockBadge = State(initialValue: DockBadgeBinder(controller: c))
     }
 
     var body: some Scene {

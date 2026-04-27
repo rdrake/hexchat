@@ -3910,6 +3910,121 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertEqual(controller.unreadBadge(forSession: strangerID, window: window), 0)
         withExtendedLifetime(window) {}
     }
+
+    // MARK: - Phase 11 — Dock badge text
+
+    func testDockBadgeTextIsNilWhenNoConversations() {
+        let controller = EngineController()
+        XCTAssertNil(controller.dockBadgeText)
+    }
+
+    func testDockBadgeTextIsNilWhenAllUnreadAreZero() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(ConversationState(key: key, draft: "", unread: 0, lastReadAt: nil))
+        XCTAssertNil(controller.dockBadgeText)
+    }
+
+    func testDockBadgeTextIsOneForSingleUnread() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(ConversationState(key: key, draft: "", unread: 1, lastReadAt: nil))
+        XCTAssertEqual(controller.dockBadgeText, "1")
+    }
+
+    func testDockBadgeTextIs99ForExactly99() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(ConversationState(key: key, draft: "", unread: 99, lastReadAt: nil))
+        XCTAssertEqual(controller.dockBadgeText, "99")
+    }
+
+    func testDockBadgeTextIs99PlusFor100() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(ConversationState(key: key, draft: "", unread: 100, lastReadAt: nil))
+        XCTAssertEqual(controller.dockBadgeText, "99+")
+    }
+
+    func testDockBadgeTextIs99PlusFor500() {
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(ConversationState(key: key, draft: "", unread: 500, lastReadAt: nil))
+        XCTAssertEqual(controller.dockBadgeText, "99+")
+    }
+
+    func testDockBadgeTextSumsAcrossConversations() {
+        // Sum, not max: 30 + 40 = 70 (not 40).
+        let controller = EngineController()
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        controller.applySessionForTest(action: HC_APPLE_SESSION_UPSERT, network: "Libera", channel: "#b")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let bID = controller.sessions.first(where: { $0.channel == "#b" })!.id
+        let keyA = controller.conversationKey(for: aID)!
+        let keyB = controller.conversationKey(for: bID)!
+        controller.setConversationStateForTest(ConversationState(key: keyA, draft: "", unread: 30, lastReadAt: nil))
+        controller.setConversationStateForTest(ConversationState(key: keyB, draft: "", unread: 40, lastReadAt: nil))
+        XCTAssertEqual(controller.dockBadgeText, "70")
+    }
+
+    // MARK: - Phase 11 — DockBadgeBinder
+
+    func testDockBadgeBinderInitializesToNilBadge() {
+        let controller = EngineController()
+        let binder = DockBadgeBinder(controller: controller)
+        XCTAssertNil(binder.currentBadgeForTest)
+        withExtendedLifetime(binder) {}
+    }
+
+    func testDockBadgeBinderReactsToConversationStateMutation() async {
+        let controller = EngineController()
+        let binder = DockBadgeBinder(controller: controller)
+
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+
+        controller.setConversationStateForTest(ConversationState(key: key, draft: "", unread: 5, lastReadAt: nil))
+        await Task.yield()
+        XCTAssertEqual(binder.currentBadgeForTest, "5")
+
+        controller.setConversationStateForTest(ConversationState(key: key, draft: "", unread: 0, lastReadAt: nil))
+        await Task.yield()
+        XCTAssertNil(binder.currentBadgeForTest)
+        withExtendedLifetime(binder) {}
+    }
+
+    func testDockBadgeBinderHandles99PlusBoundary() async {
+        let controller = EngineController()
+        let binder = DockBadgeBinder(controller: controller)
+
+        controller.applySessionForTest(action: HC_APPLE_SESSION_ACTIVATE, network: "Libera", channel: "#a")
+        let aID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: aID)!
+        controller.setConversationStateForTest(ConversationState(key: key, draft: "", unread: 100, lastReadAt: nil))
+        await Task.yield()
+        XCTAssertEqual(binder.currentBadgeForTest, "99+")
+        withExtendedLifetime(binder) {}
+    }
+
+    func testDockBadgeBinderDoesNotRetainController() {
+        var controller: EngineController? = EngineController()
+        weak var weakController = controller
+        let binder = DockBadgeBinder(controller: controller!)
+        controller = nil
+        XCTAssertNil(weakController, "binder must hold controller weakly")
+        withExtendedLifetime(binder) {}
+    }
 }
 #else
 @testable import HexChatAppleShell
