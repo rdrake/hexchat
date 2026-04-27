@@ -60,3 +60,11 @@ test_chathistory_bridge = executable('test-fe-apple-chathistory-bridge',
 )
 
 test('fe-apple-chathistory-bridge', test_chathistory_bridge)
+
+test_read_marker_bridge = executable('test-fe-apple-read-marker-bridge',
+  sources: 'test-read-marker-bridge.c',
+  link_with: hexchat_apple_core,
+  dependencies: [hexchat_common_dep, dependency('openssl')],
+)
+
+test('fe-apple-read-marker-bridge', test_read_marker_bridge)

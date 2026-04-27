@@ -4025,6 +4025,231 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertNil(weakController, "binder must hold controller weakly")
         withExtendedLifetime(binder) {}
     }
+
+    // MARK: - Phase 12 — haveReadMarker cap bit propagation
+
+    func testConnectionHaveReadMarkerDefaultsFalse() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7, connectionHaveReadMarker: false)
+        let connID = controller.connectionsByServerID[7]!
+        XCTAssertFalse(controller.connections[connID]?.haveReadMarker ?? true)
+    }
+
+    func testConnectionHaveReadMarkerSetTrueFromEvent() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7, connectionHaveReadMarker: true)
+        let connID = controller.connectionsByServerID[7]!
+        XCTAssertTrue(controller.connections[connID]?.haveReadMarker ?? false)
+    }
+
+    func testConnectionHaveReadMarkerFlipsOnSubsequentEvent() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7, connectionHaveReadMarker: true)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_UPSERT, network: "Net", channel: "#a",
+            connectionID: 7, connectionHaveReadMarker: false)
+        let connID = controller.connectionsByServerID[7]!
+        XCTAssertFalse(controller.connections[connID]?.haveReadMarker ?? true)
+    }
+
+    // MARK: - Phase 12 — handleReadMarkerEvent (inbound)
+
+    func testReadMarkerEventUpdatesLastReadAt() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7)
+        let sessionID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: sessionID)!
+        controller.setConversationStateForTest(
+            ConversationState(key: key, draft: "", unread: 5, lastReadAt: nil))
+
+        let tsMs: Int64 = 1_700_000_000_000
+        controller.applyReadMarkerForTest(
+            network: "Net", channel: "#a", connectionID: 7,
+            readMarkerTimestampMs: tsMs)
+
+        let state = controller.conversations[key]!
+        let expected = Date(timeIntervalSince1970: Double(tsMs) / 1000)
+        XCTAssertEqual(state.lastReadAt?.timeIntervalSince1970 ?? 0,
+                       expected.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(state.unread, 0)
+    }
+
+    func testReadMarkerEventIsIdempotentSameTimestamp() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7)
+        let sessionID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: sessionID)!
+        let tsMs: Int64 = 1_700_000_000_000
+
+        controller.applyReadMarkerForTest(
+            network: "Net", channel: "#a", connectionID: 7,
+            readMarkerTimestampMs: tsMs)
+        var state = controller.conversations[key]!
+        state.unread = 3
+        controller.setConversationStateForTest(state)
+        controller.applyReadMarkerForTest(
+            network: "Net", channel: "#a", connectionID: 7,
+            readMarkerTimestampMs: tsMs)
+
+        XCTAssertEqual(controller.conversations[key]?.unread, 3,
+                       "same-timestamp replay must not re-zero unread")
+    }
+
+    func testReadMarkerEventOlderTimestampIgnored() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7)
+        let sessionID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: sessionID)!
+        let newerMs: Int64 = 1_700_000_002_000
+        let olderMs: Int64 = 1_700_000_001_000
+
+        controller.applyReadMarkerForTest(
+            network: "Net", channel: "#a", connectionID: 7,
+            readMarkerTimestampMs: newerMs)
+        var state = controller.conversations[key]!
+        state.unread = 7
+        controller.setConversationStateForTest(state)
+        controller.applyReadMarkerForTest(
+            network: "Net", channel: "#a", connectionID: 7,
+            readMarkerTimestampMs: olderMs)
+
+        XCTAssertEqual(controller.conversations[key]?.unread, 7,
+                       "older-timestamp replay must not re-zero unread")
+        let storedTs = controller.conversations[key]?.lastReadAt?.timeIntervalSince1970 ?? 0
+        XCTAssertEqual(storedTs, Double(newerMs) / 1000, accuracy: 0.001)
+    }
+
+    func testReadMarkerEventZeroTimestampIgnored() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7)
+        let sessionID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: sessionID)!
+        controller.setConversationStateForTest(
+            ConversationState(key: key, draft: "", unread: 4, lastReadAt: nil))
+
+        controller.applyReadMarkerForTest(
+            network: "Net", channel: "#a", connectionID: 7,
+            readMarkerTimestampMs: 0)
+
+        XCTAssertEqual(controller.conversations[key]?.unread, 4)
+        XCTAssertNil(controller.conversations[key]?.lastReadAt)
+    }
+
+    func testReadMarkerEventUnknownChannelDropsSilently() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7)
+        controller.applyReadMarkerForTest(
+            network: "Net", channel: "#unknown", connectionID: 7,
+            readMarkerTimestampMs: 1_700_000_000_000)
+        // Absence of crash is the invariant.
+    }
+
+    // MARK: - Phase 12 — backward compatibility
+
+    func testReadMarkerEventBeforeCapNegotiatedDropsSilently() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7, connectionHaveReadMarker: false)
+        let sessionID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        let key = controller.conversationKey(for: sessionID)!
+        controller.setConversationStateForTest(
+            ConversationState(key: key, draft: "", unread: 2, lastReadAt: nil))
+
+        // timestamp_ms = 0 = no marker per Phase 12 ABI.
+        controller.applyReadMarkerForTest(
+            network: "Net", channel: "#a", connectionID: 7,
+            connectionHaveReadMarker: false,
+            readMarkerTimestampMs: 0)
+
+        XCTAssertEqual(controller.conversations[key]?.unread, 2)
+    }
+
+    func testUnknownEventKindStillDropsSilently() {
+        let controller = EngineController()
+        // rawKind 255 is beyond HC_APPLE_EVENT_READ_MARKER (8); exercises the
+        // `default: break` guard in handleRuntimeEvent without needing access
+        // to the fileprivate RuntimeEvent struct.
+        controller.applyRawEventKindForTest(rawKind: 255)
+        // Absence of crash is the invariant.
+    }
+
+    // MARK: - Phase 12 — outbound MARKREAD via ReadMarkerBridge
+
+    final class RecordingReadMarkerBridge: ReadMarkerBridge, @unchecked Sendable {
+        struct Call: Equatable {
+            let connectionID: UInt64
+            let channel: String
+            let timestampMs: Int64
+        }
+        private let lock = NSLock()
+        private var calls: [Call] = []
+
+        func sendMarkread(connectionID: UInt64, channel: String, timestampMs: Int64) {
+            lock.lock()
+            calls.append(Call(connectionID: connectionID, channel: channel, timestampMs: timestampMs))
+            lock.unlock()
+        }
+        var records: [Call] {
+            lock.lock(); defer { lock.unlock() }; return calls
+        }
+    }
+
+    func testMarkReadSendsMarkreadWhenCapActive() {
+        let bridge = RecordingReadMarkerBridge()
+        let controller = EngineController(readMarker: bridge)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7, connectionHaveReadMarker: true)
+        let sessionID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+
+        controller.markRead(forSession: sessionID)
+
+        XCTAssertEqual(bridge.records.count, 1)
+        XCTAssertEqual(bridge.records.first?.connectionID, 7)
+        XCTAssertEqual(bridge.records.first?.channel, "#a")
+        let tsMs = bridge.records.first?.timestampMs ?? 0
+        let delta = abs(Double(tsMs) / 1000 - Date().timeIntervalSince1970)
+        XCTAssertLessThan(delta, 2.0)
+    }
+
+    func testMarkReadDoesNotSendMarkreadWhenCapInactive() {
+        let bridge = RecordingReadMarkerBridge()
+        let controller = EngineController(readMarker: bridge)
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7, connectionHaveReadMarker: false)
+        let sessionID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+
+        controller.markRead(forSession: sessionID)
+        XCTAssertTrue(bridge.records.isEmpty)
+    }
+
+    func testMarkReadWithDefaultBridgeDoesNotCrashWhenRuntimeAbsent() {
+        let controller = EngineController()
+        controller.applySessionForTest(
+            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+            connectionID: 7, connectionHaveReadMarker: true)
+        let sessionID = controller.sessions.first(where: { $0.channel == "#a" })!.id
+        controller.markRead(forSession: sessionID)
+        // Absence of crash is the invariant.
+    }
 }
 #else
 @testable import HexChatAppleShell

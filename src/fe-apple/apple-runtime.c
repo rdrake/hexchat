@@ -247,6 +247,32 @@ hc_apple_runtime_emit_mode_change (const char *network,
 }
 
 /*
+ * Phase 12: emit HC_APPLE_EVENT_READ_MARKER with the inbound marker timestamp
+ * and the connection's have_read_marker cap bit snapshot.
+ */
+void
+hc_apple_runtime_emit_read_marker (uint64_t session_id,
+                                   uint64_t connection_id,
+                                   const char *self_nick,
+                                   const char *network,
+                                   const char *channel,
+                                   time_t timestamp,
+                                   uint8_t have_readmarker)
+{
+	hc_apple_event event = {0};
+	if (!hc_apple_runtime.callback) return;
+	event.kind = HC_APPLE_EVENT_READ_MARKER;
+	event.session_id = session_id;
+	event.connection_id = connection_id;
+	event.self_nick = self_nick;
+	event.network = network;
+	event.channel = channel;
+	event.read_marker_timestamp_ms = (int64_t)timestamp * 1000;
+	event.connection_have_readmarker = have_readmarker;
+	hc_apple_runtime.callback (&event, hc_apple_runtime.callback_userdata);
+}
+
+/*
  * Phase 7.5: format an absolute UTC millisecond timestamp into the IRCv3
  * `timestamp=YYYY-MM-DDThh:mm:ss.sssZ` reference string used by CHATHISTORY.
  * Exposed via the internal `hc_apple_runtime_format_chathistory_reference`
@@ -364,6 +390,96 @@ hc_apple_runtime_request_chathistory_before (uint64_t connection_id,
 
 	g_main_context_invoke (hc_apple_runtime.context,
 	                       hc_apple_runtime_request_chathistory_before_cb,
+	                       dispatch);
+	return 1;
+}
+
+/*
+ * Phase 12: outbound MARKREAD dispatch — mirror of the chathistory dispatch
+ * pattern above. `format_markread_reference` is a static helper pulled out so
+ * test-read-marker-bridge.c can unit-test the formatter independently.
+ */
+
+/* Extracted formatter: timestamp_ms → "timestamp=YYYY-MM-DDThh:mm:ss.000Z".
+ * Writes into `out` (size `out_len`). Not declared in the public header but
+ * has external linkage so test-read-marker-bridge.c can reach it via extern. */
+void
+format_markread_reference (int64_t timestamp_ms, char *out, size_t out_len)
+{
+	time_t ts_sec = (time_t)(timestamp_ms / 1000);
+	struct tm utc;
+	gmtime_r (&ts_sec, &utc);
+	snprintf (out, out_len,
+	          "timestamp=%04d-%02d-%02dT%02d:%02d:%02d.000Z",
+	          utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+	          utc.tm_hour, utc.tm_min, utc.tm_sec);
+}
+
+typedef struct
+{
+	uint64_t connection_id;
+	char *channel;
+	char reference[64]; /* "timestamp=YYYY-MM-DDThh:mm:ss.000Z" */
+} hc_apple_markread_dispatch_data;
+
+static gboolean
+hc_apple_runtime_send_markread_cb (gpointer data)
+{
+	hc_apple_markread_dispatch_data *dispatch = data;
+	server *target_serv = NULL;
+	GSList *list;
+
+	if (!dispatch)
+		return G_SOURCE_REMOVE;
+
+	for (list = serv_list; list; list = list->next)
+	{
+		server *serv = list->data;
+		if (serv && (uint64_t)serv->id + 1 == dispatch->connection_id)
+		{
+			target_serv = serv;
+			break;
+		}
+	}
+	if (!target_serv || !target_serv->have_read_marker || !target_serv->connected)
+		goto done;
+
+	for (list = sess_list; list; list = list->next)
+	{
+		session *sess = list->data;
+		if (sess && sess->server == target_serv
+		    && target_serv->p_cmp (sess->channel, dispatch->channel) == 0)
+		{
+			tcp_sendf (target_serv, "MARKREAD %s %s\r\n",
+			           dispatch->channel, dispatch->reference);
+			break;
+		}
+	}
+
+done:
+	g_free (dispatch->channel);
+	g_free (dispatch);
+	return G_SOURCE_REMOVE;
+}
+
+int
+hc_apple_runtime_send_markread (uint64_t connection_id,
+                                 const char *channel,
+                                 int64_t timestamp_ms)
+{
+	hc_apple_markread_dispatch_data *dispatch;
+
+	if (!hc_apple_runtime.context || !channel || !channel[0])
+		return 0;
+
+	dispatch = g_new0 (hc_apple_markread_dispatch_data, 1);
+	dispatch->connection_id = connection_id;
+	dispatch->channel = g_strdup (channel);
+	format_markread_reference (timestamp_ms, dispatch->reference,
+	                           sizeof dispatch->reference);
+
+	g_main_context_invoke (hc_apple_runtime.context,
+	                       hc_apple_runtime_send_markread_cb,
 	                       dispatch);
 	return 1;
 }

@@ -55,3 +55,11 @@ void hc_apple_runtime_emit_session (hc_apple_session_action action,
                                     uint64_t connection_id,
                                     const char *self_nick,
                                     uint8_t connection_have_chathistory);
+/* Phase 12: emit HC_APPLE_EVENT_READ_MARKER. */
+void hc_apple_runtime_emit_read_marker (uint64_t session_id,
+                                        uint64_t connection_id,
+                                        const char *self_nick,
+                                        const char *network,
+                                        const char *channel,
+                                        time_t timestamp,
+                                        uint8_t have_readmarker);

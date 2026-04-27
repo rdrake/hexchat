@@ -849,10 +849,24 @@ fe_toast_show (session *sess, const char *text, int linger_ms, int type,
 	HC_APPLE_LOG_NOOP ("fe_toast_show");
 }
 
+static uint8_t
+hc_apple_session_have_readmarker (const session *sess)
+{
+	return (sess && sess->server && sess->server->have_read_marker) ? 1 : 0;
+}
+
 void
 fe_set_marker_from_timestamp (session *sess, time_t timestamp)
 {
-	HC_APPLE_LOG_NOOP ("fe_set_marker_from_timestamp");
+	if (!sess || !sess->server) return;
+	hc_apple_runtime_emit_read_marker (
+	    hc_apple_session_runtime_id (sess),
+	    hc_apple_session_connection_id (sess),
+	    hc_apple_session_self_nick (sess),
+	    sess->server->servername[0] ? sess->server->servername : NULL,
+	    sess->channel,
+	    timestamp,
+	    hc_apple_session_have_readmarker (sess));
 }
 
 void

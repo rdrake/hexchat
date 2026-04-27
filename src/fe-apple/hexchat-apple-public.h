@@ -22,6 +22,7 @@ typedef enum
 	HC_APPLE_EVENT_MEMBERSHIP_CHANGE = 5,
 	HC_APPLE_EVENT_NICK_CHANGE = 6,
 	HC_APPLE_EVENT_MODE_CHANGE = 7,
+	HC_APPLE_EVENT_READ_MARKER = 8,
 } hc_apple_event_kind;
 
 typedef enum
@@ -98,6 +99,9 @@ typedef struct
 	 * server context. Phase 7.5: the Swift side caches this on Connection
 	 * so loadOlder can gate chathistory bridge dispatch on the cap bit. */
 	uint8_t connection_have_chathistory;
+	/* Phase 12: read-marker cap bit and inbound marker timestamp. */
+	uint8_t connection_have_readmarker;
+	int64_t read_marker_timestamp_ms;  /* time_t * 1000; 0 = no timestamp */
 } hc_apple_event;
 
 typedef void (*hc_apple_event_cb) (const hc_apple_event *event, void *userdata);
@@ -184,5 +188,17 @@ int hc_apple_runtime_request_chathistory_before (uint64_t connection_id,
                                                   const char *channel,
                                                   int64_t before_msec,
                                                   int limit);
+/*
+ * Phase 12: dispatch an outbound MARKREAD command onto the engine thread for
+ * the given (connection_id, channel) at the given UTC millisecond timestamp.
+ *
+ * Returns 1 if the dispatch was queued; 0 if the runtime is not running or
+ * the inputs are invalid. All other failure modes (unknown connection, channel
+ * not found, cap lost, disconnected) drop silently inside the dispatched
+ * callback after the synchronous return.
+ */
+int hc_apple_runtime_send_markread (uint64_t connection_id,
+                                     const char *channel,
+                                     int64_t timestamp_ms);
 
 void hc_apple_runtime_stop (void);

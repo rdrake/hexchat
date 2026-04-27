@@ -500,23 +500,29 @@ struct Connection: Identifiable, Hashable, Codable, Transferable {
     /// Phase 7.5 `loadOlder` path gates the chathistory bridge dispatch on
     /// this flag.
     var haveChathistory: Bool
+    /// Snapshot of `server::have_read_marker`. Updated on every event the
+    /// connection is observed in; flips on CAP NEW/DEL or full reconnect.
+    /// Phase 12 `markReadInternal` gates outbound MARKREAD on this flag.
+    var haveReadMarker: Bool
 
     init(
         id: UUID,
         networkID: UUID,
         serverName: String,
         selfNick: String? = nil,
-        haveChathistory: Bool = false
+        haveChathistory: Bool = false,
+        haveReadMarker: Bool = false
     ) {
         self.id = id
         self.networkID = networkID
         self.serverName = serverName
         self.selfNick = selfNick
         self.haveChathistory = haveChathistory
+        self.haveReadMarker = haveReadMarker
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, networkID, serverName, selfNick, haveChathistory
+        case id, networkID, serverName, selfNick, haveChathistory, haveReadMarker
     }
 
     init(from decoder: Decoder) throws {
@@ -528,6 +534,7 @@ struct Connection: Identifiable, Hashable, Codable, Transferable {
         // Missing key decodes to false: an unknown/missing capability is the
         // safe-default value. This matches the property's = false initializer.
         self.haveChathistory = try c.decodeIfPresent(Bool.self, forKey: .haveChathistory) ?? false
+        self.haveReadMarker = try c.decodeIfPresent(Bool.self, forKey: .haveReadMarker) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -537,6 +544,7 @@ struct Connection: Identifiable, Hashable, Codable, Transferable {
         try c.encode(serverName, forKey: .serverName)
         try c.encodeIfPresent(selfNick, forKey: .selfNick)
         try c.encode(haveChathistory, forKey: .haveChathistory)
+        try c.encode(haveReadMarker, forKey: .haveReadMarker)
     }
 
     var plainTextDescription: String { serverName }
@@ -576,6 +584,22 @@ struct CRuntimeChathistoryBridge: ChathistoryBridge {
     func requestBefore(connectionID: UInt64, channel: String, beforeMsec: Int64, limit: Int) {
         _ = hc_apple_runtime_request_chathistory_before(
             connectionID, channel, beforeMsec, Int32(limit))
+    }
+}
+
+/// Outbound MARKREAD bridge. The production implementation calls
+/// `hc_apple_runtime_send_markread`; tests inject a recording fake.
+/// `sendMarkread` is fire-and-forget — failures inside the C callback drop
+/// silently.
+protocol ReadMarkerBridge: Sendable {
+    func sendMarkread(connectionID: UInt64, channel: String, timestampMs: Int64)
+}
+
+/// Production bridge — calls `hc_apple_runtime_send_markread` in
+/// `src/fe-apple/apple-runtime.c`.
+struct CRuntimeReadMarkerBridge: ReadMarkerBridge {
+    func sendMarkread(connectionID: UInt64, channel: String, timestampMs: Int64) {
+        _ = hc_apple_runtime_send_markread(connectionID, channel, timestampMs)
     }
 }
 
@@ -702,11 +726,26 @@ final class EngineController {
     @discardableResult
     private func markReadInternal(forSession sessionID: UUID) -> Bool {
         guard let key = conversationKey(for: sessionID) else { return false }
+        let now = Date()
         var state = conversations[key] ?? ConversationState(key: key)
         state.unread = 0
-        state.lastReadAt = Date()
+        state.lastReadAt = now
         conversations[key] = state
+
+        if let connUUID = connectionForSession(sessionID),
+           let serverID = connectionsByServerID.first(where: { $0.value == connUUID })?.key,
+           connections[connUUID]?.haveReadMarker == true,
+           let channel = sessions.first(where: { $0.id == sessionID })?.channel
+        {
+            let tsMs = Int64(now.timeIntervalSince1970 * 1000)
+            readMarkerBridge.sendMarkread(connectionID: serverID, channel: channel, timestampMs: tsMs)
+        }
+
         return true
+    }
+
+    private func connectionForSession(_ sessionID: UUID) -> UUID? {
+        sessions.first(where: { $0.id == sessionID })?.connectionID
     }
 
     /// Sidebar-facing unread count. Returns `max(perWindow, global)` so cold-
@@ -983,6 +1022,8 @@ final class EngineController {
     @ObservationIgnored
     private let chathistoryBridge: ChathistoryBridge
     @ObservationIgnored
+    private let readMarkerBridge: ReadMarkerBridge
+    @ObservationIgnored
     nonisolated private static let messageStoreLog = Logger(
         subsystem: "net.afternet.hexchat", category: "messageStore")
 
@@ -997,14 +1038,26 @@ final class EngineController {
             debounceInterval: .milliseconds(500))
     }
 
+    /// Convenience init for tests that only need to inject a ReadMarkerBridge
+    /// without supplying persistence/messageStore infrastructure.
+    convenience init(readMarker: ReadMarkerBridge) {
+        self.init(
+            persistence: InMemoryPersistenceStore(),
+            messageStore: InMemoryMessageStore(),
+            debounceInterval: .milliseconds(500),
+            readMarker: readMarker)
+    }
+
     init(
         persistence: PersistenceStore,
         messageStore: MessageStore = InMemoryMessageStore(),
         debounceInterval: Duration = .milliseconds(500),
-        chathistory: ChathistoryBridge = CRuntimeChathistoryBridge()
+        chathistory: ChathistoryBridge = CRuntimeChathistoryBridge(),
+        readMarker: ReadMarkerBridge = CRuntimeReadMarkerBridge()
     ) {
         self.messageStore = messageStore
         self.chathistoryBridge = chathistory
+        self.readMarkerBridge = readMarker
         // Coordinator stays nil during apply() so didSet observers don't schedule
         // saves while we're rehydrating from disk. Wired up after apply() completes.
         self.coordinator = nil
@@ -1280,7 +1333,9 @@ final class EngineController {
             modesArgs: nil,
             timestampSeconds: 0,
             serverMsgID: nil,
-            connectionHaveChathistory: false
+            connectionHaveChathistory: false,
+            connectionHaveReadMarker: false,
+            readMarkerTimestampMs: 0
         )
         handleUserlistEvent(event)
     }
@@ -1316,7 +1371,9 @@ final class EngineController {
             modesArgs: nil,
             timestampSeconds: 0,
             serverMsgID: nil,
-            connectionHaveChathistory: false
+            connectionHaveChathistory: false,
+            connectionHaveReadMarker: false,
+            readMarkerTimestampMs: 0
         )
         handleUserlistEvent(event)
     }
@@ -1332,7 +1389,8 @@ final class EngineController {
         sessionID: UInt64 = 0,
         connectionID: UInt64 = 0,
         selfNick: String? = nil,
-        connectionHaveChathistory: Bool = false
+        connectionHaveChathistory: Bool = false,
+        connectionHaveReadMarker: Bool = false
     ) {
         let event = RuntimeEvent(
             kind: HC_APPLE_EVENT_SESSION,
@@ -1357,7 +1415,9 @@ final class EngineController {
             modesArgs: nil,
             timestampSeconds: 0,
             serverMsgID: nil,
-            connectionHaveChathistory: connectionHaveChathistory
+            connectionHaveChathistory: connectionHaveChathistory,
+            connectionHaveReadMarker: connectionHaveReadMarker,
+            readMarkerTimestampMs: 0
         )
         handleSessionEvent(event)
     }
@@ -1388,7 +1448,8 @@ final class EngineController {
             connectionID: 0, selfNick: nil,
             membershipAction: HC_APPLE_MEMBERSHIP_JOIN, targetNick: nil,
             reason: nil, modes: nil, modesArgs: nil, timestampSeconds: 0,
-            serverMsgID: nil, connectionHaveChathistory: false)
+            serverMsgID: nil, connectionHaveChathistory: false,
+            connectionHaveReadMarker: false, readMarkerTimestampMs: 0)
         handleRuntimeEvent(event)
     }
 
@@ -1428,7 +1489,9 @@ final class EngineController {
             modesArgs: nil,
             timestampSeconds: timestampSeconds,
             serverMsgID: nil,
-            connectionHaveChathistory: connectionHaveChathistory
+            connectionHaveChathistory: connectionHaveChathistory,
+            connectionHaveReadMarker: false,
+            readMarkerTimestampMs: 0
         )
         handleRuntimeEvent(event)
     }
@@ -1449,7 +1512,8 @@ final class EngineController {
             membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
             targetNick: newNick, reason: nil, modes: nil, modesArgs: nil,
             timestampSeconds: timestampSeconds,
-            serverMsgID: nil, connectionHaveChathistory: false)
+            serverMsgID: nil, connectionHaveChathistory: false,
+            connectionHaveReadMarker: false, readMarkerTimestampMs: 0)
         handleRuntimeEvent(event)
     }
 
@@ -1469,7 +1533,8 @@ final class EngineController {
             membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
             targetNick: nil, reason: nil, modes: modes, modesArgs: args,
             timestampSeconds: timestampSeconds,
-            serverMsgID: nil, connectionHaveChathistory: false)
+            serverMsgID: nil, connectionHaveChathistory: false,
+            connectionHaveReadMarker: false, readMarkerTimestampMs: 0)
         handleRuntimeEvent(event)
     }
 
@@ -1482,6 +1547,7 @@ final class EngineController {
         selfNick: String? = nil,
         serverMsgID: String? = nil,
         connectionHaveChathistory: Bool = false,
+        connectionHaveReadMarker: Bool = false,
         timestampSeconds: Int64 = 0
     ) {
         let event = RuntimeEvent(
@@ -1507,8 +1573,60 @@ final class EngineController {
             modesArgs: nil,
             timestampSeconds: timestampSeconds,
             serverMsgID: serverMsgID,
-            connectionHaveChathistory: connectionHaveChathistory
+            connectionHaveChathistory: connectionHaveChathistory,
+            connectionHaveReadMarker: connectionHaveReadMarker,
+            readMarkerTimestampMs: 0
         )
+        handleRuntimeEvent(event)
+    }
+
+    func applyReadMarkerForTest(
+        network: String? = nil,
+        channel: String? = nil,
+        sessionID: UInt64 = 0,
+        connectionID: UInt64 = 0,
+        selfNick: String? = nil,
+        connectionHaveReadMarker: Bool = false,
+        readMarkerTimestampMs: Int64 = 0
+    ) {
+        let event = RuntimeEvent(
+            kind: HC_APPLE_EVENT_READ_MARKER,
+            text: nil,
+            phase: HC_APPLE_LIFECYCLE_STARTING,
+            code: 0,
+            sessionID: sessionID,
+            network: network,
+            channel: channel,
+            nick: nil, modePrefix: nil, account: nil, host: nil,
+            isMe: false, isAway: false,
+            connectionID: connectionID, selfNick: selfNick,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            targetNick: nil, reason: nil, modes: nil, modesArgs: nil,
+            timestampSeconds: 0, serverMsgID: nil,
+            connectionHaveChathistory: false,
+            connectionHaveReadMarker: connectionHaveReadMarker,
+            readMarkerTimestampMs: readMarkerTimestampMs
+        )
+        handleRuntimeEvent(event)
+    }
+
+    /// Dispatches a minimal RuntimeEvent carrying the given raw event-kind value.
+    /// Used by backward-compat tests to exercise the `default: break` guard in
+    /// `handleRuntimeEvent` without needing access to the fileprivate struct.
+    func applyRawEventKindForTest(rawKind: UInt32) {
+        let kind = hc_apple_event_kind(rawValue: rawKind)
+        let event = RuntimeEvent(
+            kind: kind,
+            text: nil, phase: HC_APPLE_LIFECYCLE_STARTING,
+            code: 0, sessionID: 0, network: nil, channel: nil,
+            nick: nil, modePrefix: nil, account: nil, host: nil,
+            isMe: false, isAway: false, connectionID: 0, selfNick: nil,
+            membershipAction: HC_APPLE_MEMBERSHIP_JOIN,
+            targetNick: nil, reason: nil, modes: nil, modesArgs: nil,
+            timestampSeconds: 0, serverMsgID: nil,
+            connectionHaveChathistory: false,
+            connectionHaveReadMarker: false,
+            readMarkerTimestampMs: 0)
         handleRuntimeEvent(event)
     }
 
@@ -1575,6 +1693,8 @@ final class EngineController {
             handleNickChangeEvent(event)
         case HC_APPLE_EVENT_MODE_CHANGE:
             handleModeChangeEvent(event)
+        case HC_APPLE_EVENT_READ_MARKER:
+            handleReadMarkerEvent(event)
         default:
             break
         }
@@ -1784,7 +1904,8 @@ final class EngineController {
             networkID: networkID,
             serverName: networkName,
             selfNick: event.selfNick,
-            haveChathistory: event.connectionHaveChathistory)
+            haveChathistory: event.connectionHaveChathistory,
+            haveReadMarker: event.connectionHaveReadMarker)
     }
 
     private func resolveEventSessionID(_ event: RuntimeEvent) -> UUID? {
@@ -1901,7 +2022,8 @@ final class EngineController {
     @discardableResult
     private func upsertConnection(
         serverID: UInt64, networkID: UUID, serverName: String, selfNick: String?,
-        haveChathistory: Bool = false
+        haveChathistory: Bool = false,
+        haveReadMarker: Bool = false
     ) -> UUID {
         if let existing = connectionsByServerID[serverID] {
             if connections[existing]?.serverName != serverName {
@@ -1916,12 +2038,17 @@ final class EngineController {
             if connections[existing]?.haveChathistory != haveChathistory {
                 connections[existing]?.haveChathistory = haveChathistory
             }
+            // Phase 12: read-marker cap bit mirrors haveChathistory pattern.
+            if connections[existing]?.haveReadMarker != haveReadMarker {
+                connections[existing]?.haveReadMarker = haveReadMarker
+            }
             return existing
         }
         let new = Connection(
             id: UUID(), networkID: networkID,
             serverName: serverName, selfNick: selfNick,
-            haveChathistory: haveChathistory)
+            haveChathistory: haveChathistory,
+            haveReadMarker: haveReadMarker)
         connections[new.id] = new
         connectionsByServerID[serverID] = new.id
         return new.id
@@ -2051,6 +2178,26 @@ final class EngineController {
             timestamp: timestamp))
     }
 
+    private func handleReadMarkerEvent(_ event: RuntimeEvent) {
+        guard event.readMarkerTimestampMs > 0 else { return }
+        guard let key = resolveEventSessionID(event)
+                .flatMap({ conversationKey(for: $0) }) else { return }
+
+        let serverDate = Date(timeIntervalSince1970: Double(event.readMarkerTimestampMs) / 1000)
+        var state = conversations[key] ?? ConversationState(key: key)
+
+        let existing = state.lastReadAt ?? .distantPast
+        guard serverDate > existing else { return }
+
+        if state.lastReadAt != serverDate {
+            state.lastReadAt = serverDate
+        }
+        if state.unread != 0 {
+            state.unread = 0
+        }
+        conversations[key] = state
+    }
+
     private func sessionSort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {
         let lhsName = networkDisplayName(for: lhs.connectionID) ?? ""
         let rhsName = networkDisplayName(for: rhs.connectionID) ?? ""
@@ -2124,6 +2271,12 @@ fileprivate struct RuntimeEvent {
     let serverMsgID: String?
     /// Snapshot of `sess->server->have_chathistory` at emit time.
     let connectionHaveChathistory: Bool
+    // Phase 12: read-marker bridge fields.
+    /// Snapshot of `sess->server->have_read_marker` at emit time.
+    let connectionHaveReadMarker: Bool
+    /// Inbound MARKREAD timestamp in milliseconds (seconds × 1000). Zero when
+    /// the event carries no timestamp (e.g. session events).
+    let readMarkerTimestampMs: Int64
 
     var userlistAction: hc_apple_userlist_action {
         hc_apple_userlist_action(rawValue: UInt32(code))
@@ -2191,7 +2344,9 @@ private func makeRuntimeEvent(from pointer: UnsafePointer<hc_apple_event>) -> Ru
         modesArgs: copiedModesArgs,
         timestampSeconds: raw.timestamp_seconds,
         serverMsgID: copiedServerMsgID,
-        connectionHaveChathistory: raw.connection_have_chathistory != 0
+        connectionHaveChathistory: raw.connection_have_chathistory != 0,
+        connectionHaveReadMarker: raw.connection_have_readmarker != 0,
+        readMarkerTimestampMs: raw.read_marker_timestamp_ms
     )
 }
 
