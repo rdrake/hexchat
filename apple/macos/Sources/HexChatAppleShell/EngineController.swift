@@ -502,7 +502,6 @@ struct Connection: Identifiable, Hashable, Codable, Transferable {
     var haveChathistory: Bool
     /// Snapshot of `server::have_read_marker`. Updated on every event the
     /// connection is observed in; flips on CAP NEW/DEL or full reconnect.
-    /// Phase 12 `markReadInternal` gates outbound MARKREAD on this flag.
     var haveReadMarker: Bool
 
     init(
@@ -732,20 +731,16 @@ final class EngineController {
         state.lastReadAt = now
         conversations[key] = state
 
-        if let connUUID = connectionForSession(sessionID),
-           let serverID = connectionsByServerID.first(where: { $0.value == connUUID })?.key,
-           connections[connUUID]?.haveReadMarker == true,
-           let channel = sessions.first(where: { $0.id == sessionID })?.channel
+        if let session = sessions.first(where: { $0.id == sessionID }),
+           let serverID = runtimeServerID(forConnection: session.connectionID),
+           connections[session.connectionID]?.haveReadMarker == true
         {
             let tsMs = Int64(now.timeIntervalSince1970 * 1000)
-            readMarkerBridge.sendMarkread(connectionID: serverID, channel: channel, timestampMs: tsMs)
+            readMarkerBridge.sendMarkread(
+                connectionID: serverID, channel: session.channel, timestampMs: tsMs)
         }
 
         return true
-    }
-
-    private func connectionForSession(_ sessionID: UUID) -> UUID? {
-        sessions.first(where: { $0.id == sessionID })?.connectionID
     }
 
     /// Sidebar-facing unread count. Returns `max(perWindow, global)` so cold-
@@ -1038,8 +1033,6 @@ final class EngineController {
             debounceInterval: .milliseconds(500))
     }
 
-    /// Convenience init for tests that only need to inject a ReadMarkerBridge
-    /// without supplying persistence/messageStore infrastructure.
     convenience init(readMarker: ReadMarkerBridge) {
         self.init(
             persistence: InMemoryPersistenceStore(),
@@ -1610,9 +1603,6 @@ final class EngineController {
         handleRuntimeEvent(event)
     }
 
-    /// Dispatches a minimal RuntimeEvent carrying the given raw event-kind value.
-    /// Used by backward-compat tests to exercise the `default: break` guard in
-    /// `handleRuntimeEvent` without needing access to the fileprivate struct.
     func applyRawEventKindForTest(rawKind: UInt32) {
         let kind = hc_apple_event_kind(rawValue: rawKind)
         let event = RuntimeEvent(
@@ -2038,7 +2028,6 @@ final class EngineController {
             if connections[existing]?.haveChathistory != haveChathistory {
                 connections[existing]?.haveChathistory = haveChathistory
             }
-            // Phase 12: read-marker cap bit mirrors haveChathistory pattern.
             if connections[existing]?.haveReadMarker != haveReadMarker {
                 connections[existing]?.haveReadMarker = haveReadMarker
             }
@@ -2189,12 +2178,8 @@ final class EngineController {
         let existing = state.lastReadAt ?? .distantPast
         guard serverDate > existing else { return }
 
-        if state.lastReadAt != serverDate {
-            state.lastReadAt = serverDate
-        }
-        if state.unread != 0 {
-            state.unread = 0
-        }
+        state.lastReadAt = serverDate
+        if state.unread != 0 { state.unread = 0 }
         conversations[key] = state
     }
 
@@ -2271,7 +2256,6 @@ fileprivate struct RuntimeEvent {
     let serverMsgID: String?
     /// Snapshot of `sess->server->have_chathistory` at emit time.
     let connectionHaveChathistory: Bool
-    // Phase 12: read-marker bridge fields.
     /// Snapshot of `sess->server->have_read_marker` at emit time.
     let connectionHaveReadMarker: Bool
     /// Inbound MARKREAD timestamp in milliseconds (seconds × 1000). Zero when

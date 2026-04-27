@@ -866,7 +866,8 @@ fe_set_marker_from_timestamp (session *sess, time_t timestamp)
 	    sess->server->servername[0] ? sess->server->servername : NULL,
 	    sess->channel,
 	    timestamp,
-	    hc_apple_session_have_readmarker (sess));
+	    hc_apple_session_have_readmarker (sess),
+	    hc_apple_session_have_chathistory (sess));
 }
 
 void

@@ -4026,24 +4026,19 @@ final class EngineControllerTests: XCTestCase {
         withExtendedLifetime(binder) {}
     }
 
-    // MARK: - Phase 12 — haveReadMarker cap bit propagation
+    // MARK: - haveReadMarker cap bit propagation
 
-    func testConnectionHaveReadMarkerDefaultsFalse() {
-        let controller = EngineController()
-        controller.applySessionForTest(
-            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
-            connectionID: 7, connectionHaveReadMarker: false)
-        let connID = controller.connectionsByServerID[7]!
-        XCTAssertFalse(controller.connections[connID]?.haveReadMarker ?? true)
-    }
-
-    func testConnectionHaveReadMarkerSetTrueFromEvent() {
-        let controller = EngineController()
-        controller.applySessionForTest(
-            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
-            connectionID: 7, connectionHaveReadMarker: true)
-        let connID = controller.connectionsByServerID[7]!
-        XCTAssertTrue(controller.connections[connID]?.haveReadMarker ?? false)
+    func testConnectionHaveReadMarkerMatchesEvent() {
+        for capBit in [false, true] {
+            let controller = EngineController()
+            controller.applySessionForTest(
+                action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
+                connectionID: 7, connectionHaveReadMarker: capBit)
+            let connID = controller.connectionsByServerID[7]!
+            XCTAssertEqual(
+                controller.connections[connID]?.haveReadMarker, capBit,
+                "haveReadMarker should track the event cap bit (\(capBit))")
+        }
     }
 
     func testConnectionHaveReadMarkerFlipsOnSubsequentEvent() {
@@ -4058,7 +4053,7 @@ final class EngineControllerTests: XCTestCase {
         XCTAssertFalse(controller.connections[connID]?.haveReadMarker ?? true)
     }
 
-    // MARK: - Phase 12 — handleReadMarkerEvent (inbound)
+    // MARK: - handleReadMarkerEvent (inbound)
 
     func testReadMarkerEventUpdatesLastReadAt() {
         let controller = EngineController()
@@ -4160,37 +4155,17 @@ final class EngineControllerTests: XCTestCase {
         // Absence of crash is the invariant.
     }
 
-    // MARK: - Phase 12 — backward compatibility
-
-    func testReadMarkerEventBeforeCapNegotiatedDropsSilently() {
-        let controller = EngineController()
-        controller.applySessionForTest(
-            action: HC_APPLE_SESSION_ACTIVATE, network: "Net", channel: "#a",
-            connectionID: 7, connectionHaveReadMarker: false)
-        let sessionID = controller.sessions.first(where: { $0.channel == "#a" })!.id
-        let key = controller.conversationKey(for: sessionID)!
-        controller.setConversationStateForTest(
-            ConversationState(key: key, draft: "", unread: 2, lastReadAt: nil))
-
-        // timestamp_ms = 0 = no marker per Phase 12 ABI.
-        controller.applyReadMarkerForTest(
-            network: "Net", channel: "#a", connectionID: 7,
-            connectionHaveReadMarker: false,
-            readMarkerTimestampMs: 0)
-
-        XCTAssertEqual(controller.conversations[key]?.unread, 2)
-    }
+    // MARK: - backward compatibility
 
     func testUnknownEventKindStillDropsSilently() {
         let controller = EngineController()
-        // rawKind 255 is beyond HC_APPLE_EVENT_READ_MARKER (8); exercises the
-        // `default: break` guard in handleRuntimeEvent without needing access
-        // to the fileprivate RuntimeEvent struct.
+        // rawKind 255 is past every defined hc_apple_event_kind, so it falls
+        // through the default arm of handleRuntimeEvent.
         controller.applyRawEventKindForTest(rawKind: 255)
         // Absence of crash is the invariant.
     }
 
-    // MARK: - Phase 12 — outbound MARKREAD via ReadMarkerBridge
+    // MARK: - outbound MARKREAD via ReadMarkerBridge
 
     final class RecordingReadMarkerBridge: ReadMarkerBridge, @unchecked Sendable {
         struct Call: Equatable {

@@ -99,7 +99,6 @@ typedef struct
 	 * server context. Phase 7.5: the Swift side caches this on Connection
 	 * so loadOlder can gate chathistory bridge dispatch on the cap bit. */
 	uint8_t connection_have_chathistory;
-	/* Phase 12: read-marker cap bit and inbound marker timestamp. */
 	uint8_t connection_have_readmarker;
 	int64_t read_marker_timestamp_ms;  /* time_t * 1000; 0 = no timestamp */
 } hc_apple_event;
@@ -189,13 +188,13 @@ int hc_apple_runtime_request_chathistory_before (uint64_t connection_id,
                                                   int64_t before_msec,
                                                   int limit);
 /*
- * Phase 12: dispatch an outbound MARKREAD command onto the engine thread for
- * the given (connection_id, channel) at the given UTC millisecond timestamp.
+ * Dispatch an outbound MARKREAD command onto the engine thread for the given
+ * (connection_id, channel) at the given UTC millisecond timestamp.
  *
  * Returns 1 if the dispatch was queued; 0 if the runtime is not running or
- * the inputs are invalid. All other failure modes (unknown connection, channel
- * not found, cap lost, disconnected) drop silently inside the dispatched
- * callback after the synchronous return.
+ * the inputs are invalid. All other failure modes (unknown connection, cap
+ * lost, disconnected) drop silently inside the dispatched callback after the
+ * synchronous return.
  */
 int hc_apple_runtime_send_markread (uint64_t connection_id,
                                      const char *channel,
